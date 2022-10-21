@@ -195,7 +195,7 @@ impl Primary {
             parameters.header_size,
             parameters.max_header_delay,
             /* rx_core */ rx_parents,
-            /* rx_workers */ rx_our_digests,
+            /* rx_workers */ rx_our_digests,  
             /* tx_core */ tx_headers,
         );
 
@@ -262,12 +262,12 @@ impl MessageHandler for WorkerReceiverHandler {
         // Deserialize and parse the message.
         match bincode::deserialize(&serialized).map_err(DagError::SerializationError)? {
             WorkerPrimaryMessage::OurBatch(digest, worker_id) => self
-                .tx_our_digests
+                .tx_our_digests                                         //sender channel to Proposer
                 .send((digest, worker_id))
                 .await
                 .expect("Failed to send workers' digests"),
             WorkerPrimaryMessage::OthersBatch(digest, worker_id) => self
-                .tx_others_digests
+                .tx_others_digests                                      //sender channel to PayloadReceiver
                 .send((digest, worker_id))
                 .await
                 .expect("Failed to send workers' digests"),

@@ -59,7 +59,7 @@ impl QuorumWaiter {
 
     /// Main loop.
     async fn run(&mut self) {
-        while let Some(QuorumWaiterMessage { batch, handlers }) = self.rx_message.recv().await {
+        while let Some(QuorumWaiterMessage { batch, handlers }) = self.rx_message.recv().await { 
             let mut wait_for_quorum: FuturesUnordered<_> = handlers
                 .into_iter()
                 .map(|(name, handler)| {
@@ -67,12 +67,14 @@ impl QuorumWaiter {
                     Self::waiter(handler, stake)
                 })
                 .collect();
+            //outputs a set of FuturesUnordered that contains a waiter for each replica we broadcast to.
+             
 
             // Wait for the first 2f nodes to send back an Ack. Then we consider the batch
             // delivered and we send its digest to the primary (that will include it into
             // the dag). This should reduce the amount of synching.
             let mut total_stake = self.stake;
-            while let Some(stake) = wait_for_quorum.next().await {
+            while let Some(stake) = wait_for_quorum.next().await {   //Not sure how next() works here exactly (not part of documentation)? But seems to just return the next waiter that has yielded.
                 total_stake += stake;
                 if total_stake >= self.committee.quorum_threshold() {
                     self.tx_batch

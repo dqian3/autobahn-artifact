@@ -61,7 +61,7 @@ pub struct Core {
     /// Aggregates votes into a certificate.
     votes_aggregator: VotesAggregator,
     /// Aggregates certificates to use as parents for new headers.
-    certificates_aggregators: HashMap<Round, Box<CertificatesAggregator>>,
+    certificates_aggregators: HashMap<Round, Box<CertificatesAggregator>>, //Keep the Set of Certs = Edges for multiple rounds.
     /// A network sender to send the batches to the other workers.
     network: ReliableSender,
     /// Keeps the cancel handlers of the messages we sent.

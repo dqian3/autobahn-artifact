@@ -409,14 +409,14 @@ impl Core {
         // and receive timeout notifications from our Timeout Manager.
         loop {
             let result = tokio::select! {
-                Some(message) = self.rx_message.recv() => match message {
+                Some(message) = self.rx_message.recv() => match message {   //Receiving Messages from other Replicas
                     ConsensusMessage::Propose(block) => self.handle_proposal(&block).await,
                     ConsensusMessage::Vote(vote) => self.handle_vote(&vote).await,
                     ConsensusMessage::Timeout(timeout) => self.handle_timeout(&timeout).await,
                     ConsensusMessage::TC(tc) => self.handle_tc(tc).await,
                     _ => panic!("Unexpected protocol message")
                 },
-                Some(block) = self.rx_loopback.recv() => self.process_block(&block).await,
+                Some(block) = self.rx_loopback.recv() => self.process_block(&block).await,  //Processing Block that we propose ourselves. (or that we resume via Synchronizer upcall)
                 () = &mut self.timer => self.local_timeout_round().await,
             };
             match result {

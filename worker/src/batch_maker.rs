@@ -20,7 +20,9 @@ use tokio::time::{sleep, Duration, Instant};
 #[path = "tests/batch_maker_tests.rs"]
 pub mod batch_maker_tests;
 
+//The message type received by clients
 pub type Transaction = Vec<u8>;
+//The message type forwarded to quorum waiters
 pub type Batch = Vec<Transaction>;
 
 /// Assemble clients transactions into batches.
@@ -47,8 +49,8 @@ impl BatchMaker {
     pub fn spawn(
         batch_size: usize,
         max_batch_delay: u64,
-        rx_transaction: Receiver<Transaction>,
-        tx_message: Sender<QuorumWaiterMessage>,
+        rx_transaction: Receiver<Transaction>, //receiver channel from worker.TxReceiverHandler 
+        tx_message: Sender<QuorumWaiterMessage>, //sender channel to worker.QuorumWaiter
         workers_addresses: Vec<(PublicKey, SocketAddr)>,
     ) {
         tokio::spawn(async move {
@@ -143,7 +145,7 @@ impl BatchMaker {
         // Broadcast the batch through the network.
         let (names, addresses): (Vec<_>, _) = self.workers_addresses.iter().cloned().unzip();
         let bytes = Bytes::from(serialized.clone());
-        let handlers = self.network.broadcast(addresses, bytes).await;
+        let handlers = self.network.broadcast(addresses, bytes).await;  //This uses reliable sender. The receiver worker will reply with an ack. The Reply Handler is passed to Quorum Waiter.
 
         // Send the batch through the deliver channel for further processing.
         self.tx_message

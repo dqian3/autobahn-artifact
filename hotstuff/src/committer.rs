@@ -236,7 +236,7 @@ impl CertificateWaiter {
             .await
             .map(|_| deliver)
             .map_err(ConsensusError::from)
-    }
+    }tx_commit
 
     async fn run(&mut self) {
         let mut waiting = FuturesOrdered::new();

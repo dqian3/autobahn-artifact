@@ -75,10 +75,10 @@ async fn main() -> Result<()> {
 }
 
 struct Client {
-    target: SocketAddr,
-    size: usize,
+    target: SocketAddr,  //specifies the worker to connect to
+    size: usize,         //specifies the bit size of transactions
     rate: u64,
-    nodes: Vec<SocketAddr>,
+    nodes: Vec<SocketAddr>,  //specifies the addresses of all nodes. Currently only used to wait for them to be alive, but also necessary if we wanted to receive result replies (from any node).
 }
 
 impl Client {
@@ -127,9 +127,10 @@ impl Client {
                     tx.put_u64(r); // Ensures all clients send different txs.
                 };
 
-                tx.resize(self.size, 0u8);
-                let bytes = tx.split().freeze();
-                if let Err(e) = transport.send(bytes).await {
+                tx.resize(self.size, 0u8); //Truncate any bits past size
+                let bytes = tx.split().freeze(); //split() moves byte content from tx to bytes (i.e. avoids copy). freeze() makes it const so it can be shared. (bytes can now be used/sent async)
+                //Note: Does not sign transactions. Transaction id-s are not unique w.r.t to content.
+                if let Err(e) = transport.send(bytes).await { //Uses TCP connection to send request to assigned worker. Note: Optimistically only sending to one worker.
                     warn!("Failed to send transaction: {}", e);
                     break 'main;
                 }

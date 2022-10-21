@@ -97,6 +97,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
     let (tx_output, rx_output) = channel(CHANNEL_CAPACITY);
 
     // Check whether to run a primary, a worker, or an entire authority.
+    //Note: Each node has at most one worker. Workers that don't include a primary (e.g. are not an entire authority) use PrimaryConnector to connect to a designated primary.
     match matches.subcommand() {
         // Spawn the primary and consensus core.
         ("primary", _) => {

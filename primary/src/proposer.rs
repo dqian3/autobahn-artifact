@@ -129,7 +129,7 @@ impl Proposer {
                 timer.as_mut().reset(deadline);
             }
 
-            tokio::select! {
+            tokio::select! { //Evaluate all provided preconditions (i.e. both branches). If false, disable branch until next loop iterations (i.e. this is non-blocking)
                 Some((parents, round)) = self.rx_core.recv() => {
                     if round < self.round {
                         continue;

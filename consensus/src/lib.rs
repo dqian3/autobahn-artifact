@@ -51,6 +51,7 @@ impl State {
         let last_committed_round = *self.last_committed.values().max().unwrap();
         self.last_committed_round = last_committed_round;
 
+        //Remove from a DAG round all outdated nodes (i.e. nodes with round < last_commmitted). remove a round from Dag if all authorities are outdated, or garbage collection depth has been passed.
         for (name, round) in &self.last_committed {
             self.dag.retain(|r, authorities| {
                 authorities.retain(|n, _| n != name || r >= round);

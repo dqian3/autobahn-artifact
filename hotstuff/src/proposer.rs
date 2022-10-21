@@ -132,7 +132,7 @@ impl Proposer {
             if timer_expired || got_payload {
                 if let Some((round, qc, tc)) = self.leader.take() {
                     // Make a new block.
-                    self.make_block(round, qc, tc).await;
+                    self.make_block(round, qc, tc).await; //won't try to make next block before previous block has been acked.
 
                     // Reschedule the timer.
                     let deadline = Instant::now() + Duration::from_millis(self.max_block_delay);
@@ -152,7 +152,7 @@ impl Proposer {
                         self.buffer.push(certificate);
                         continue;
                     }
-                    if self.buffer[0].round() < certificate.round() {
+                    if self.buffer[0].round() < certificate.round() {  //remove proposals for smaller dag rounds; bigger ones subsume them.
                         self.buffer.push(certificate);
                         self.buffer.swap_remove(0);
                     }
