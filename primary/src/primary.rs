@@ -66,6 +66,9 @@ impl Primary {
         store: Store,
         tx_consensus: Sender<Certificate>,
         rx_consensus: Receiver<Certificate>,
+        tx_hotstuff: Sender<Header>,
+        rx_ticket: Receiver<Round>,
+        rx_dag: Receiver<Certificate>,
     ) {
         let (tx_others_digests, rx_others_digests) = channel(CHANNEL_CAPACITY);
         let (tx_our_digests, rx_our_digests) = channel(CHANNEL_CAPACITY);
@@ -195,8 +198,10 @@ impl Primary {
             parameters.header_size,
             parameters.max_header_delay,
             /* rx_core */ rx_parents,
-            /* rx_workers */ rx_our_digests,  
+            /* rx_workers */ rx_our_digests,
+            /* rx_ticket */ rx_ticket,
             /* tx_core */ tx_headers,
+            /* tx_consensus */ tx_hotstuff,
         );
 
         // The `Helper` is dedicated to reply to certificates requests from other primaries.

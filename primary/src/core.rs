@@ -119,6 +119,12 @@ impl Core {
         self.current_header = header.clone();
         self.votes_aggregator = VotesAggregator::new();
 
+        // For special block instead of broadcasting header in a reliable manner, send the header to the consensus channel
+        // The consensus channel will be in charge of sending a block that contains the header, gathering votes, etc.
+        // Once the consensus channel forms a quorum certificate for a block, we collect this quorum certificate in
+        // a receiving part of the channel, and add it to the DAG by translating the QC votes to DAG certificate votes
+        // Similarly we also have a receiving part of the channel for committed blocks, so that they can be ordered
+        // and executed
         // Broadcast the new header in a reliable manner.
         let addresses = self
             .committee

@@ -96,6 +96,15 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
     // Channels the sequence of certificates.
     let (tx_output, rx_output) = channel(CHANNEL_CAPACITY);
 
+    // Channel for sending headers between DAG and Consensus
+    let (tx_hotstuff, rx_hotstuff) = channel(CHANNEL_CAPACITY);
+
+    // Channel for sending certificates between DAG and Consensus
+    let (tx_dag, rx_dag) = channel(CHANNEL_CAPACITY);
+
+    // Channel for indicating commit and that new header should be proposed
+    let (tx_ticket, rx_ticket) = channel(CHANNEL_CAPACITY);
+
     // Check whether to run a primary, a worker, or an entire authority.
     //Note: Each node has at most one worker. Workers that don't include a primary (e.g. are not an entire authority) use PrimaryConnector to connect to a designated primary.
     match matches.subcommand() {
@@ -111,6 +120,9 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 store.clone(),
                 /* tx_consensus */ tx_new_certificates,
                 /* rx_consensus */ rx_feedback,
+                tx_hotstuff,
+                rx_ticket,
+                rx_dag,
             );
             Consensus::spawn(
                 name,
@@ -121,6 +133,9 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 /* rx_mempool */ rx_new_certificates,
                 /* tx_mempool */ tx_feedback,
                 tx_output,
+                tx_ticket,
+                tx_dag,
+                rx_hotstuff,
             );
         }
 

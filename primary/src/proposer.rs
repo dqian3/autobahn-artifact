@@ -29,8 +29,12 @@ pub struct Proposer {
     rx_core: Receiver<(Vec<Digest>, Round)>,
     /// Receives the batches' digests from our workers.
     rx_workers: Receiver<(Digest, WorkerId)>,
+    // Receives new view from the Consensus engine
+    rx_ticket: Receiver<Round>,
     /// Sends newly created headers to the `Core`.
     tx_core: Sender<Header>,
+    // Sends new special headers to HotStuff.
+    tx_hotstuff: Sender<Header>,
 
     /// The current round of the dag.
     round: Round,
@@ -40,6 +44,10 @@ pub struct Proposer {
     digests: Vec<(Digest, WorkerId)>,
     /// Keeps track of the size (in bytes) of batches' digests that we received so far.
     payload_size: usize,
+    // The current view from consensus
+    view: Round,
+    // Whether to propose special block
+    propose_special: bool,
 }
 
 impl Proposer {
@@ -52,7 +60,9 @@ impl Proposer {
         max_header_delay: u64,
         rx_core: Receiver<(Vec<Digest>, Round)>,
         rx_workers: Receiver<(Digest, WorkerId)>,
+        rx_ticket: Receiver<Round>,
         tx_core: Sender<Header>,
+        tx_hotstuff: Sender<Header>
     ) {
         let genesis = Certificate::genesis(committee)
             .iter()
@@ -67,27 +77,31 @@ impl Proposer {
                 max_header_delay,
                 rx_core,
                 rx_workers,
+                rx_ticket,
                 tx_core,
+                tx_hotstuff,
                 round: 1,
                 last_parents: genesis,
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
+                view: 1,
+                propose_special: false,
             }
             .run()
             .await;
         });
     }
 
-    async fn make_header(&mut self) {
+    async fn make_header(&mut self, is_special: bool) {
         // Make a new header.
         let header = Header::new(
-            self.name,
-            self.round,
-            self.digests.drain(..).collect(),
-            self.last_parents.drain(..).collect(),
-            &mut self.signature_service,
-        )
-        .await;
+                self.name,
+                self.round,
+                self.digests.drain(..).collect(),
+                self.last_parents.drain(..).collect(),
+                &mut self.signature_service,
+            ).await;
+
         debug!("Created {:?}", header);
 
         #[cfg(feature = "benchmark")]
@@ -96,11 +110,20 @@ impl Proposer {
             info!("Created {} -> {:?}", header, digest);
         }
 
-        // Send the new header to the `Core` that will broadcast and process it.
-        self.tx_core
-            .send(header)
-            .await
-            .expect("Failed to send header");
+
+        if !is_special {
+            // Send the new header to the `Core` that will broadcast and process it.
+            self.tx_core
+                .send(header)
+                .await
+                .expect("Failed to send header");
+        } else {
+            // Send the new header to the `HotStuff` module who will be in charge of broadcasting it
+            self.tx_hotstuff
+                .send(header)
+                .await
+                .expect("Failed to send header");
+        }
     }
 
     // Main loop listening to incoming messages.
@@ -116,12 +139,17 @@ impl Proposer {
             // 1. We have a quorum of certificates from the previous round and enough batches' digests;
             // 2. We have a quorum of certificates from the previous round and the specified maximum
             // inter-header delay has passed.
+            // 3. If it is a special block opportunity. That is when either a QC or TC from the previous view forms,
+            // we have a ticket to propose a new block
+            // For both normal blocks and special blocks, delegate the actual sending to the consensus module
+            // in other words core should not be disseminating headers
             let enough_parents = !self.last_parents.is_empty();
             let enough_digests = self.payload_size >= self.header_size;
             let timer_expired = timer.is_elapsed();
+
             if (timer_expired || enough_digests) && enough_parents {
-                // Make a new header.
-                self.make_header().await;
+                // Make a new normal header.
+                self.make_header(false).await;
                 self.payload_size = 0;
 
                 // Reschedule the timer.
@@ -129,7 +157,28 @@ impl Proposer {
                 timer.as_mut().reset(deadline);
             }
 
-            tokio::select! { //Evaluate all provided preconditions (i.e. both branches). If false, disable branch until next loop iterations (i.e. this is non-blocking)
+
+            if enough_digests && self.propose_special {
+                self.make_header(true).await;
+                self.payload_size = 0;
+                self.propose_special = false;
+
+                // Reschedule the timer
+                let deadline = Instant::now() + Duration::from_millis(self.max_header_delay);
+                timer.as_mut().reset(deadline);
+            }
+
+
+            tokio::select! {
+                Some(view) = self.rx_ticket.recv() => {
+                    if view < self.view {
+                        continue;
+                    }
+
+                    self.view = view;
+                    self.propose_special = true;
+                }
+
                 Some((parents, round)) = self.rx_core.recv() => {
                     if round < self.round {
                         continue;
