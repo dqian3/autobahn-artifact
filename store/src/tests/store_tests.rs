@@ -52,7 +52,7 @@ async fn read_notify() {
     let _ = fs::remove_dir_all(path);
     let mut store = Store::new(path).unwrap();
 
-    // Try to read a kew that does not yet exist. Then write a value
+    // Try to read a key that does not yet exist. Then write a value
     // for that key and check that notify read returns the result.
     let key = vec![0u8, 1u8, 2u8, 3u8];
     let value = vec![4u8, 5u8, 6u8, 7u8];

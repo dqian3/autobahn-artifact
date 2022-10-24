@@ -1,6 +1,6 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use super::*;
-use config::{Authority, PrimaryAddresses};
+use config::{Authority, PrimaryAddresses, ConsensusAddresses};
 use crypto::{generate_keypair, SecretKey};
 use primary::Header;
 use rand::rngs::StdRng;
@@ -24,6 +24,9 @@ pub fn mock_committee() -> Committee {
                     *id,
                     Authority {
                         stake: 1,
+                        consensus: ConsensusAddresses {
+                            consensus_to_consensus: "0.0.0.0:0".parse().unwrap(),
+                        },
                         primary: PrimaryAddresses {
                             primary_to_primary: "0.0.0.0:0".parse().unwrap(),
                             worker_to_primary: "0.0.0.0:0".parse().unwrap(),
@@ -265,7 +268,7 @@ async fn not_enough_support() {
 }
 
 // Run for 6 dag rounds. Node 0 (the leader of round 2) is missing for rounds 1 and 2,
-// and reapers from round 3.
+// and re-appears from round 3 onwards.
 #[tokio::test]
 async fn missing_leader() {
     let mut keys: Vec<_> = keys().into_iter().map(|(x, _)| x).collect();

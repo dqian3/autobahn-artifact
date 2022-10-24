@@ -1,3 +1,4 @@
+use super::*;
 use crate::config::Committee;
 use crate::consensus::Round;
 use crate::messages::{Block, Timeout, Vote, QC};
@@ -6,6 +7,7 @@ use crypto::Hash as _;
 use crypto::{generate_keypair, Digest, PublicKey, SecretKey, Signature};
 use futures::sink::SinkExt as _;
 use futures::stream::StreamExt as _;
+use primary::Certificate;
 use rand::rngs::StdRng;
 use rand::SeedableRng as _;
 use std::net::SocketAddr;
@@ -50,7 +52,7 @@ impl Block {
         qc: QC,
         author: PublicKey,
         round: Round,
-        payload: Vec<Digest>,
+        payload: Vec<Certificate>,
         secret: &SecretKey,
     ) -> Self {
         let block = Block {
