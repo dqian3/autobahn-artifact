@@ -94,9 +94,9 @@ impl QCMaker {
     }
 }
 
-struct TCMaker { //TimeoutCert for View Changes, Round == highestQC observed.
+struct TCMaker { //TimeoutCert for View Changes,
     weight: Stake,
-    votes: Vec<(PublicKey, Signature, Round)>,
+    votes: Vec<(PublicKey, Signature, Round)>, // Round == view of the highestQC a replica has seen.
     used: HashSet<PublicKey>,
 }
 
