@@ -21,18 +21,18 @@ use std::fmt;
 // }
 // //TODO: Implement Ticket. Need to know references from Consensus, e.g. "use sailfish{QC, TC};"" -- problem: would be cyclic dependency rn. //Should we just 2add our consensus directly into the primary layer; instead of a consensus module?
 
-// #[derive(Clone, Serialize, Deserialize, Default)]
-// pub struct Header {
-//     pub author: PublicKey,
-//     pub round: Round,
-//     pub payload: BTreeMap<Digest, WorkerId>,
-//     pub parents: BTreeSet<Digest>,
-//     pub id: Digest,
-//     pub signature: Signature,
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct Header {
+    pub author: PublicKey,
+    pub round: Round,
+    pub payload: BTreeMap<Digest, WorkerId>,
+    pub parents: BTreeSet<Digest>,
+    pub id: Digest,
+    pub signature: Signature,
     
-//     pub ticket: Ticket, //TODO: Add ticket.
+   // pub ticket: Ticket, //TODO: Add ticket.
 
-// }
+}
 
 impl Header {
     pub async fn new(
