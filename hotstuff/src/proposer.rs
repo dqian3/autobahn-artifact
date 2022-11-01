@@ -8,7 +8,6 @@ use futures::stream::StreamExt as _;
 use log::{debug, info};
 use network::{CancelHandler, ReliableSender};
 use primary::Certificate;
-use primary::Header;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration, Instant};
 
@@ -20,12 +19,11 @@ pub struct Proposer {
     committee: Committee,
     signature_service: SignatureService,
     max_block_delay: u64,
-    rx_consensus: Receiver<Header>, // receives special header from primary proposer
     rx_mempool: Receiver<Certificate>,
     rx_message: Receiver<ProposerMessage>,
     tx_loopback: Sender<Block>,
     tx_committer: Sender<Certificate>,
-    buffer: Vec<Header>, // Buffer should contain the latest created header
+    buffer: Vec<Certificate>,
     network: ReliableSender,
     leader: Option<(Round, QC, Option<TC>)>,
 }
@@ -35,7 +33,6 @@ impl Proposer {
         name: PublicKey,
         committee: Committee,
         signature_service: SignatureService,
-        rx_consensus: Receiver<Header>,
         rx_mempool: Receiver<Certificate>,
         rx_message: Receiver<ProposerMessage>,
         tx_loopback: Sender<Block>,
@@ -47,7 +44,6 @@ impl Proposer {
                 committee,
                 signature_service,
                 max_block_delay: 2_000,
-                rx_consensus,
                 rx_mempool,
                 rx_message,
                 tx_loopback,
@@ -145,7 +141,7 @@ impl Proposer {
             }
 
             tokio::select! {
-                /*Some(certificate) = self.rx_mempool.recv() => {
+                Some(certificate) = self.rx_mempool.recv() => {
                     debug!("Received {:?}", certificate);
                     self.tx_committer
                         .send(certificate.clone())
@@ -160,20 +156,9 @@ impl Proposer {
                         self.buffer.push(certificate);
                         self.buffer.swap_remove(0);
                     }
-                },*/
+                },
                 Some(ProposerMessage(round, qc, tc)) = self.rx_message.recv() =>  {
                     self.leader = Some((round, qc, tc));
-                },
-                Some(header) = self.rx_consensus.recv() => {
-                    if self.buffer.is_empty() {
-                        self.buffer.push(header);
-                        continue;
-                    }
-
-                    if self.buffer[0].round < header.round {
-                        self.buffer.push(header);
-                        self.buffer.swap_remove(0);
-                    }
                 },
                 () = &mut timer => {
                     // Nothing to do.

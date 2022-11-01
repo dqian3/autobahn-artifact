@@ -6,7 +6,7 @@ use config::Import as _;
 use config::{Committee, KeyPair, Parameters, WorkerId};
 use crypto::SignatureService;
 use env_logger::Env;
-use hotstuff::{Block, Consensus};
+use sailfish::{Block, Consensus};
 use primary::Primary;
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver};

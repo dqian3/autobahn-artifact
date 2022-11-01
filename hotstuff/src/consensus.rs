@@ -14,7 +14,7 @@ use crypto::{Digest, PublicKey, SignatureService};
 use futures::SinkExt as _;
 use log::info;
 use network::{MessageHandler, Receiver as NetworkReceiver, Writer};
-use primary::{Certificate, Header};
+use primary::Certificate;
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use store::Store;
@@ -52,9 +52,6 @@ impl Consensus {
         rx_mempool: Receiver<Certificate>,
         tx_mempool: Sender<Certificate>,
         tx_output: Sender<Block>,
-        tx_ticket: Sender<Round>,
-        tx_dag: Sender<Certificate>,
-        rx_hotstuff: Receiver<Header>,
     ) {
         // NOTE: This log entry is used to compute performance.
         parameters.log();
@@ -65,8 +62,6 @@ impl Consensus {
         let (tx_helper, rx_helper) = channel(CHANNEL_CAPACITY);
         let (tx_commit, rx_commit) = channel(CHANNEL_CAPACITY);
         let (tx_mempool_copy, rx_mempool_copy) = channel(CHANNEL_CAPACITY);
-        //let (tx_hotstuff, rx_hotstuff) = channel(CHANNEL_CAPACITY);
-        //let (tx_dag, rx_dag) = channel(CHANNEL_CAPACITY);
 
         // Spawn the network receiver.
         let mut address = committee
@@ -117,8 +112,6 @@ impl Consensus {
             tx_proposer,
             tx_commit,
             tx_output,
-            tx_dag,
-            tx_ticket,
         );
 
         // Commits the mempool certificates and their sub-dag.
@@ -135,7 +128,6 @@ impl Consensus {
             name,
             committee.clone(),
             signature_service,
-            rx_hotstuff,
             rx_mempool,
             /* rx_message */ rx_proposer,
             tx_loopback,
