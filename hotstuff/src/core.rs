@@ -37,6 +37,8 @@ pub struct Core {
     tx_proposer: Sender<ProposerMessage>,
     tx_commit: Sender<Certificate>,
     tx_output: Sender<Block>,
+    tx_dag: Sender<Certificate>,
+    tx_ticket: Sender<Round>,
     round: Round,
     last_voted_round: Round,
     last_committed_round: Round,
@@ -62,6 +64,8 @@ impl Core {
         tx_proposer: Sender<ProposerMessage>,
         tx_commit: Sender<Certificate>,
         tx_output: Sender<Block>,
+        tx_dag: Sender<Certificate>, // Translate a QC into a Certificate and send it to the DAG
+        tx_ticket: Sender<Round>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -77,6 +81,8 @@ impl Core {
                 tx_proposer,
                 tx_commit,
                 tx_output,
+                tx_dag,
+                tx_ticket,
                 round: 1,
                 last_voted_round: 0,
                 last_committed_round: 0,
@@ -119,7 +125,7 @@ impl Core {
         Some(Vote::new(&block, self.name, self.signature_service.clone()).await)
     }
 
-    async fn commit(&mut self, block: Block) -> ConsensusResult<()> {
+    async fn commit(&mut self, block: Block, qc: QC) -> ConsensusResult<()> {
         if self.last_committed_round >= block.round {
             return Ok(());
         }
@@ -151,16 +157,20 @@ impl Core {
                 warn!("Failed to send block through the output channel: {}", e);
             }
 
+            let mut certs = Vec::new();
             // Send the payload to the committer.
-            for certificate in &block.payload {
+            for header in block.payload {
+                let certificate = Certificate { header, votes: qc.clone().votes };
+                certs.push(certificate.clone());
+
                 self.tx_commit
-                    .send(certificate.clone())
+                    .send(certificate)
                     .await
                     .expect("Failed to send payload");
             }
 
             // Cleanup the mempool.
-            self.mempool_driver.cleanup(block.payload).await;
+            self.mempool_driver.cleanup(certs).await;
         }
         Ok(())
     }
@@ -322,10 +332,26 @@ impl Core {
         // Store the block only if we have already processed all its ancestors.
         self.store_block(block).await;
 
+        // Construct a certificate from block.qc (qc1)
+        let certificate = Certificate {header: block.payload[0].clone(), votes: block.qc.votes.clone()};
+
+        // Send certificate to the DAG
+        self.tx_dag
+            .send(certificate)
+            .await
+            .expect("Failed to send payload");
+
+        // QC formed so send ticket to the consensus
+        // TODO add additional check to see whether you are the leader
+        self.tx_ticket
+            .send(b1.round)
+            .await
+            .expect("Failed to send view");
+
         // Check if we can commit the head of the 2-chain.
         // Note that we commit blocks only if we have all its ancestors.
         if b0.round + 1 == b1.round {
-            self.commit(b0).await?;
+            self.commit(b0, b1.qc).await?;
         }
 
         // Ensure the block's round is as expected.

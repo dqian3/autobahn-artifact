@@ -4,7 +4,7 @@ use config::Committee;
 use crypto::{Digest, Hash, PublicKey, Signature, SignatureService};
 use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
-use primary::Certificate;
+use primary::Header;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::convert::TryInto;
@@ -16,11 +16,11 @@ pub mod messages_tests;
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Block {
-    pub qc: QC,
+    pub qc: QC, // QC is equivalent to Commit Certificate in our terminology. Certificate is equivalent to Vote-QC in our terminology
     pub tc: Option<TC>,
     pub author: PublicKey,
     pub round: Round,
-    pub payload: Vec<Certificate>,
+    pub payload: Vec<Header>, // Change this to be the payload of a header (vector of digests representing mini-batches)
     pub signature: Signature,
 }
 
@@ -30,7 +30,7 @@ impl Block {
         tc: Option<TC>,
         author: PublicKey,
         round: Round,
-        payload: Vec<Certificate>,
+        payload: Vec<Header>,
         mut signature_service: SignatureService,
     ) -> Self {
         let block = Self {
@@ -83,7 +83,7 @@ impl Hash for Block {
         hasher.update(self.author.0);
         hasher.update(self.round.to_le_bytes());
         for x in &self.payload {
-            hasher.update(&x.header.id);
+            hasher.update(&x.id);
         }
         hasher.update(&self.qc.hash);
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
