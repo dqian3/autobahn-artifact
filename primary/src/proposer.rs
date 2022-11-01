@@ -34,10 +34,12 @@ pub struct Proposer {
     /// Sends newly created headers to the `Core`.
     tx_core: Sender<Header>,
     // Sends new special headers to HotStuff.
-    tx_hotstuff: Sender<Header>,
+    tx_sailfish: Sender<Header>,
 
     /// The current round of the dag.
     round: Round,
+    // Holds the certificate id of the last header issued.
+    //last_header: Digest,
     /// Holds the certificates' ids waiting to be included in the next header.
     last_parents: Vec<Digest>,
     /// Holds the batches' digests waiting to be included in the next header.
@@ -62,7 +64,7 @@ impl Proposer {
         rx_workers: Receiver<(Digest, WorkerId)>,
         rx_ticket: Receiver<Round>,
         tx_core: Sender<Header>,
-        tx_hotstuff: Sender<Header>
+        tx_sailfish: Sender<Header>
     ) {
         let genesis = Certificate::genesis(committee)
             .iter()
@@ -79,9 +81,10 @@ impl Proposer {
                 rx_workers,
                 rx_ticket,
                 tx_core,
-                tx_hotstuff,
+                tx_sailfish,
                 round: 1,
                 last_parents: genesis,
+                //last_header: Digest::new(),
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
                 view: 1,
@@ -119,11 +122,12 @@ impl Proposer {
                 .expect("Failed to send header");
         } else {
             // Send the new header to the `HotStuff` module who will be in charge of broadcasting it
-            self.tx_hotstuff
+            self.tx_sailfish
                 .send(header)
                 .await
                 .expect("Failed to send header");
         }
+        //self.last_header = header //getDigest(header)
     }
 
     // Main loop listening to incoming messages.
@@ -147,32 +151,40 @@ impl Proposer {
             let enough_digests = self.payload_size >= self.header_size;
             let timer_expired = timer.is_elapsed();
 
-            if (timer_expired || enough_digests) && enough_parents {
-                // Make a new normal header.
-                self.make_header(false).await;
-                self.payload_size = 0;
+            let mut proposing = false;
 
+            if timer_expired || enough_digests {
+                //not waiting for parent edges to create special block -- 
+                //TODO: Want to use available parent edges. AT LEAST own edge.
+                //FIXME: Must include at least own edge. CURRENTLY NOT THE CASE. last_parents is fully empty.
+                //FIXME: Currently re-uses the same last round. Needs to increment round.
+                //E.g. round + 1; last_parents, insert parents.
+                //Pass down round from last cert. Also pass down current parents EVEN if not full quorum: I.e. add a special flag to "process_cert" to not wait.
+                if self.propose_special { 
+                   // self.last_parents.push(self.last_header); //TODO: need to get a digest of previous headers cert... Impossible? That header has no cert yet.. would need to wait
+                    self.make_header(true).await;
+                    self.propose_special = false; //reset 
+                    proposing = true;
+                }
+                else if enough_parents {
+                    // If not special and enough parents available make a new normal header.
+                    self.make_header(false).await;
+                    proposing = true;
+                }
+            }
+          
+            if proposing {
+                self.payload_size = 0;
                 // Reschedule the timer.
                 let deadline = Instant::now() + Duration::from_millis(self.max_header_delay);
                 timer.as_mut().reset(deadline);
             }
-
-
-            if enough_digests && self.propose_special {
-                self.make_header(true).await;
-                self.payload_size = 0;
-                self.propose_special = false;
-
-                // Reschedule the timer
-                let deadline = Instant::now() + Duration::from_millis(self.max_header_delay);
-                timer.as_mut().reset(deadline);
-            }
-
+           
 
             tokio::select! {
                 Some(view) = self.rx_ticket.recv() => {
-                    if view < self.view {
-                        continue;
+                    if view <= self.view {
+                        continue; //Proposal for view already exists.
                     }
 
                     self.view = view;

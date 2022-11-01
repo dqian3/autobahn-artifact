@@ -97,7 +97,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
     let (tx_output, rx_output) = channel(CHANNEL_CAPACITY);
 
     // Channel for sending headers between DAG and Consensus
-    let (tx_hotstuff, rx_hotstuff) = channel(CHANNEL_CAPACITY);
+    let (tx_sailfish, rx_sailfish) = channel(CHANNEL_CAPACITY);
 
     // Channel for sending certificates between DAG and Consensus
     let (tx_dag, rx_dag) = channel(CHANNEL_CAPACITY);
@@ -120,7 +120,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 store.clone(),
                 /* tx_consensus */ tx_new_certificates,
                 /* rx_consensus */ rx_feedback,
-                tx_hotstuff,
+                tx_sailfish,
                 rx_ticket,
                 rx_dag,
             );
@@ -135,7 +135,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 tx_output,
                 tx_ticket,
                 tx_dag,
-                rx_hotstuff,
+                rx_sailfish,
             );
         }
 

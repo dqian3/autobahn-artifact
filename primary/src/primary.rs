@@ -66,7 +66,7 @@ impl Primary {
         store: Store,
         tx_consensus: Sender<Certificate>,
         rx_consensus: Receiver<Certificate>,
-        tx_hotstuff: Sender<Header>,
+        tx_sailfish: Sender<Header>,
         rx_ticket: Receiver<Round>,
         rx_dag: Receiver<Certificate>,
     ) {
@@ -151,6 +151,7 @@ impl Primary {
             /* rx_proposer */ rx_headers,
             tx_consensus,
             /* tx_proposer */ tx_parents,
+            rx_dag, 
         );
 
         // Keeps track of the latest consensus round and allows other tasks to clean up their their internal state
@@ -201,7 +202,7 @@ impl Primary {
             /* rx_workers */ rx_our_digests,
             /* rx_ticket */ rx_ticket,
             /* tx_core */ tx_headers,
-            /* tx_consensus */ tx_hotstuff,
+            /* tx_sailfish */ tx_sailfish,
         );
 
         // The `Helper` is dedicated to reply to certificates requests from other primaries.

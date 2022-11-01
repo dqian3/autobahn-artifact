@@ -54,7 +54,7 @@ impl Consensus {
         tx_output: Sender<Block>,
         tx_ticket: Sender<Round>,
         tx_dag: Sender<Certificate>,
-        rx_hotstuff: Receiver<Header>,
+        rx_sailfish: Receiver<Header>,
     ) {
         // NOTE: This log entry is used to compute performance.
         parameters.log();
@@ -65,7 +65,7 @@ impl Consensus {
         let (tx_helper, rx_helper) = channel(CHANNEL_CAPACITY);
         let (tx_commit, rx_commit) = channel(CHANNEL_CAPACITY);
         let (tx_mempool_copy, rx_mempool_copy) = channel(CHANNEL_CAPACITY);
-        //let (tx_hotstuff, rx_hotstuff) = channel(CHANNEL_CAPACITY);
+        //let (tx_sailfish, rx_sailfish) = channel(CHANNEL_CAPACITY);
         //let (tx_dag, rx_dag) = channel(CHANNEL_CAPACITY);
 
         // Spawn the network receiver.
@@ -135,7 +135,7 @@ impl Consensus {
             name,
             committee.clone(),
             signature_service,
-            rx_hotstuff,
+            /* rx_consensus */ rx_sailfish,
             rx_mempool,
             /* rx_message */ rx_proposer,
             tx_loopback,

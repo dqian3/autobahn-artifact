@@ -49,6 +49,8 @@ pub struct Core {
     tx_consensus: Sender<Certificate>,
     /// Send valid a quorum of certificates' ids to the `Proposer` (along with their round).
     tx_proposer: Sender<(Vec<Digest>, Round)>,
+    // Receives Certificates from the consensus layer.
+    rx_dag: Receiver<Certificate>,
 
     /// The last garbage collected round.
     gc_round: Round,
@@ -84,6 +86,7 @@ impl Core {
         rx_proposer: Receiver<Header>,
         tx_consensus: Sender<Certificate>,
         tx_proposer: Sender<(Vec<Digest>, Round)>,
+        rx_dag: Receiver<Certificate>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -100,6 +103,7 @@ impl Core {
                 rx_proposer,
                 tx_consensus,
                 tx_proposer,
+                rx_dag,
                 gc_round: 0,
                 last_voted: HashMap::with_capacity(2 * gc_depth as usize),
                 processing: HashMap::with_capacity(2 * gc_depth as usize),
@@ -246,7 +250,7 @@ impl Core {
                 .extend(handlers);
 
             // Process the new certificate.
-            self.process_certificate(certificate)
+            self.process_certificate(certificate, false)
                 .await
                 .expect("Failed to process valid certificate");
         }
@@ -254,7 +258,7 @@ impl Core {
     }
 
     #[async_recursion]
-    async fn process_certificate(&mut self, certificate: Certificate) -> DagResult<()> {
+    async fn process_certificate(&mut self, certificate: Certificate, is_special: bool) -> DagResult<()> {
         debug!("Processing {:?}", certificate);
 
         // Process the header embedded in the certificate if we haven't already voted for it (if we already
@@ -299,13 +303,13 @@ impl Core {
         }
 
         // Send it to the consensus layer.
-        let id = certificate.header.id.clone();
-        if let Err(e) = self.tx_consensus.send(certificate).await {
-            warn!(
-                "Failed to deliver certificate {} to the consensus: {}",
-                id, e
-            );
-        }
+        // let id = certificate.header.id.clone();
+        // if let Err(e) = self.tx_consensus.send(certificate).await {
+        //     warn!(
+        //         "Failed to deliver certificate {} to the consensus: {}",
+        //         id, e
+        //     );
+        // }
         Ok(())
     }
 
@@ -373,7 +377,7 @@ impl Core {
                         },
                         PrimaryMessage::Certificate(certificate) => {
                             match self.sanitize_certificate(&certificate) {
-                                Ok(()) =>  self.process_certificate(certificate).await,
+                                Ok(()) =>  self.process_certificate(certificate, false).await,
                                 error => error
                             }
                         },
@@ -388,7 +392,10 @@ impl Core {
                 // We receive here loopback certificates from the `CertificateWaiter`. Those are certificates for which
                 // we interrupted execution (we were missing some of their ancestors) and we are now ready to resume
                 // processing.
-                Some(certificate) = self.rx_certificate_waiter.recv() => self.process_certificate(certificate).await,
+                Some(certificate) = self.rx_certificate_waiter.recv() => self.process_certificate(certificate, false).await,
+
+                // We receive here loopback certificates from the Consensus Layer that was running RB for special blocks.
+                Some(certificate) = self.rx_dag.recv() => self.process_certificate(certificate, true).await,
 
                 // We also receive here our new headers created by the `Proposer`.
                 Some(header) = self.rx_proposer.recv() => self.process_own_header(header).await,
