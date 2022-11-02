@@ -27,8 +27,10 @@ pub mod consensus_tests;
 /// The default channel capacity for each channel of the consensus.
 pub const CHANNEL_CAPACITY: usize = 1_000;
 
-/// The consensus round number.
-pub type Round = u64;
+/// The consensus view number.
+pub type View= u64;
+/// The Dag round number.
+pub type Round= u64;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ConsensusMessage {
@@ -52,7 +54,7 @@ impl Consensus {
         rx_mempool: Receiver<Certificate>,
         tx_mempool: Sender<Certificate>,
         tx_output: Sender<Block>,
-        tx_ticket: Sender<Round>,
+        tx_ticket: Sender<(View, Round)>,
         tx_dag: Sender<Certificate>,
         rx_sailfish: Receiver<Header>,
     ) {

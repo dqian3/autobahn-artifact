@@ -1,6 +1,6 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::messages::{Certificate, Header};
-use crate::primary::Round;
+use crate::primary::{Round, View};
 use config::{Committee, WorkerId};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
@@ -30,7 +30,7 @@ pub struct Proposer {
     /// Receives the batches' digests from our workers.
     rx_workers: Receiver<(Digest, WorkerId)>,
     // Receives new view from the Consensus engine
-    rx_ticket: Receiver<Round>,
+    rx_ticket: Receiver<(View, Round)>,
     /// Sends newly created headers to the `Core`.
     tx_core: Sender<Header>,
     // Sends new special headers to HotStuff.
@@ -62,7 +62,7 @@ impl Proposer {
         max_header_delay: u64,
         rx_core: Receiver<(Vec<Digest>, Round)>,
         rx_workers: Receiver<(Digest, WorkerId)>,
-        rx_ticket: Receiver<Round>,
+        rx_ticket: Receiver<(View, Round)>,
         tx_core: Sender<Header>,
         tx_sailfish: Sender<Header>
     ) {
@@ -157,10 +157,10 @@ impl Proposer {
                 //not waiting for parent edges to create special block -- 
                 //TODO: Want to use available parent edges. AT LEAST own edge.
                 //FIXME: Must include at least own edge. CURRENTLY NOT THE CASE. last_parents is fully empty.
-                //FIXME: Currently re-uses the same last round. Needs to increment round.
+                //FIXME: Currently re-uses the same last round. Needs to increment round. If waiting for parents, then by default round is incremented so nothing to do.
                 //E.g. round + 1; last_parents, insert parents.
                 //Pass down round from last cert. Also pass down current parents EVEN if not full quorum: I.e. add a special flag to "process_cert" to not wait.
-                if self.propose_special { 
+                if self.propose_special && enough_parents { //TODO: FOR NOW  also waiting for parent edges -- Replace later. 
                    // self.last_parents.push(self.last_header); //TODO: need to get a digest of previous headers cert... Impossible? That header has no cert yet.. would need to wait
                     self.make_header(true).await;
                     self.propose_special = false; //reset 
@@ -182,10 +182,16 @@ impl Proposer {
            
 
             tokio::select! {
-                Some(view) = self.rx_ticket.recv() => {
+    
+                 //Passing Ticket view AND round, i.e. round that the special Header in view belonged to. Skip to that round if lagging behind (to guarantee special headers are monotonically growing)
+                Some((view, round)) = self.rx_ticket.recv() => {
                     if view <= self.view {
                         continue; //Proposal for view already exists.
                     }
+                    if round > self.round { //catch up to last special block round --> to ensure special headers are monotonic in rounds
+                        self.round = round; //should be round+1?
+                    }
+                    //TODO: Note: Need a defense mechanism to ensure Byz proposer cannot arbitrarily exhaust round space. Maybe reject voting on headers that are too far ahead (avoid forming ticket)
 
                     self.view = view;
                     self.propose_special = true;

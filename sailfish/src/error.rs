@@ -1,4 +1,4 @@
-use crate::consensus::Round;
+use crate::consensus::{Round, View};
 use crypto::{CryptoError, Digest, PublicKey};
 use primary::DagError;
 use store::StoreError;
@@ -54,19 +54,25 @@ pub enum ConsensusError {
     #[error("Malformed block {0}")]
     MalformedBlock(Digest),
 
-    #[error("Received block {digest} from leader {leader} at round {round}")]
+    #[error("Received block {digest} from leader {leader} at view {view}")]
     WrongLeader {
         digest: Digest,
         leader: PublicKey,
-        round: Round,
+        view: View,
     },
 
     #[error("Invalid payload")]
     InvalidPayload,
 
-    #[error("Message {0} (round {1}) too old")]
+    #[error("Message {0} (view {1}) too old")]
     TooOld(Digest, Round),
 
     #[error(transparent)]
     DagError(#[from] DagError),
+
+    #[error("Received block for round {round} smaller than {curr_round}")]
+    NonMonotonicRounds {
+        round: Round,
+        curr_round: Round,
+    }
 }

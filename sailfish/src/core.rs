@@ -1,5 +1,5 @@
 use crate::aggregator::Aggregator;
-use crate::consensus::{ConsensusMessage, Round};
+use crate::consensus::{ConsensusMessage, View};
 use crate::error::{ConsensusError, ConsensusResult};
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
@@ -14,7 +14,7 @@ use crypto::Hash as _;
 use crypto::{PublicKey, SignatureService};
 use log::{debug, error, warn};
 use network::SimpleSender;
-use primary::Certificate;
+use primary::{Certificate, Round, Header};
 use std::cmp::max;
 use std::collections::VecDeque;
 use store::Store;
@@ -38,14 +38,15 @@ pub struct Core {
     tx_commit: Sender<Certificate>,
     tx_output: Sender<Block>,
     tx_dag: Sender<Certificate>,
-    tx_ticket: Sender<Round>,
-    round: Round,
-    last_voted_round: Round,
-    last_committed_round: Round,
+    tx_ticket: Sender<(View, Round)>,
+    view: View,
+    last_voted_view: View,
+    last_committed_view: View,
     high_qc: QC,
     timer: Timer,
     aggregator: Aggregator,
     network: SimpleSender,
+    round: Round, 
 }
 
 impl Core {
@@ -65,7 +66,7 @@ impl Core {
         tx_commit: Sender<Certificate>,
         tx_output: Sender<Block>,
         tx_dag: Sender<Certificate>, // Translate a QC into a Certificate and send it to the DAG
-        tx_ticket: Sender<Round>,
+        tx_ticket: Sender<(View, Round)>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -83,13 +84,14 @@ impl Core {
                 tx_output,
                 tx_dag,
                 tx_ticket,
-                round: 1,
-                last_voted_round: 0,
-                last_committed_round: 0,
+                view: 1,
+                last_voted_view: 0,
+                last_committed_view: 0,
                 high_qc: QC::genesis(),
                 timer: Timer::new(timeout_delay),
                 aggregator: Aggregator::new(committee),
                 network: SimpleSender::new(),
+                round: 1,
             }
             .run()
             .await
@@ -102,17 +104,17 @@ impl Core {
         self.store.write(key, value).await;
     }
 
-    fn increase_last_voted_round(&mut self, target: Round) {
-        self.last_voted_round = max(self.last_voted_round, target);
+    fn increase_last_voted_view(&mut self, target: View) {
+        self.last_voted_view = max(self.last_voted_view, target);
     }
 
     async fn make_vote(&mut self, block: &Block) -> Option<Vote> {
         // Check if we can vote for this block.
-        let safety_rule_1 = block.round > self.last_voted_round;
-        let mut safety_rule_2 = block.qc.round + 1 == block.round;
+        let safety_rule_1 = block.view > self.last_voted_view;
+        let mut safety_rule_2 = block.qc.view + 1 == block.view;
         if let Some(ref tc) = block.tc {
-            let mut can_extend = tc.round + 1 == block.round;
-            can_extend &= block.qc.round >= *tc.high_qc_rounds().iter().max().expect("Empty TC");
+            let mut can_extend = tc.view + 1 == block.view;
+            can_extend &= block.qc.view >= *tc.high_qc_views().iter().max().expect("Empty TC");
             safety_rule_2 |= can_extend;
         }
         if !(safety_rule_1 && safety_rule_2) {
@@ -120,13 +122,13 @@ impl Core {
         }
 
         // Ensure we won't vote for contradicting blocks.
-        self.increase_last_voted_round(block.round);
-        // TODO [issue #15]: Write to storage preferred_round and last_voted_round.
+        self.increase_last_voted_view(block.view);
+        // TODO [issue #15]: Write to storage preferred_view and last_voted_view.
         Some(Vote::new(&block, self.name, self.signature_service.clone()).await)
     }
 
     async fn commit(&mut self, block: Block, qc: QC) -> ConsensusResult<()> {
-        if self.last_committed_round >= block.round {
+        if self.last_committed_view >= block.view {
             return Ok(());
         }
 
@@ -135,7 +137,7 @@ impl Core {
 
         // Ensure we commit the entire chain. This is needed after view-change.
         let mut parent = block.clone();
-        while self.last_committed_round + 1 < parent.round {
+        while self.last_committed_view + 1 < parent.view {
             let ancestor = self
                 .synchronizer
                 .get_parent_block(&parent)
@@ -146,7 +148,7 @@ impl Core {
         }
 
         // Save the last committed block.
-        self.last_committed_round = block.round;
+        self.last_committed_view = block.view;
 
         // Send all the newly committed blocks to the node's application layer.
         while let Some(block) = to_commit.pop_back() {
@@ -176,21 +178,21 @@ impl Core {
     }
 
     fn update_high_qc(&mut self, qc: &QC) {
-        if qc.round > self.high_qc.round {
+        if qc.view > self.high_qc.view {
             self.high_qc = qc.clone();
         }
     }
 
-    async fn local_timeout_round(&mut self) -> ConsensusResult<()> {
-        warn!("Timeout reached for round {}", self.round);
+    async fn local_timeout_view(&mut self) -> ConsensusResult<()> {
+        warn!("Timeout reached for view {}", self.view);
 
-        // Increase the last voted round.
-        self.increase_last_voted_round(self.round);
+        // Increase the last voted view.
+        self.increase_last_voted_view(self.view);
 
         // Make a timeout message.
         let timeout = Timeout::new(
             self.high_qc.clone(),
-            self.round,
+            self.view,
             self.name,
             self.signature_service.clone(),
         )
@@ -221,7 +223,7 @@ impl Core {
     #[async_recursion]
     async fn handle_vote(&mut self, vote: &Vote) -> ConsensusResult<()> {
         debug!("Processing {:?}", vote);
-        if vote.round < self.round {
+        if vote.view < self.view {
             return Ok(());
         }
 
@@ -235,8 +237,9 @@ impl Core {
             // Process the QC.
             self.process_qc(&qc).await;
 
+
             // Make a new block if we are the next leader.
-            if self.name == self.leader_elector.get_leader(self.round) {
+            if self.name == self.leader_elector.get_leader(self.view) {
                 self.generate_proposal(None).await;
             }
         }
@@ -245,7 +248,7 @@ impl Core {
 
     async fn handle_timeout(&mut self, timeout: &Timeout) -> ConsensusResult<()> {
         debug!("Processing {:?}", timeout);
-        if timeout.round < self.round {
+        if timeout.view < self.view {
             return Ok(());
         }
 
@@ -259,8 +262,8 @@ impl Core {
         if let Some(tc) = self.aggregator.add_timeout(timeout.clone())? {
             debug!("Assembled {:?}", tc);
 
-            // Try to advance the round.
-            self.advance_round(tc.round).await;
+            // Try to advance the view.
+            self.advance_view(tc.view).await;
 
             // Broadcast the TC.
             debug!("Broadcasting {:?}", tc);
@@ -277,7 +280,7 @@ impl Core {
                 .await;
 
             // Make a new block if we are the next leader.
-            if self.name == self.leader_elector.get_leader(self.round) {
+            if self.name == self.leader_elector.get_leader(self.view) {
                 self.generate_proposal(Some(tc)).await;
             }
         }
@@ -285,31 +288,55 @@ impl Core {
     }
 
     #[async_recursion]
-    async fn advance_round(&mut self, round: Round) {
-        if round < self.round {
+    async fn advance_view(&mut self, view: View) {
+        if view < self.view {
             return;
         }
-        // Reset the timer and advance round.
+        // Reset the timer and advance view.
         self.timer.reset();
-        self.round = round + 1;
-        debug!("Moved to round {}", self.round);
+        self.view = view + 1;
+        debug!("Moved to view {}", self.view);
 
         // Cleanup the vote aggregator.
-        self.aggregator.cleanup(&self.round);
+        self.aggregator.cleanup(&self.view);
     }
 
     #[async_recursion]
     async fn generate_proposal(&mut self, tc: Option<TC>) {
+
+         // QC or TC formed so send ticket to the consensus
+         // check to see whether you are the leader is implicit
+         self.tx_ticket
+             .send((self.view, self.round))
+             .await
+             .expect("Failed to send view");
+
+             
         self.tx_proposer
-            .send(ProposerMessage(self.round, self.high_qc.clone(), tc))
+            .send(ProposerMessage(self.view, self.high_qc.clone(), tc))
             .await
             .expect("Failed to send message to proposer");
     }
 
     async fn process_qc(&mut self, qc: &QC) {
         debug!("Processing {:?}", qc);
-        self.advance_round(qc.round).await;
+        self.advance_view(qc.view).await;
         self.update_high_qc(qc);
+    }
+
+    async fn process_header(&mut self, payload: &Vec<Header>) -> ConsensusResult<()> {
+        //TODO: Any other checks?
+
+        //Only process special header if the round number is increasing
+        ensure!(
+            payload[0].round > self.round,
+            ConsensusError::NonMonotonicRounds {
+               round: payload[0].round,
+               curr_round: self.round,
+            }
+        );
+        self.round = payload[0].round;
+        Ok(())
     }
 
     #[async_recursion]
@@ -333,7 +360,7 @@ impl Core {
         self.store_block(block).await;
 
         // Construct a certificate from block.qc (qc1)
-        let certificate = Certificate {header: block.payload[0].clone(), votes: block.qc.votes.clone()};
+        let certificate = Certificate {header: b1.payload[0].clone(), votes: block.qc.votes.clone()};
 
         // Send certificate to the DAG
         self.tx_dag
@@ -341,30 +368,31 @@ impl Core {
             .await
             .expect("Failed to send payload");
 
-        // QC formed so send ticket to the consensus
-        // TODO add additional check to see whether you are the leader
-        self.tx_ticket
-            .send(b1.round)
-            .await
-            .expect("Failed to send view");
+        // // QC formed so send ticket to the consensus
+        // // TODO: add additional check to see whether you are the leader
+       
+        // self.tx_ticket
+        //     .send((b1.view, b1.payload[0].round))
+        //     .await
+        //     .expect("Failed to send view");
 
         // Check if we can commit the head of the 2-chain.
         // Note that we commit blocks only if we have all its ancestors.
-        if b0.round + 1 == b1.round {
+        if b0.view + 1 == b1.view {
             self.commit(b0, b1.qc).await?;
         }
 
-        // Ensure the block's round is as expected.
+        // Ensure the block's view is as expected.
         // This check is important: it prevents bad leaders from producing blocks
-        // far in the future that may cause overflow on the round number.
-        if block.round != self.round {
+        // far in the future that may cause overflow on the view number.
+        if block.view != self.view {
             return Ok(());
         }
 
         // See if we can vote for this block.
         if let Some(vote) = self.make_vote(block).await {
             debug!("Created {:?}", vote);
-            let next_leader = self.leader_elector.get_leader(self.round + 1);
+            let next_leader = self.leader_elector.get_leader(self.view + 1);
             if next_leader == self.name {
                 self.handle_vote(&vote).await?;
             } else {
@@ -385,26 +413,29 @@ impl Core {
     async fn handle_proposal(&mut self, block: &Block) -> ConsensusResult<()> {
         let digest = block.digest();
 
-        // Ensure the block proposer is the right leader for the round.
+        // Ensure the block proposer is the right leader for the view.
         ensure!(
-            block.author == self.leader_elector.get_leader(block.round),
+            block.author == self.leader_elector.get_leader(block.view),
             ConsensusError::WrongLeader {
                 digest,
                 leader: block.author,
-                round: block.round
+                view: block.view
             }
         );
 
         // Check the block is correctly formed.
         block.verify(&self.committee)?;
 
-        // Process the QC. This may allow us to advance round.
+        // Process the special Header. Advance round
+        let res = self.process_header(&block.payload).await;
+
+        // Process the QC. This may allow us to advance view.
         self.process_qc(&block.qc).await;
 
-        // Process the TC (if any). This may also allow us to advance round.
+        // Process the TC (if any). This may also allow us to advance view.
         if let Some(ref tc) = block.tc {
             debug!("Processing (embedded) {:?}", tc);
-            self.advance_round(tc.round).await;
+            self.advance_view(tc.view).await;
         }
 
         // Check that the payload certificates are valid.
@@ -413,11 +444,13 @@ impl Core {
         // All check pass, we can process this block.
         self.process_block(block).await
     }
+    
+   
 
     async fn handle_tc(&mut self, tc: TC) -> ConsensusResult<()> {
         debug!("Processing {:?}", tc);
-        self.advance_round(tc.round).await;
-        if self.name == self.leader_elector.get_leader(self.round) {
+        self.advance_view(tc.view).await;
+        if self.name == self.leader_elector.get_leader(self.view) {
             self.generate_proposal(Some(tc)).await;
         }
         Ok(())
@@ -427,7 +460,7 @@ impl Core {
         // Upon booting, generate the very first block (if we are the leader).
         // Also, schedule a timer in case we don't hear from the leader.
         self.timer.reset();
-        if self.name == self.leader_elector.get_leader(self.round) {
+        if self.name == self.leader_elector.get_leader(self.view) {
             self.generate_proposal(None).await;
         }
 
@@ -443,7 +476,7 @@ impl Core {
                     _ => panic!("Unexpected protocol message")
                 },
                 Some(block) = self.rx_loopback.recv() => self.process_block(&block).await,  //Processing Block that we propose ourselves. (or that we resume via Synchronizer upcall)
-                () = &mut self.timer => self.local_timeout_round().await,
+                () = &mut self.timer => self.local_timeout_view().await,
             };
             match result {
                 Ok(()) => (),

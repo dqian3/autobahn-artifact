@@ -1,4 +1,4 @@
-use crate::consensus::Round;
+use crate::consensus::View;
 use crate::error::{ConsensusError, ConsensusResult};
 use config::Committee;
 use crypto::{Digest, Hash, PublicKey, Signature, SignatureService};
@@ -19,7 +19,7 @@ pub struct Block {
     pub qc: QC, // QC is equivalent to Commit Certificate in our terminology. Certificate is equivalent to Vote-QC in our terminology
     pub tc: Option<TC>,
     pub author: PublicKey,
-    pub round: Round,
+    pub view: View,
     pub payload: Vec<Header>, // Change this to be the payload of a header (vector of digests representing mini-batches)
     pub signature: Signature,
 }
@@ -29,7 +29,7 @@ impl Block {
         qc: QC,
         tc: Option<TC>,
         author: PublicKey,
-        round: Round,
+        view: View,
         payload: Vec<Header>,
         mut signature_service: SignatureService,
     ) -> Self {
@@ -37,7 +37,7 @@ impl Block {
             qc,
             tc,
             author,
-            round,
+            view,
             payload,
             signature: Signature::default(),
         };
@@ -81,7 +81,7 @@ impl Hash for Block {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
         hasher.update(self.author.0);
-        hasher.update(self.round.to_le_bytes());
+        hasher.update(self.view.to_le_bytes());
         for x in &self.payload {
             hasher.update(&x.id);
         }
@@ -97,7 +97,7 @@ impl fmt::Debug for Block {
             "{}: HSB({}, {}, {:?}, {})",
             self.digest(),
             self.author,
-            self.round,
+            self.view,
             self.qc,
             self.payload.len(),
         )
@@ -106,14 +106,14 @@ impl fmt::Debug for Block {
 
 impl fmt::Display for Block {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "HSB{}", self.round)
+        write!(f, "HSB{}", self.view)
     }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Vote {
     pub hash: Digest,
-    pub round: Round,
+    pub view: View,
     pub author: PublicKey,
     pub signature: Signature,
 }
@@ -126,7 +126,7 @@ impl Vote {
     ) -> Self {
         let vote = Self {
             hash: block.digest(),
-            round: block.round,
+            view: block.view,
             author,
             signature: Signature::default(),
         };
@@ -151,21 +151,21 @@ impl Hash for Vote {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
         hasher.update(&self.hash);
-        hasher.update(self.round.to_le_bytes());
+        hasher.update(self.view.to_le_bytes());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
 
 impl fmt::Debug for Vote {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "V({}, {}, {})", self.author, self.round, self.hash)
+        write!(f, "V({}, {}, {})", self.author, self.view, self.hash)
     }
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct QC {
     pub hash: Digest,
-    pub round: Round,
+    pub view: View,
     pub votes: Vec<(PublicKey, Signature)>,
 }
 
@@ -175,7 +175,7 @@ impl QC {
     }
 
     pub fn timeout(&self) -> bool {
-        self.hash == Digest::default() && self.round != 0
+        self.hash == Digest::default() && self.view != 0
     }
 
     pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
@@ -203,27 +203,27 @@ impl Hash for QC {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
         hasher.update(&self.hash);
-        hasher.update(self.round.to_le_bytes());
+        hasher.update(self.view.to_le_bytes());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
 
 impl fmt::Debug for QC {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "QC({}, {})", self.hash, self.round)
+        write!(f, "QC({}, {})", self.hash, self.view)
     }
 }
 
 impl PartialEq for QC {
     fn eq(&self, other: &Self) -> bool {
-        self.hash == other.hash && self.round == other.round
+        self.hash == other.hash && self.view == other.view
     }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Timeout {
     pub high_qc: QC,
-    pub round: Round,
+    pub view: View,
     pub author: PublicKey,
     pub signature: Signature,
 }
@@ -231,13 +231,13 @@ pub struct Timeout {
 impl Timeout {
     pub async fn new(
         high_qc: QC,
-        round: Round,
+        view: View,
         author: PublicKey,
         mut signature_service: SignatureService,
     ) -> Self {
         let timeout = Self {
             high_qc,
-            round,
+            view,
             author,
             signature: Signature::default(),
         };
@@ -269,22 +269,22 @@ impl Timeout {
 impl Hash for Timeout {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
-        hasher.update(self.round.to_le_bytes());
-        hasher.update(self.high_qc.round.to_le_bytes());
+        hasher.update(self.view.to_le_bytes());
+        hasher.update(self.high_qc.view.to_le_bytes());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
 
 impl fmt::Debug for Timeout {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "TV({}, {}, {:?})", self.author, self.round, self.high_qc)
+        write!(f, "TV({}, {}, {:?})", self.author, self.view, self.high_qc)
     }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct TC {
-    pub round: Round,
-    pub votes: Vec<(PublicKey, Signature, Round)>,
+    pub view: View,
+    pub votes: Vec<(PublicKey, Signature, View)>,
 }
 
 impl TC {
@@ -305,23 +305,23 @@ impl TC {
         );
 
         // Check the signatures.
-        for (author, signature, high_qc_round) in &self.votes {
+        for (author, signature, high_qc_view) in &self.votes {
             let mut hasher = Sha512::new();
-            hasher.update(self.round.to_le_bytes());
-            hasher.update(high_qc_round.to_le_bytes());
+            hasher.update(self.view.to_le_bytes());
+            hasher.update(high_qc_view.to_le_bytes());
             let digest = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
             signature.verify(&digest, &author)?;
         }
         Ok(())
     }
 
-    pub fn high_qc_rounds(&self) -> Vec<Round> {
+    pub fn high_qc_views(&self) -> Vec<View> {
         self.votes.iter().map(|(_, _, r)| r).cloned().collect()
     }
 }
 
 impl fmt::Debug for TC {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "TC({}, {:?})", self.round, self.high_qc_rounds())
+        write!(f, "TC({}, {:?})", self.view, self.high_qc_views())
     }
 }

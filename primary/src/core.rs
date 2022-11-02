@@ -47,7 +47,7 @@ pub struct Core {
     rx_proposer: Receiver<Header>,
     /// Output all certificates to the consensus layer.
     tx_consensus: Sender<Certificate>,
-    /// Send valid a quorum of certificates' ids to the `Proposer` (along with their round).
+    /// Send valid a quorum of certificates' ids to the `Proposer` (along with their round).gtim
     tx_proposer: Sender<(Vec<Digest>, Round)>,
     // Receives Certificates from the consensus layer.
     rx_dag: Receiver<Certificate>,

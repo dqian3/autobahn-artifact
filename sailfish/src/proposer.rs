@@ -1,4 +1,4 @@
-use crate::consensus::{ConsensusMessage, Round};
+use crate::consensus::{ConsensusMessage, View};
 use crate::messages::{Block, QC, TC};
 use bytes::Bytes;
 use config::{Committee, Stake};
@@ -13,7 +13,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration, Instant};
 
 #[derive(Debug)]
-pub struct ProposerMessage(pub Round, pub QC, pub Option<TC>);
+pub struct ProposerMessage(pub View, pub QC, pub Option<TC>);
 
 pub struct Proposer {
     name: PublicKey,
@@ -25,9 +25,9 @@ pub struct Proposer {
     rx_message: Receiver<ProposerMessage>,
     tx_loopback: Sender<Block>,
     tx_committer: Sender<Certificate>,
-    buffer: Vec<Header>, // Buffer should contain the latest created header
+    buffer: Vec<Header>, // Buffer should contain the latest created header   //FIXME: Does this need to be a vector? should always only contain one header
     network: ReliableSender,
-    leader: Option<(Round, QC, Option<TC>)>,
+    leader: Option<(View, QC, Option<TC>)>,
 }
 
 impl Proposer {
@@ -67,13 +67,13 @@ impl Proposer {
         deliver
     }
 
-    async fn make_block(&mut self, round: Round, qc: QC, tc: Option<TC>) {
+    async fn make_block(&mut self, view: View, qc: QC, tc: Option<TC>) {
         // Generate a new block.
         let block = Block::new(
             qc,
             tc,
             self.name,
-            round,
+            view,
             /* payload */ self.buffer.drain(..).collect(),
             self.signature_service.clone(),
         )
@@ -134,9 +134,9 @@ impl Proposer {
             let got_payload = !self.buffer.is_empty();
 
             if timer_expired || got_payload {
-                if let Some((round, qc, tc)) = self.leader.take() {
+                if let Some((view, qc, tc)) = self.leader.take() {
                     // Make a new block.
-                    self.make_block(round, qc, tc).await; //won't try to make next block before previous block has been acked.
+                    self.make_block(view, qc, tc).await; //won't try to make next block before previous block has been acked.
 
                     // Reschedule the timer.
                     let deadline = Instant::now() + Duration::from_millis(self.max_block_delay);
@@ -156,13 +156,13 @@ impl Proposer {
                         self.buffer.push(certificate);
                         continue;
                     }
-                    if self.buffer[0].round() < certificate.round() {  //remove proposals for smaller dag rounds; bigger ones subsume them.
+                    if self.buffer[0].view() < certificate.view() {  //remove proposals for smaller dag views; bigger ones subsume them.
                         self.buffer.push(certificate);
                         self.buffer.swap_remove(0);
                     }
                 },*/
-                Some(ProposerMessage(round, qc, tc)) = self.rx_message.recv() =>  {
-                    self.leader = Some((round, qc, tc));
+                Some(ProposerMessage(view, qc, tc)) = self.rx_message.recv() =>  {
+                    self.leader = Some((view, qc, tc));
                 },
                 Some(header) = self.rx_consensus.recv() => {
                     if self.buffer.is_empty() {
@@ -170,7 +170,10 @@ impl Proposer {
                         continue;
                     }
 
-                    if self.buffer[0].round < header.round {
+                    if self.buffer[0].round < header.round{ //Note: This means we've been tasked with processing a header from a higher round before the RB of the previous one happened. 
+                                                                    // Unclear whether we should skip the lower rounds RB, or do it also. For now, skipping. 
+                                                                    // Don't think it will happen since currently we only issue new special header if we have parents 
+                                                                    //& only request next special header once we have ticket ==> previous special header completed.
                         self.buffer.push(header);
                         self.buffer.swap_remove(0);
                     }

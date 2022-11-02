@@ -25,7 +25,7 @@ impl Default for Parameters {
 impl Parameters {
     pub fn log(&self) {
         // NOTE: These log entries are used to compute performance.
-        info!("Timeout delay set to {} rounds", self.timeout_delay);
+        info!("Timeout delay set to {} views", self.timeout_delay);
         info!("Sync retry delay set to {} ms", self.sync_retry_delay);
     }
 }

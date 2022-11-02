@@ -28,6 +28,8 @@ pub const CHANNEL_CAPACITY: usize = 1_000;
 
 /// The round number.
 pub type Round = u64;
+/// The view number (of consensus)
+pub type View = u64;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum PrimaryMessage {
@@ -67,7 +69,7 @@ impl Primary {
         tx_consensus: Sender<Certificate>,
         rx_consensus: Receiver<Certificate>,
         tx_sailfish: Sender<Header>,
-        rx_ticket: Receiver<Round>,
+        rx_ticket: Receiver<(View, Round)>,
         rx_dag: Receiver<Certificate>,
     ) {
         let (tx_others_digests, rx_others_digests) = channel(CHANNEL_CAPACITY);
