@@ -39,7 +39,7 @@ pub struct Proposer {
     /// The current round of the dag.
     round: Round,
     // Holds the certificate id of the last header issued.
-    //last_header: Digest,
+    last_header: Digest,
     /// Holds the certificates' ids waiting to be included in the next header.
     last_parents: Vec<Digest>,
     /// Holds the batches' digests waiting to be included in the next header.
@@ -66,10 +66,19 @@ impl Proposer {
         tx_core: Sender<Header>,
         tx_sailfish: Sender<Header>
     ) {
-        let genesis = Certificate::genesis(committee)
+        let genesis: Vec<Digest> = Certificate::genesis(committee)
             .iter()
             .map(|x| x.digest())
             .collect();
+
+        let genesis_parent: Digest = Certificate {
+                header: Header {
+                    author: name,
+                    ..Header::default()
+                },
+                ..Certificate::default()
+            }.digest();
+      
 
         tokio::spawn(async move {
             Self {
@@ -84,7 +93,7 @@ impl Proposer {
                 tx_sailfish,
                 round: 1,
                 last_parents: genesis,
-                //last_header: Digest::new(),
+                last_header: genesis_parent, //Digest::default(),
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
                 view: 1,
@@ -113,6 +122,11 @@ impl Proposer {
             info!("Created {} -> {:?}", header, digest);
         }
 
+        //Store reference to our own previous header -- used for special edge. Does not include a certificate (does not exist yet)
+        self.last_header = Certificate {
+            header: header.clone(),
+            ..Certificate::default()
+        }.digest();
 
         if !is_special {
             // Send the new header to the `Core` that will broadcast and process it.
@@ -127,7 +141,7 @@ impl Proposer {
                 .await
                 .expect("Failed to send header");
         }
-        //self.last_header = header //getDigest(header)
+       
     }
 
     // Main loop listening to incoming messages.
@@ -154,14 +168,21 @@ impl Proposer {
             let mut proposing = false;
 
             if timer_expired || enough_digests {
-                //not waiting for parent edges to create special block -- 
-                //TODO: Want to use available parent edges. AT LEAST own edge.
-                //FIXME: Must include at least own edge. CURRENTLY NOT THE CASE. last_parents is fully empty.
-                //FIXME: Currently re-uses the same last round. Needs to increment round. If waiting for parents, then by default round is incremented so nothing to do.
-                //E.g. round + 1; last_parents, insert parents.
+
+                //Case A: Have Digests OR Timer: Receive Ticket Before parents. ==> next loop will start a special header
+                //Case B: Have Digests OR Timer: Receive Parents before ticket. ==> next loop will start a normal header
+                //Case C: Waiting for Digest AND Timer: Received both Ticket and Parent. ==> next loop will start a special header (with parents)
+               
                 //Pass down round from last cert. Also pass down current parents EVEN if not full quorum: I.e. add a special flag to "process_cert" to not wait.
-                if self.propose_special && enough_parents { //TODO: FOR NOW  also waiting for parent edges -- Replace later. 
-                   // self.last_parents.push(self.last_header); //TODO: need to get a digest of previous headers cert... Impossible? That header has no cert yet.. would need to wait
+                if self.propose_special { //
+                    //not waiting for n-f parent edges to create special block -- but will use them if available (Note, this will only happen in case C)
+                    //Includes at least own parent as special edge.
+                    if !enough_parents { // (Note, this will only be false in case C)
+                        self.last_parents.push(self.last_header.clone()); //Use last header as special edge. //TODO: Consensus should process parents. Distinguish whether n-f edges, or just 1 edge (special)
+                                                                                                                    // If n-f: Do the same Synchronization/availability checks that the DAG does.
+                                                                                                                    // If 1: Check if DAG has that payload. If yes, vote. If no, block processing and wait.
+                                                                                                                    //TODO: if want to simplify, can always use just 1 edge for special blocks.
+                    } 
                     self.make_header(true).await;
                     self.propose_special = false; //reset 
                     proposing = true;
@@ -189,7 +210,7 @@ impl Proposer {
                         continue; //Proposal for view already exists.
                     }
                     if round > self.round { //catch up to last special block round --> to ensure special headers are monotonic in rounds
-                        self.round = round; //should be round+1?
+                        self.round = round+1; //should be round+1?
                     }
                     //TODO: Note: Need a defense mechanism to ensure Byz proposer cannot arbitrarily exhaust round space. Maybe reject voting on headers that are too far ahead (avoid forming ticket)
 

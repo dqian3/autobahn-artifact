@@ -47,7 +47,7 @@ pub struct Core {
     rx_proposer: Receiver<Header>,
     /// Output all certificates to the consensus layer.
     tx_consensus: Sender<Certificate>,
-    /// Send valid a quorum of certificates' ids to the `Proposer` (along with their round).gtim
+    /// Send valid a quorum of certificates' ids to the `Proposer` (along with their round).
     tx_proposer: Sender<(Vec<Digest>, Round)>,
     // Receives Certificates from the consensus layer.
     rx_dag: Receiver<Certificate>,
@@ -395,6 +395,8 @@ impl Core {
                 Some(certificate) = self.rx_certificate_waiter.recv() => self.process_certificate(certificate, false).await,
 
                 // We receive here loopback certificates from the Consensus Layer that was running RB for special blocks.
+                //Note: This may be a certificate for a header we issued ourselves (our_header), or that we receive from another Primary. The Cert is already sanitized (=verified) by the consensus layer (Handle Proposal)
+                                                                                                                                        // 
                 Some(certificate) = self.rx_dag.recv() => self.process_certificate(certificate, true).await,
 
                 // We also receive here our new headers created by the `Proposer`.
