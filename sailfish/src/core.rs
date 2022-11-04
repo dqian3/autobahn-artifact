@@ -324,18 +324,36 @@ impl Core {
         self.update_high_qc(qc);
     }
 
-    async fn process_header(&mut self, payload: &Vec<Header>) -> ConsensusResult<()> {
-        //TODO: Any other checks?
+    //TODO: only call handle_proposal after called process_header.
+    async fn process_header(&mut self, header: &Header, author: &PublicKey) -> ConsensusResult<()> {
+        //TODO: Any other checks? Garbage collection round?
 
+    
+        //1) Header signature correct
+        header.verify(&self.committee)?;
+
+        //2) Header author == block author
+        ensure!(
+            author == header.author,
+            ConsensusError::WrongProposer,
+        );
+        //3) round > last round
         //Only process special header if the round number is increasing
         ensure!(
-            payload[0].round > self.round,
+            header.round > self.round, //TODO: only update self.round upon commit.
             ConsensusError::NonMonotonicRounds {
-               round: payload[0].round,
+               round: header.round,
                curr_round: self.round,
             }
         );
-        self.round = payload[0].round;
+       
+        //3) payload available
+        //4) parents available
+        //TODO: call down to DAG and check if we're synced on this. If not, then we need to put this block processing on pause.
+        //NOTE: The node issuing the block does not need to check this. After all, it proposed the edges.
+        self.tx_sync.send(header);
+
+        self.round = header.round;
         Ok(())
     }
 
@@ -359,7 +377,8 @@ impl Core {
         // Store the block only if we have already processed all its ancestors.
         self.store_block(block).await;
 
-        // Construct a certificate from block.qc (qc1)
+        // Construct a certificate from block.qc (qc1) //FIXME: NOTE: This set of votes are not an RB vote for header. They are a QC for Block. 
+                                                        //The Dag layer never checks these signatures again, so it's fine -- but technically its not a valid set of signatures without supplying the full block content 
         let certificate = Certificate {header: b1.payload[0].clone(), votes: block.qc.votes.clone()};
 
         // Send certificate to the DAG
@@ -427,7 +446,7 @@ impl Core {
         block.verify(&self.committee)?;
 
         // Process the special Header. Advance round
-        let res = self.process_header(&block.payload).await;
+        let res = self.process_header(&block.payload[0], &block.author).await;
 
         // Process the QC. This may allow us to advance view.
         self.process_qc(&block.qc).await;

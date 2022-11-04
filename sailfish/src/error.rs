@@ -70,6 +70,9 @@ pub enum ConsensusError {
     #[error(transparent)]
     DagError(#[from] DagError),
 
+    #[error("Header proposer != block leader")]
+    WrongProposer,
+
     #[error("Received block for round {round} smaller than {curr_round}")]
     NonMonotonicRounds {
         round: Round,

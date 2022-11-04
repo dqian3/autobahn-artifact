@@ -224,6 +224,22 @@ impl Core {
     }
 
     #[async_recursion]
+    async fn sync_header(&mut self, header: Header) {
+        //TODO:
+        //check pending.contains(header.parent_id)
+        //if not, add id to a waiting map(parent_id)
+        //whenever we call process_header, check if we add a header.id that would wake us up. If so, call sync_header again.
+
+        //check if payload synced
+        //If not, Create a Waiter.  if self.synchronizer.missing_payload(header).await? {
+           
+        //When that waiter finishes, call this function again
+
+        //if both checks pass, Upcall with header to Consensus layer. (consensus layer should cache Block to be able to re-call handle_proposal)
+
+    }
+
+    #[async_recursion]
     async fn process_vote(&mut self, vote: Vote) -> DagResult<()> {
         debug!("Processing {:?}", vote);
 
@@ -394,13 +410,17 @@ impl Core {
                 // processing.
                 Some(certificate) = self.rx_certificate_waiter.recv() => self.process_certificate(certificate, false).await,
 
-                // We receive here loopback certificates from the Consensus Layer that was running RB for special blocks.
-                //Note: This may be a certificate for a header we issued ourselves (our_header), or that we receive from another Primary. The Cert is already sanitized (=verified) by the consensus layer (Handle Proposal)
-                                                                                                                                        // 
-                Some(certificate) = self.rx_dag.recv() => self.process_certificate(certificate, true).await,
-
                 // We also receive here our new headers created by the `Proposer`.
                 Some(header) = self.rx_proposer.recv() => self.process_own_header(header).await,
+
+            ////////// Sailfish glue
+                // We receive here loopback certificates from the Consensus Layer that was running RB for special headers
+                //Note: This may be a certificate for a header we issued ourselves (our_header), or that we receive from another Primary. The Cert is already sanitized (=verified) by the consensus layer (Handle Proposal)                                                                                                      
+                Some(certificate) = self.rx_dag.recv() => self.process_certificate(certificate, true).await, //FIXME: Don't want to call the full process_certificate...
+                // We receive here loopback headers from the Consensus Layer that is running RB for special headers. Rely on DAG to sync on it.
+                Some(header) = self. self.rx_sync.recv() => self.sync_header(header).await,  //FIXME: Define rx_sync and sync_header
+                //TODO: Must call back up again --> and re-call process_block.
+
             };
             match result {
                 Ok(()) => (),
