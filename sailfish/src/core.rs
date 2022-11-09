@@ -37,7 +37,7 @@ pub struct Core {
     tx_proposer: Sender<ProposerMessage>,
     tx_commit: Sender<Certificate>,
     tx_output: Sender<Block>,
-    tx_dag: Sender<Certificate>,
+    tx_validation: Sender<Header>,
     tx_ticket: Sender<(View, Round)>,
     view: View,
     last_voted_view: View,
@@ -65,7 +65,7 @@ impl Core {
         tx_proposer: Sender<ProposerMessage>,
         tx_commit: Sender<Certificate>,
         tx_output: Sender<Block>,
-        tx_dag: Sender<Certificate>, // Translate a QC into a Certificate and send it to the DAG
+        tx_validation: Sender<Header>, // Loopback Special Headers to DAG
         tx_ticket: Sender<(View, Round)>,
     ) {
         tokio::spawn(async move {
@@ -82,7 +82,7 @@ impl Core {
                 tx_proposer,
                 tx_commit,
                 tx_output,
-                tx_dag,
+                tx_validation,
                 tx_ticket,
                 view: 1,
                 last_voted_view: 0,
@@ -237,10 +237,10 @@ impl Core {
             // Process the QC.
             self.process_qc(&qc).await;
 
-
             // Make a new block if we are the next leader.
             if self.name == self.leader_elector.get_leader(self.view) {
                 self.generate_proposal(None).await;
+                  //TODO: Pass down cert ==> then can include parent edges
             }
         }
         Ok(())
@@ -306,6 +306,7 @@ impl Core {
 
          // QC or TC formed so send ticket to the consensus
          // check to see whether you are the leader is implicit
+         //TODO: Also pass down QC/TC if desired.
          self.tx_ticket
              .send((self.view, self.round))
              .await
@@ -324,15 +325,17 @@ impl Core {
         self.update_high_qc(qc);
     }
 
-    //TODO: only call handle_proposal after called process_header.
-    async fn process_header(&mut self, header: &Header, author: &PublicKey) -> ConsensusResult<()> {
-        //TODO: Any other checks? Garbage collection round?
+    //TODO: Call process_header upon receiving upcall from Dag layer.
+    async fn process_header(&mut self, header: Header) -> ConsensusResult<()> {
+        //TODO: Check if Ticket valid.
+        // I.e. author = leader of view, current view, latest round monotonic, have QC/TC
+        //If don't have QC/TC. Start a waiter. If waiter triggers, call this function again (or directly call down validation complete)
 
     
         //1) Header signature correct
         header.verify(&self.committee)?;
 
-        //2) Header author == block author
+        //2) Header author == view leader
         ensure!(
             author == header.author,
             ConsensusError::WrongProposer,
@@ -347,11 +350,12 @@ impl Core {
             }
         );
        
-        //3) payload available
-        //4) parents available
-        //TODO: call down to DAG and check if we're synced on this. If not, then we need to put this block processing on pause.
-        //NOTE: The node issuing the block does not need to check this. After all, it proposed the edges.
-        self.tx_sync.send(header);
+
+        // Loopback to RB, confirming that special block is valid.
+            self.tx_validation
+            .send(header)
+            .await
+            .expect("Failed to send payload");
 
         self.round = header.round;
         Ok(())
@@ -381,11 +385,7 @@ impl Core {
                                                         //The Dag layer never checks these signatures again, so it's fine -- but technically its not a valid set of signatures without supplying the full block content 
         let certificate = Certificate {header: b1.payload[0].clone(), votes: block.qc.votes.clone()};
 
-        // Send certificate to the DAG
-        self.tx_dag
-            .send(certificate)
-            .await
-            .expect("Failed to send payload");
+
 
         // // QC formed so send ticket to the consensus
         // // TODO: add additional check to see whether you are the leader
@@ -487,6 +487,17 @@ impl Core {
         // and receive timeout notifications from our Timeout Manager.
         loop {
             let result = tokio::select! {
+                //TODO: Need to receive
+                //1) DAG layer headers for special validation
+                Some(header) = self.rx_special.recv() => self.process_header(&header).await, 
+                //2) DAG layer certs to vote on
+                    // should come via proposer?
+                //3) Votes from other replicas to form QC.
+                //4) Timeouts from other replicas to form TC
+                //5) Receive QC
+                    //For now send separately; but can be made part of (1)
+                //5) Receive TC
+
                 Some(message) = self.rx_message.recv() => match message {   //Receiving Messages from other Replicas
                     ConsensusMessage::Propose(block) => self.handle_proposal(&block).await,
                     ConsensusMessage::Vote(vote) => self.handle_vote(&vote).await,
@@ -494,7 +505,8 @@ impl Core {
                     ConsensusMessage::TC(tc) => self.handle_tc(tc).await,
                     _ => panic!("Unexpected protocol message")
                 },
-                Some(block) = self.rx_loopback.recv() => self.process_block(&block).await,  //Processing Block that we propose ourselves. (or that we resume via Synchronizer upcall)
+                
+                //NO LONGER NEEDED: Some(block) = self.rx_loopback.recv() => self.process_block(&block).await,  //Processing Block that we propose ourselves. (or that we resume via Synchronizer upcall)
                 () = &mut self.timer => self.local_timeout_view().await,
             };
             match result {

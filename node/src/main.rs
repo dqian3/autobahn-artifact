@@ -99,8 +99,8 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
     // Channel for sending headers between DAG and Consensus
     let (tx_sailfish, rx_sailfish) = channel(CHANNEL_CAPACITY);
 
-    // Channel for sending certificates between DAG and Consensus
-    let (tx_dag, rx_dag) = channel(CHANNEL_CAPACITY);
+    // Channel for sending loopback headerds that completed validation between DAG and Consensus
+    let (tx_validation, rx_validation) = channel(CHANNEL_CAPACITY);
 
     // Channel for indicating commit and that new header should be proposed
     let (tx_ticket, rx_ticket) = channel(CHANNEL_CAPACITY);
@@ -122,7 +122,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 /* rx_consensus */ rx_feedback,
                 tx_sailfish,
                 rx_ticket,
-                rx_dag,
+                rx_validation,
             );
             Consensus::spawn(
                 name,
@@ -134,7 +134,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 /* tx_mempool */ tx_feedback,
                 tx_output,
                 tx_ticket,
-                tx_dag,
+                tx_validation,
                 rx_sailfish,
             );
         }

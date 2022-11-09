@@ -50,7 +50,7 @@ pub struct Core {
     /// Send valid a quorum of certificates' ids to the `Proposer` (along with their round).
     tx_proposer: Sender<(Vec<Digest>, Round)>,
     // Receives Certificates from the consensus layer.
-    rx_dag: Receiver<Certificate>,
+    rx_validation: Receiver<Header>,
 
     /// The last garbage collected round.
     gc_round: Round,
@@ -86,7 +86,7 @@ impl Core {
         rx_proposer: Receiver<Header>,
         tx_consensus: Sender<Certificate>,
         tx_proposer: Sender<(Vec<Digest>, Round)>,
-        rx_dag: Receiver<Certificate>,
+        rx_validation: Receiver<Header>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -103,7 +103,7 @@ impl Core {
                 rx_proposer,
                 tx_consensus,
                 tx_proposer,
-                rx_dag,
+                rx_validation,
                 gc_round: 0,
                 last_voted: HashMap::with_capacity(2 * gc_depth as usize),
                 processing: HashMap::with_capacity(2 * gc_depth as usize),
@@ -123,12 +123,6 @@ impl Core {
         self.current_header = header.clone();
         self.votes_aggregator = VotesAggregator::new();
 
-        // For special block instead of broadcasting header in a reliable manner, send the header to the consensus channel
-        // The consensus channel will be in charge of sending a block that contains the header, gathering votes, etc.
-        // Once the consensus channel forms a quorum certificate for a block, we collect this quorum certificate in
-        // a receiving part of the channel, and add it to the DAG by translating the QC votes to DAG certificate votes
-        // Similarly we also have a receiving part of the channel for committed blocks, so that they can be ordered
-        // and executed
         // Broadcast the new header in a reliable manner.
         let addresses = self
             .committee
@@ -198,50 +192,63 @@ impl Core {
             .or_insert_with(HashSet::new)
             .insert(header.author)
         {
-            // Make a vote and send it to the header's creator.
-            let vote = Vote::new(header, &self.name, &mut self.signature_service).await;
-            debug!("Created {:?}", vote);
-            if vote.origin == self.name {
-                self.process_vote(vote)
-                    .await
-                    .expect("Failed to process our own vote");
-            } else {
-                let address = self
-                    .committee
-                    .primary(&header.author)
-                    .expect("Author of valid header is not in the committee")
-                    .primary_to_primary;
-                let bytes = bincode::serialize(&PrimaryMessage::Vote(vote))
-                    .expect("Failed to serialize our own vote");
-                let handler = self.network.send(address, Bytes::from(bytes)).await;
-                self.cancel_handlers
-                    .entry(header.round)
-                    .or_insert_with(Vec::new)
-                    .push(handler);
+            //TODO: only do this if header is special
+              //TODO: For special headers: Upcall to consensus layer to confirm whether the special header is valid for consensus
+            // If special header is ones own, skip this and vote immediatley, Actually: For own block should also upcall. View might be outdated if accepted a view change...
+            // Otherwise, upcall. On downcall, create message and send (mark it special valid/invalid)
+            if(header.is_special){
+                self.tx_special
+                .send(header)
+                .await
+                .expect("Failed to send special header");
+            }
+            else{
+                 // Make a vote and send it to the header's creator.
+                self.create_vote(&header).await;
             }
         }
+           
         Ok(())
     }
 
     #[async_recursion]
-    async fn sync_header(&mut self, header: Header) {
-        //TODO:
-        //check pending.contains(header.parent_id)
-        //if not, add id to a waiting map(parent_id)
-        //whenever we call process_header, check if we add a header.id that would wake us up. If so, call sync_header again.
+    async fn create_vote(&mut self, header: &Header) -> DagResult<()>{ 
+        //TODO: Add argument "special_valid" ((Or just un-set the special field if not valid --> but that might have impact on digests))
+        //Invalid votes must contain a TC or QC proving the view is outdated.
+        //TODO: Consensus layer should pass down option for QC/TC
+        //TODO: Vote needs to be modified to include valid/invalid (signed), and proof=QC/TC
+        //TODO: Cert is consequently not just <Signatures>, but needs to include the vote message too (at least a bitmap for valid/invalid) to re-construct the Vote
 
-        //check if payload synced
-        //If not, Create a Waiter.  if self.synchronizer.missing_payload(header).await? {
-           
-        //When that waiter finishes, call this function again
-
-        //if both checks pass, Upcall with header to Consensus layer. (consensus layer should cache Block to be able to re-call handle_proposal)
-
+         // Make a vote and send it to the header's creator.
+         let special_valid = 0;
+         let vote = Vote::new(header, &self.name, &mut self.signature_service, special_valid).await;
+         debug!("Created {:?}", vote);
+         if vote.origin == self.name {
+             self.process_vote(vote)
+                 .await
+                 .expect("Failed to process our own vote");
+         } else {
+             let address = self
+                 .committee
+                 .primary(&header.author)
+                 .expect("Author of valid header is not in the committee")
+                 .primary_to_primary;
+             let bytes = bincode::serialize(&PrimaryMessage::Vote(vote))
+                 .expect("Failed to serialize our own vote");
+             let handler = self.network.send(address, Bytes::from(bytes)).await;    // TODO: For special block: May want to use all to all broadcast for replies.
+             self.cancel_handlers
+                 .entry(header.round)
+                 .or_insert_with(Vec::new)
+                 .push(handler);
+         }
+         Ok(())
     }
 
     #[async_recursion]
     async fn process_vote(&mut self, vote: Vote) -> DagResult<()> {
         debug!("Processing {:?}", vote);
+
+        //If current_header == special TODO: pass forward to consensus layer (only if valid.)
 
         // Add it to the votes' aggregator and try to make a new certificate.
         if let Some(certificate) =
@@ -318,14 +325,14 @@ impl Core {
                 .expect("Failed to send certificate");
         }
 
-        // Send it to the consensus layer.
-        // let id = certificate.header.id.clone();
-        // if let Err(e) = self.tx_consensus.send(certificate).await {
-        //     warn!(
-        //         "Failed to deliver certificate {} to the consensus: {}",
-        //         id, e
-        //     );
-        // }
+        //Send it to the consensus layer. ==> all replicas will vote.
+        let id = certificate.header.id.clone();
+        if let Err(e) = self.tx_consensus.send(certificate).await {
+            warn!(
+                "Failed to deliver certificate {} to the consensus: {}",
+                id, e
+            );
+        }
         Ok(())
     }
 
@@ -412,14 +419,11 @@ impl Core {
 
                 // We also receive here our new headers created by the `Proposer`.
                 Some(header) = self.rx_proposer.recv() => self.process_own_header(header).await,
+                
 
-            ////////// Sailfish glue
-                // We receive here loopback certificates from the Consensus Layer that was running RB for special headers
-                //Note: This may be a certificate for a header we issued ourselves (our_header), or that we receive from another Primary. The Cert is already sanitized (=verified) by the consensus layer (Handle Proposal)                                                                                                      
-                Some(certificate) = self.rx_dag.recv() => self.process_certificate(certificate, true).await, //FIXME: Don't want to call the full process_certificate...
-                // We receive here loopback headers from the Consensus Layer that is running RB for special headers. Rely on DAG to sync on it.
-                Some(header) = self. self.rx_sync.recv() => self.sync_header(header).await,  //FIXME: Define rx_sync and sync_header
-                //TODO: Must call back up again --> and re-call process_block.
+               //Loopback for special headers that were validated by consensus layer.
+                Some(header) = self.rx_validation.recv() => self.create_vote(&header).await,               
+                //i.e. core requests validation from consensus (check if ticket valid; wait to receive ticket if we don't have it yet -- should arrive: using all to all or forwarding)
 
             };
             match result {

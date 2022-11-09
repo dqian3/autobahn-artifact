@@ -70,7 +70,7 @@ impl Primary {
         rx_consensus: Receiver<Certificate>,
         tx_sailfish: Sender<Header>,
         rx_ticket: Receiver<(View, Round)>,
-        rx_dag: Receiver<Certificate>,
+        rx_validation: Receiver<Header>,
     ) {
         let (tx_others_digests, rx_others_digests) = channel(CHANNEL_CAPACITY);
         let (tx_our_digests, rx_our_digests) = channel(CHANNEL_CAPACITY);
@@ -153,7 +153,7 @@ impl Primary {
             /* rx_proposer */ rx_headers,
             tx_consensus,
             /* tx_proposer */ tx_parents,
-            rx_dag, 
+            rx_validation, 
         );
 
         // Keeps track of the latest consensus round and allows other tasks to clean up their their internal state

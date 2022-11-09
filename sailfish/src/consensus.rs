@@ -55,7 +55,7 @@ impl Consensus {
         tx_mempool: Sender<Certificate>,
         tx_output: Sender<Block>,
         tx_ticket: Sender<(View, Round)>,
-        tx_dag: Sender<Certificate>,
+        tx_validation: Sender<Header>,
         rx_sailfish: Receiver<Header>,
     ) {
         // NOTE: This log entry is used to compute performance.
@@ -119,7 +119,7 @@ impl Consensus {
             tx_proposer,
             tx_commit,
             tx_output,
-            tx_dag,
+            tx_validation,
             tx_ticket,
         );
 

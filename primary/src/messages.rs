@@ -1,6 +1,6 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::{DagError, DagResult};
-use crate::primary::Round;
+use crate::primary::{Round, View};
 use config::{Committee, WorkerId};
 use crypto::{Digest, Hash, PublicKey, Signature, SignatureService};
 use ed25519_dalek::Digest as _;
@@ -30,10 +30,15 @@ pub struct Header {
     pub id: Digest,
     pub signature: Signature,
     
+    pub is_special: bool,
+    pub view: View,
+    pub round_view: Round, //round that was proposed by the last view.
    // pub ticket: Ticket, //TODO: Add ticket.
 
 }
 
+//NOTE: A header is special if "is_special = true". It contains a view, round_view, and its parents may be just a single edge -- a Digest of its parent header (notably not of a Cert)
+// Special headers currently do not need to carry the QC/TC to justify their ticket -- we keep that at the consensu layer. The view and round_view references the relevant QC/TC.
 impl Header {
     pub async fn new(
         author: PublicKey,
@@ -41,6 +46,9 @@ impl Header {
         payload: BTreeMap<Digest, WorkerId>,
         parents: BTreeSet<Digest>,
         signature_service: &mut SignatureService,
+        is_special: bool,
+        view: View,
+        round_view: Round,
     ) -> Self {
         let header = Self {
             author,
@@ -49,6 +57,9 @@ impl Header {
             parents,
             id: Digest::default(),
             signature: Signature::default(),
+            is_special: is_special,
+            view: view,
+            round_view: round_view,
         };
         let id = header.digest();
         let signature = signature_service.request_signature(id.clone()).await;
@@ -118,11 +129,12 @@ impl fmt::Display for Header {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Vote {
-    pub id: Digest,
+    pub id: Digest,  //the header we are voting for.
     pub round: Round,
     pub origin: PublicKey,
     pub author: PublicKey,
     pub signature: Signature,
+    pub special_valid: u8,
 }
 
 impl Vote {
@@ -130,6 +142,7 @@ impl Vote {
         header: &Header,
         author: &PublicKey,
         signature_service: &mut SignatureService,
+        special_valid: u8, 
     ) -> Self {
         let vote = Self {
             id: header.id.clone(),
@@ -137,6 +150,7 @@ impl Vote {
             origin: header.author,
             author: *author,
             signature: Signature::default(),
+            special_valid: 0,
         };
         let signature = signature_service.request_signature(vote.digest()).await;
         Self { signature, ..vote }
@@ -162,6 +176,7 @@ impl Hash for Vote {
         hasher.update(&self.id);
         hasher.update(self.round.to_le_bytes());
         hasher.update(&self.origin);
+        hasher.update(self.special_valid.to_le_bytes());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
@@ -182,6 +197,7 @@ impl fmt::Debug for Vote {
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Certificate {
     pub header: Header,
+    pub special_valids: Vec<u8>,
     pub votes: Vec<(PublicKey, Signature)>,
 }
 
@@ -225,7 +241,32 @@ impl Certificate {
         );
 
         // Check the signatures.
-        Signature::verify_batch(&self.digest(), &self.votes).map_err(DagError::from)
+
+        //If all votes were special_valid or invalid ==> compute single vote digest and verify it (since it is the same for all)
+        if(matching_valids(&self.special_valids)){
+            Signature::verify_batch(&self.digest(), &self.votes).map_err(DagError::from)
+        }
+        else{ //compute all the individual vote digests and verify them  (TODO: Since there are only 2 possible types, 0 and 1 ==> Could compute 2 digests, and then insert them in the correct order)
+                                                                            //E.g. could re-order Votes to be first all for 0, then all for 1. And call verify_batch separately twice
+            let mut digests = Vec::new();
+            for (i, (name, sig)) in self.votes.iter().enumerate() {
+                
+                digests.push({ 
+                    let mut hasher = Sha512::new();
+                    hasher.update(&self.header.id);
+                    hasher.update(self.round().to_le_bytes());
+                    hasher.update(&self.origin());
+                    hasher.update(self.special_valids[i].to_le_bytes());
+                    Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+                }
+                )
+                //Check special valid.
+                //Does one still need to check  QC? Or can one trust cert?  ==> Yes, because only invalid ones need proof => invalid = not forwarded to consensus. For Dag layer makes no difference. 
+                // If a byz leader doesn't want to forward to consensus.. thats fine.. same as timing out.
+            }
+            Signature::verify_batch_multi(&digests, &self.votes).map_err(DagError::from)
+        }
+       
     }
 
     pub fn round(&self) -> Round {
@@ -235,15 +276,34 @@ impl Certificate {
     pub fn origin(&self) -> PublicKey {
         self.header.author
     }
+
+    
 }
+
+pub fn matching_valids(vec: &Vec<u8>) -> bool {
+    vec.iter().min() == vec.iter().max()
+}
+
 
 impl Hash for Certificate {
     fn digest(&self) -> Digest {
-        let mut hasher = Sha512::new();
-        hasher.update(&self.header.id);
-        hasher.update(self.round().to_le_bytes());
-        hasher.update(&self.origin());
-        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+        if(matching_valids(&self.special_valids)){
+            let mut hasher = Sha512::new();
+            hasher.update(&self.header.id);
+            hasher.update(self.round().to_le_bytes());
+            hasher.update(&self.origin());
+            hasher.update(&self.special_valids[0].to_le_bytes());
+            Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+        }
+        else{
+            let mut hasher = Sha512::new();
+            hasher.update(&self.header.id);
+            hasher.update(self.round().to_le_bytes());
+            hasher.update(&self.origin());
+            hasher.update(self.special_valids.as_ref());
+            Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+        }
+    
     }
 }
 
