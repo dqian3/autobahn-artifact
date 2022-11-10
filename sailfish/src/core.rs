@@ -42,6 +42,7 @@ pub struct Core {
     view: View,
     last_voted_view: View,
     last_committed_view: View,
+    high_prepare: Header,
     high_qc: QC,
     timer: Timer,
     aggregator: Aggregator,
@@ -325,41 +326,79 @@ impl Core {
         self.update_high_qc(qc);
     }
 
-    //TODO: Call process_header upon receiving upcall from Dag layer.
+    //Call process_header upon receiving upcall from Dag layer.
+    #[async_recursion]
     async fn process_header(&mut self, header: Header) -> ConsensusResult<()> {
-        //TODO: Check if Ticket valid.
-        // I.e. author = leader of view, current view, latest round monotonic, have QC/TC
-        //If don't have QC/TC. Start a waiter. If waiter triggers, call this function again (or directly call down validation complete)
+       
 
-    
-        //1) Header signature correct
-        header.verify(&self.committee)?;
-
-        //2) Header author == view leader
+        //1) view > last voted view
         ensure!(
-            author == header.author,
-            ConsensusError::WrongProposer,
+            header.view >self.last_voted_view,
+            ConsensusError::TooOld(header.id, header.view)
         );
-        //3) round > last round
+                    //TODO: If we have already voted for this view; or we have already voted in a previoius view for this vote round or bigger ==> then don't vote at all. The proposer must be byz.
+                // But if we cannot vote for this view because of a timeout; then do want to vote for Dag, but invalidate the specialness. Problem: Might not have a proof yet. ==> Need to wait for it. 
+                //(I.e. if don't have conflict QC/TC, start a waiter)
+
+                //NOTE: Proofs thus only need to prove timeout case (since otherwise replicas would stay silent) ==> i.e. checking TC (or a consecutive QC) for higher view suffices. (I.e. don't need to check round number)
+
+        //2) round > last round
         //Only process special header if the round number is increasing
         ensure!(
-            header.round > self.round, //TODO: only update self.round upon commit.
-            ConsensusError::NonMonotonicRounds {
-               round: header.round,
-               curr_round: self.round,
-            }
+            header.round > self.round,
+            ConsensusError::NonMonotonicRounds(header.round, self.round)
         );
        
 
+        //3) Header signature correct
+        header.verify(&self.committee)?;
+
+        //4) Header author == view leader
+        ensure!(
+            header.author == self.leader_elector.get_leader(header.view),
+            ConsensusError::WrongProposer,
+        );
+
+        //5) TODO: Check if Ticket valid.
+        // I.e. whether have QC/TC for view v-1 
+        //If don't have QC/TC. Start a waiter. If waiter triggers, call this function again (or directly call down validation complete)
+        
+
+        //6) Update latest prepared. Update latest_voted_view.
+        self.view = header.view; //
+        self.increase_last_voted_view(&self.view);
+        self.high_prepare = header.clone();
+        self.round = header.round; //TODO: FIXME: only update self.round upon commit(?) (Committed Headers should be monotonic. Since consensus is sequential, should suffice to update it then?)
+        
+       
+        //FIXME: Dummy testing with validation == true.
+        let special_valid: bool = true;
+        let qc: Option<QC> = None;
+        let tc: Option<TC> = None;
+
         // Loopback to RB, confirming that special block is valid.
             self.tx_validation
-            .send(header)
+            .send((header, special_valid, qc, tc))
             .await
             .expect("Failed to send payload");
 
-        self.round = header.round;
+         
         Ok(())
     }
+
+    //Call process_header upon receiving upcall from Dag layer.
+    #[async_recursion]
+    async fn process_certificate(&mut self, certificate: Certificate) -> ConsensusResult<()> {
+       
+        //1) Check if cert is valid, update latest
+        //2) Send out Vote
+        
+        Ok(())
+    }
+
+    //Handle vote (already exists, re-factor)
+    //Handle QC (needs to be added, can re-factor process block)
+    
 
     #[async_recursion]
     async fn process_block(&mut self, block: &Block) -> ConsensusResult<()> {
@@ -383,7 +422,7 @@ impl Core {
 
         // Construct a certificate from block.qc (qc1) //FIXME: NOTE: This set of votes are not an RB vote for header. They are a QC for Block. 
                                                         //The Dag layer never checks these signatures again, so it's fine -- but technically its not a valid set of signatures without supplying the full block content 
-        let certificate = Certificate {header: b1.payload[0].clone(), votes: block.qc.votes.clone()};
+        //let certificate = Certificate {header: b1.payload[0].clone(), votes: block.qc.votes.clone()};
 
 
 
@@ -491,6 +530,7 @@ impl Core {
                 //1) DAG layer headers for special validation
                 Some(header) = self.rx_special.recv() => self.process_header(&header).await, 
                 //2) DAG layer certs to vote on
+                Some(certificate) = self.rx_consensus.recv() ==> self.process_certificate(&header).await, //TODO: WRite this: This creates an Accept Vote (rename vote to accept?)
                     // should come via proposer?
                 //3) Votes from other replicas to form QC.
                 //4) Timeouts from other replicas to form TC
@@ -499,7 +539,7 @@ impl Core {
                 //5) Receive TC
 
                 Some(message) = self.rx_message.recv() => match message {   //Receiving Messages from other Replicas
-                    ConsensusMessage::Propose(block) => self.handle_proposal(&block).await,
+                    //NO LONGER NEEDED: ConsensusMessage::Propose(block) => self.handle_proposal(&block).await,
                     ConsensusMessage::Vote(vote) => self.handle_vote(&vote).await,
                     ConsensusMessage::Timeout(timeout) => self.handle_timeout(&timeout).await,
                     ConsensusMessage::TC(tc) => self.handle_tc(tc).await,

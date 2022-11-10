@@ -9,6 +9,7 @@ use std::collections::HashSet;
 /// Aggregates votes for a particular header into a certificate.
 pub struct VotesAggregator {
     weight: Stake,
+    special_valids: Vec<bool>,
     votes: Vec<(PublicKey, Signature)>,
     used: HashSet<PublicKey>,
 }
@@ -17,6 +18,7 @@ impl VotesAggregator {
     pub fn new() -> Self {
         Self {
             weight: 0,
+            special_valids: Vec::new(),
             votes: Vec::new(),
             used: HashSet::new(),
         }
@@ -33,12 +35,14 @@ impl VotesAggregator {
         // Ensure it is the first time this authority votes.
         ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
 
+        self.special_valids.push(vote.special_valid);
         self.votes.push((author, vote.signature));
         self.weight += committee.stake(&author);
         if self.weight >= committee.quorum_threshold() {
             self.weight = 0; // Ensures quorum is only reached once.
             return Ok(Some(Certificate {
                 header: header.clone(),
+                special_valids: self.special_valids.clone(),
                 votes: self.votes.clone(),
             }));
         }

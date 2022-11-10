@@ -65,7 +65,7 @@ pub enum ConsensusError {
     InvalidPayload,
 
     #[error("Message {0} (view {1}) too old")]
-    TooOld(Digest, Round),
+    TooOld(Digest, View),
 
     #[error(transparent)]
     DagError(#[from] DagError),
@@ -73,9 +73,7 @@ pub enum ConsensusError {
     #[error("Header proposer != block leader")]
     WrongProposer,
 
-    #[error("Received block for round {round} smaller than {curr_round}")]
-    NonMonotonicRounds {
-        round: Round,
-        curr_round: Round,
-    }
+    #[error("Received block for round {0} smaller than current_round {1}")]
+    NonMonotonicRounds(Round, Round),
+        
 }

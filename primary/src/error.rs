@@ -62,4 +62,7 @@ pub enum DagError {
 
     #[error("Certificate {0} (round {1}) too old")]
     CertificateTooOld(Digest, Round),
+
+    #[error("Invalid vote invalidation")]
+    InvalidVoteInvalidation,
 }

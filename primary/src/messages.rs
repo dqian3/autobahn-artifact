@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::convert::TryInto;
 use std::fmt;
-//use sailfish{QC, TC};
+use sailfish::messages::{QC, TC};
 
 
 ///////////
@@ -134,7 +134,11 @@ pub struct Vote {
     pub origin: PublicKey,
     pub author: PublicKey,
     pub signature: Signature,
-    pub special_valid: u8,
+
+    //pub is_special: bool, ==> Changed: Just check against "current header" (can confirm id matches) for specialness, view, round view, etc.
+    pub special_valid: bool,
+    pub qc: Option<QC>,
+    pub tc: Option<TC>,
 }
 
 impl Vote {
@@ -142,7 +146,10 @@ impl Vote {
         header: &Header,
         author: &PublicKey,
         signature_service: &mut SignatureService,
-        special_valid: u8, 
+        special_valid: bool, 
+        qc: Option<QC>, //Note, these do not need to be signed; they are proof themselves.
+        tc: Option<TC>,
+
     ) -> Self {
         let vote = Self {
             id: header.id.clone(),
@@ -150,7 +157,10 @@ impl Vote {
             origin: header.author,
             author: *author,
             signature: Signature::default(),
-            special_valid: 0,
+            //is_special: header.is_special, 
+            special_valid,
+            qc,
+            tc, 
         };
         let signature = signature_service.request_signature(vote.digest()).await;
         Self { signature, ..vote }
@@ -162,6 +172,18 @@ impl Vote {
             committee.stake(&self.author) > 0,
             DagError::UnknownAuthority(self.author)
         );
+
+        // if &self.is_special && !&self.special_valid{
+        //     match qc {
+        //         Some(x) => { }//TODO: Check QC larger than proposed view/round_view. //FIXME: ... must include view... Verify QC sigs }, 
+        //         None => { 
+        //             match qc {
+        //                 Some(x) => {  }, 
+        //                 None => { DagError::InvalidSpecialInvalidation}
+        //             }
+        //         }, 
+        //     }
+        // } 
 
         // Check the signature.
         self.signature
@@ -176,7 +198,8 @@ impl Hash for Vote {
         hasher.update(&self.id);
         hasher.update(self.round.to_le_bytes());
         hasher.update(&self.origin);
-        hasher.update(self.special_valid.to_le_bytes());
+        //hasher.update(self.is_special);
+        hasher.update(self.special_valid);
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
@@ -197,7 +220,7 @@ impl fmt::Debug for Vote {
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Certificate {
     pub header: Header,
-    pub special_valids: Vec<u8>,
+    pub special_valids: Vec<bool>,
     pub votes: Vec<(PublicKey, Signature)>,
 }
 
@@ -256,7 +279,7 @@ impl Certificate {
                     hasher.update(&self.header.id);
                     hasher.update(self.round().to_le_bytes());
                     hasher.update(&self.origin());
-                    hasher.update(self.special_valids[i].to_le_bytes());
+                    hasher.update(self.special_valids[i]);
                     Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
                 }
                 )
@@ -292,7 +315,7 @@ impl Hash for Certificate {
             hasher.update(&self.header.id);
             hasher.update(self.round().to_le_bytes());
             hasher.update(&self.origin());
-            hasher.update(&self.special_valids[0].to_le_bytes());
+            hasher.update(&self.special_valids[0]);
             Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
         }
         else{
