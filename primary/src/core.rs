@@ -1,7 +1,7 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::aggregators::{CertificatesAggregator, VotesAggregator};
-use crate::error::{DagError, DagResult};
-use crate::messages::{Certificate, Header, Vote};
+use crate::error::{DagError, DagResult, ConsensusResult, ConsensusError};
+use crate::messages::{Certificate, Header, Vote, QC, TC, matching_valids};
 use crate::primary::{PrimaryMessage, Round};
 use crate::synchronizer::Synchronizer;
 use async_recursion::async_recursion;
@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
-use sailfish::messages::{QC, TC};
+//use crate::messages_consensus::{QC, TC};
 
 #[cfg(test)]
 #[path = "tests/core_tests.rs"]
@@ -52,6 +52,7 @@ pub struct Core {
     tx_proposer: Sender<(Vec<Digest>, Round)>,
     // Receives validated special Headers & proof from the consensus layer.
     rx_validation: Receiver<(Header, u8, Option<QC>, Option<TC>)>,
+    tx_special: Sender<Header>,
 
     /// The last garbage collected round.
     gc_round: Round,
@@ -87,7 +88,8 @@ impl Core {
         rx_proposer: Receiver<Header>,
         tx_consensus: Sender<Certificate>,
         tx_proposer: Sender<(Vec<Digest>, Round)>,
-        rx_validation: Receiver<Header>,
+        rx_validation: Receiver<(Header, u8, Option<QC>, Option<TC>)>,
+        tx_special: Sender<Header>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -105,6 +107,7 @@ impl Core {
                 tx_consensus,
                 tx_proposer,
                 rx_validation,
+                tx_special,
                 gc_round: 0,
                 last_voted: HashMap::with_capacity(2 * gc_depth as usize),
                 processing: HashMap::with_capacity(2 * gc_depth as usize),
@@ -140,11 +143,11 @@ impl Core {
             .extend(handlers);
 
         // Process the header.
-        self.process_header(&header).await
+        self.process_header(header).await
     }
 
     #[async_recursion]
-    async fn process_header(&mut self, header: &Header) -> DagResult<()> {
+    async fn process_header(&mut self, header: Header) -> DagResult<()> {
         debug!("Processing {:?}", header);
         // Indicate that we are processing this header.
         self.processing
@@ -155,7 +158,7 @@ impl Core {
         // Ensure we have the parents. If at least one parent is missing, the synchronizer returns an empty
         // vector; it will gather the missing parents (as well as all ancestors) from other nodes and then
         // reschedule processing of this header.
-        let parents = self.synchronizer.get_parents(header).await?;
+        let parents = self.synchronizer.get_parents(&header).await?;
         if parents.is_empty() {
             debug!("Processing of {} suspended: missing parent(s)", header.id);
             return Ok(());
@@ -177,13 +180,13 @@ impl Core {
 
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
         // reschedule processing of this header once we have it.
-        if self.synchronizer.missing_payload(header).await? {
+        if self.synchronizer.missing_payload(&header).await? {
             debug!("Processing of {} suspended: missing payload", header);
             return Ok(());
         }
 
         // Store the header.
-        let bytes = bincode::serialize(header).expect("Failed to serialize header");
+        let bytes = bincode::serialize(&header).expect("Failed to serialize header");
         self.store.write(header.id.to_vec(), bytes).await;
 
         // Check if we can vote for this header.
@@ -197,7 +200,7 @@ impl Core {
               //TODO: For special headers: Upcall to consensus layer to confirm whether the special header is valid for consensus
             // If special header is ones own, skip this and vote immediatley, Actually: For own block should also upcall. View might be outdated if accepted a view change...
             // Otherwise, upcall. On downcall, create message and send (mark it special valid/invalid)
-            if(header.is_special){
+            if header.is_special {
                 self.tx_special
                 .send(header)
                 .await
@@ -205,7 +208,7 @@ impl Core {
             }
             else{
                  // Make a vote and send it to the header's creator.
-                self.create_vote(&header, false, None, None).await;
+                return self.create_vote(header, 0, None, None).await;
             }
         }
            
@@ -213,13 +216,13 @@ impl Core {
     }
 
     #[async_recursion]
-    async fn create_vote(&mut self, header: &Header, special_valid: bool, qc: Option<QC>, tc: Option<TC>) -> DagResult<()>{ 
+    async fn create_vote(&mut self, header: Header, special_valid: u8, qc: Option<QC>, tc: Option<TC>) -> DagResult<()>{ 
         //Argument "special_valid" confirms whether a special header should be considered for consensus or not. Invalid votes must contain a TC or QC proving the view is outdated. (All of this should be passed down by the consensus layer)
         //Note: Normal headers have special_valid = 0, and no QC/TC
         
          // Make a vote and send it to the header's creator.
 
-         let vote = Vote::new(header, &self.name, &mut self.signature_service, special_valid, qc, tc).await;
+         let vote = Vote::new(&header, &self.name, &mut self.signature_service, special_valid, qc, tc).await;
          debug!("Created {:?}", vote);
 
          if vote.origin == self.name {
@@ -293,7 +296,7 @@ impl Core {
             .map_or_else(|| false, |x| x.contains(&certificate.header.id))
         {
             // This function may still throw an error if the storage fails.
-            self.process_header(&certificate.header).await?;
+            self.process_header(certificate.header.clone()).await?;
         }
 
         // Ensure we have all the ancestors of this certificate yet. If we don't, the synchronizer will gather
@@ -325,7 +328,7 @@ impl Core {
         }
 
          //If current_header == special && whole quorum is valid ==> pass forward to consensus layer  (if not, then this cert is only relevant to the DAG layer.)
-        if(certificate.header.is_special && certificate.special_valids[0] == true && matching_valids(certificate.special_valids)){
+        if certificate.header.is_special && certificate.special_valids[0] == 1 && matching_valids(&certificate.special_valids){
              //Send it to the consensus layer. ==> all replicas will vote.
             let id = certificate.header.id.clone();
             if let Err(e) = self.tx_consensus.send(certificate).await {
@@ -369,23 +372,33 @@ impl Core {
 
         //For special blocks that were invalidated also ensure that invalidation carries a correct proof
                      //Note TODO: Currently uses current_header to lookup relevant header id-- if we want to broadcast votes instead (for special headers) then we need to look up headers in processing
-        if self.current_header.is_special && !vote.special_valid{
-            match vote.tc {
+        //FIXME: Can we write this code nicer... I just played around with some existing features I saw.
+        if self.current_header.is_special && vote.special_valid == 0 {
+            match &vote.tc {
                 Some(tc) => { //invalidation proof = a TC that formed for the current view (or a future one). Implies one cannot vote in this view anymore.
                     ensure!( 
-                        tc.view >= self.current_header.view && tc.verify(&self.committee),
-                        DagError:InvalidVoteInvalidation
-                    )
+                        tc.view >= self.current_header.view,
+                        DagError::InvalidVoteInvalidation
+                    );
+                    match tc.verify(&self.committee) {
+                        Ok(()) => {},
+                        _ => return Err(DagError::InvalidVoteInvalidation)
+                    }
+                    
                  }, 
                 None => { 
-                    match vote.qc { 
+                    match &vote.qc { 
                         Some(qc) => { //invalidation proof = a QC that formed for a future view (i.e. an extension of some TC in current view or future)
                             ensure!( //proof is actually showing a conflict.
-                                qc.view > self.current_header.view && qc.verify(&self.committee),
-                                DagError:InvalidVoteInvalidation
-                            )
+                                qc.view > self.current_header.view,
+                                DagError::InvalidVoteInvalidation
+                            );
+                            match qc.verify(&self.committee) {
+                                Ok(()) => {},
+                                _ => return Err(DagError::InvalidVoteInvalidation)
+                            }
                         }
-                        None => { DagError::InvalidVoteInvalidation}
+                        None => { return Err(DagError::InvalidVoteInvalidation)}
                     }
                 }, 
             }
@@ -415,7 +428,7 @@ impl Core {
                     match message {
                         PrimaryMessage::Header(header) => {
                             match self.sanitize_header(&header) {
-                                Ok(()) => self.process_header(&header).await,
+                                Ok(()) => self.process_header(header).await,
                                 error => error
                             }
 
@@ -428,7 +441,7 @@ impl Core {
                         },
                         PrimaryMessage::Certificate(certificate) => {
                             match self.sanitize_certificate(&certificate) {
-                                Ok(()) =>  self.process_certificate(certificate, false).await,
+                                Ok(()) =>  self.process_certificate(certificate).await,
                                 error => error
                             }
                         },
@@ -438,19 +451,19 @@ impl Core {
 
                 // We receive here loopback headers from the `HeaderWaiter`. Those are headers for which we interrupted
                 // execution (we were missing some of their dependencies) and we are now ready to resume processing.
-                Some(header) = self.rx_header_waiter.recv() => self.process_header(&header).await,
+                Some(header) = self.rx_header_waiter.recv() => self.process_header(header).await,
 
                 // We receive here loopback certificates from the `CertificateWaiter`. Those are certificates for which
                 // we interrupted execution (we were missing some of their ancestors) and we are now ready to resume
                 // processing.
-                Some(certificate) = self.rx_certificate_waiter.recv() => self.process_certificate(certificate, false).await,
+                Some(certificate) = self.rx_certificate_waiter.recv() => self.process_certificate(certificate).await,
 
                 // We also receive here our new headers created by the `Proposer`.
                 Some(header) = self.rx_proposer.recv() => self.process_own_header(header).await,
                 
 
                //Loopback for special headers that were validated by consensus layer.
-                Some((header, special_valid, qc, tc)) = self.rx_validation.recv() => self.create_vote(&header, special_valid, qc, tc).await,               
+                Some((header, special_valid, qc, tc)) = self.rx_validation.recv() => self.create_vote(header, special_valid, qc, tc).await,               
                 //i.e. core requests validation from consensus (check if ticket valid; wait to receive ticket if we don't have it yet -- should arrive: using all to all or forwarding)
 
             };

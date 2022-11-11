@@ -159,8 +159,8 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
 }
 
 /// Receives an ordered list of certificates and apply any application-specific logic.
-async fn analyze(mut rx_output: Receiver<Block>) {
-    while let Some(_block) = rx_output.recv().await {
+async fn analyze(mut rx_output: Receiver<Header>) {
+    while let Some(_Header) = rx_output.recv().await {
         // NOTE: Here goes the application logic.
     }
 }

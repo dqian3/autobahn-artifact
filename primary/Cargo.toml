@@ -23,7 +23,7 @@ crypto = { path = "../crypto" }
 store = { path = "../store" }
 config = { path = "../config" }
 network = { path = "../network" }
-sailfish = { path "../sailfish"}
+#sailfish = { path = "../sailfish"}
 
 [dev-dependencies]
 rand = "0.7.3"

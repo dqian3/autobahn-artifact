@@ -3,7 +3,7 @@ use crate::consensus::{ConsensusMessage, View};
 use crate::error::{ConsensusError, ConsensusResult};
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
-use crate::messages::{Block, Timeout, Vote, QC, TC};
+//use crate::messages::{Header, Certificate, Block, Timeout, Vote, AcceptVote, QC, TC};
 use crate::proposer::ProposerMessage;
 use crate::synchronizer::Synchronizer;
 use crate::timer::Timer;
@@ -14,7 +14,7 @@ use crypto::Hash as _;
 use crypto::{PublicKey, SignatureService};
 use log::{debug, error, warn};
 use network::SimpleSender;
-use primary::{Certificate, Round, Header};
+use primary::{Round, View, Header, Certificate, Timeout, Vote, AcceptVote, QC, TC};
 use std::cmp::max;
 use std::collections::VecDeque;
 use store::Store;
@@ -37,13 +37,17 @@ pub struct Core {
     tx_proposer: Sender<ProposerMessage>,
     tx_commit: Sender<Certificate>,
     tx_output: Sender<Block>,
-    tx_validation: Sender<Header>,
+    tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>,
     tx_ticket: Sender<(View, Round)>,
+    rx_special: Receiver<Header>,
     view: View,
     last_voted_view: View,
     last_committed_view: View,
+    stored_headers: HashMap<Digest, Header>,
     high_prepare: Header,
-    high_qc: QC,
+    high_cert: Certificate,  //this is a DAG QC
+    high_qc: QC,             //this is a CommitQC
+    high_tc: TC,             //last TC --> just in case we need to reply with a proof.
     timer: Timer,
     aggregator: Aggregator,
     network: SimpleSender,
@@ -66,8 +70,9 @@ impl Core {
         tx_proposer: Sender<ProposerMessage>,
         tx_commit: Sender<Certificate>,
         tx_output: Sender<Block>,
-        tx_validation: Sender<Header>, // Loopback Special Headers to DAG
+        tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>, // Loopback Special Headers to DAG
         tx_ticket: Sender<(View, Round)>,
+        rx_special: Receiver<Header>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -85,10 +90,15 @@ impl Core {
                 tx_output,
                 tx_validation,
                 tx_ticket,
+                rx_special,
                 view: 1,
                 last_voted_view: 0,
                 last_committed_view: 0,
+                high_prepare: Header::default(),
+                stored_headers: HashMap::default(),
+                high_cert: Certificate::default(),
                 high_qc: QC::genesis(),
+                high_tc: TC::default(),
                 timer: Timer::new(timeout_delay),
                 aggregator: Aggregator::new(committee),
                 network: SimpleSender::new(),
@@ -99,84 +109,144 @@ impl Core {
         });
     }
 
-    async fn store_block(&mut self, block: &Block) {
-        let key = block.digest().to_vec();
-        let value = bincode::serialize(block).expect("Failed to serialize block");
+    // async fn store_block(&mut self, block: &Block) {
+    //     let key = block.digest().to_vec();
+    //     let value = bincode::serialize(block).expect("Failed to serialize block");
+    //     self.store.write(key, value).await;
+    // }
+
+    async fn store_header(&mut self, header: &Header) {
+        let key = header.id().to_vec();
+        let value = bincode::serialize(header).expect("Failed to serialize header");
         self.store.write(key, value).await;
     }
+
+
 
     fn increase_last_voted_view(&mut self, target: View) {
         self.last_voted_view = max(self.last_voted_view, target);
     }
 
-    async fn make_vote(&mut self, block: &Block) -> Option<Vote> {
-        // Check if we can vote for this block.
-        let safety_rule_1 = block.view > self.last_voted_view;
-        let mut safety_rule_2 = block.qc.view + 1 == block.view;
-        if let Some(ref tc) = block.tc {
-            let mut can_extend = tc.view + 1 == block.view;
-            can_extend &= block.qc.view >= *tc.high_qc_views().iter().max().expect("Empty TC");
-            safety_rule_2 |= can_extend;
-        }
-        if !(safety_rule_1 && safety_rule_2) {
-            return None;
-        }
 
-        // Ensure we won't vote for contradicting blocks.
-        self.increase_last_voted_view(block.view);
-        // TODO [issue #15]: Write to storage preferred_view and last_voted_view.
-        Some(Vote::new(&block, self.name, self.signature_service.clone()).await)
-    }
+    // async fn make_vote(&mut self, block: &Block) -> Option<Vote> {
+    //     // Check if we can vote for this block.
+    //     let safety_rule_1 = block.view > self.last_voted_view;
+    //     let mut safety_rule_2 = block.qc.view + 1 == block.view;
+    //     if let Some(ref tc) = block.tc {
+    //         let mut can_extend = tc.view + 1 == block.view;
+    //         can_extend &= block.qc.view >= *tc.high_qc_views().iter().max().expect("Empty TC");
+    //         safety_rule_2 |= can_extend;
+    //     }
+    //     if !(safety_rule_1 && safety_rule_2) {
+    //         return None;
+    //     }
 
-    async fn commit(&mut self, block: Block, qc: QC) -> ConsensusResult<()> {
-        if self.last_committed_view >= block.view {
+    //     // Ensure we won't vote for contradicting blocks.
+    //     self.increase_last_voted_view(block.view);
+    //     // TODO [issue #15]: Write to storage preferred_view and last_voted_view.
+    //     Some(Vote::new(&block, self.name, self.signature_service.clone()).await)
+    // }
+    
+    async fn commit(&mut self, header: Header, qc: QC) -> ConsensusResult<()> {
+        if self.last_committed_view >= header.view {
             return Ok(());
         }
 
         let mut to_commit = VecDeque::new();
-        to_commit.push_back(block.clone());
+        to_commit.push_back(header.clone());
 
-        // Ensure we commit the entire chain. This is needed after view-change.
-        let mut parent = block.clone();
-        while self.last_committed_view + 1 < parent.view {
-            let ancestor = self
-                .synchronizer
-                .get_parent_block(&parent)
-                .await?
-                .expect("We should have all the ancestors by now");
-            to_commit.push_back(ancestor.clone());
-            parent = ancestor;
-        }
+        // Ensure we commit the entire chain. This is needed after view-change. //TODO:
+        // let mut parent = header.clone();
+        // while self.last_committed_view + 1 < parent.view {
+        //     let ancestor = self
+        //         .synchronizer
+        //         .get_parent_header(&parent)  //TODO: Define this function. It should make sure that all previous views are committed. Must retrieve all QC/TC for prior views. TODO: FIXME: Header must reference either the ticket (QC/TC)
+        //         .await?
+        //         .expect("We should have all the ancestors by now");
+        //     to_commit.push_back(ancestor.clone());
+        //     parent = ancestor;
+        // }
 
         // Save the last committed block.
-        self.last_committed_view = block.view;
+        self.last_committed_view = header.view;
 
         // Send all the newly committed blocks to the node's application layer.
-        while let Some(block) = to_commit.pop_back() {
-            debug!("Committed {:?}", block);
+        while let Some(header) = to_commit.pop_back() {
+            debug!("Committed {:?}", header;
 
-            // Output the block to the top-level application.
-            if let Err(e) = self.tx_output.send(block.clone()).await {
-                warn!("Failed to send block through the output channel: {}", e);
-            }
+            // // Output the block to the top-level application. //FIXME: This should be after flattening.
+            // if let Err(e) = self.tx_output.send(block.clone()).await {
+            //     warn!("Failed to send block through the output channel: {}", e);
+            // }
 
             let mut certs = Vec::new();
             // Send the payload to the committer.
-            for header in block.payload {
-                let certificate = Certificate { header, votes: qc.clone().votes };
-                certs.push(certificate.clone());
+            
+            let certificate = Certificate { header, votes: qc.clone().votes };
+            certs.push(certificate.clone());
 
-                self.tx_commit
-                    .send(certificate)
-                    .await
-                    .expect("Failed to send payload");
-            }
+            self.tx_commit
+                .send(certificate)
+                .await
+                .expect("Failed to send payload");
+            
 
             // Cleanup the mempool.
             self.mempool_driver.cleanup(certs).await;
         }
         Ok(())
     }
+
+
+    // async fn commit(&mut self, block: Block, qc: QC) -> ConsensusResult<()> {
+    //     if self.last_committed_view >= block.view {
+    //         return Ok(());
+    //     }
+
+    //     let mut to_commit = VecDeque::new();
+    //     to_commit.push_back(block.clone());
+
+    //     // Ensure we commit the entire chain. This is needed after view-change.
+    //     let mut parent = block.clone();
+    //     while self.last_committed_view + 1 < parent.view {
+    //         let ancestor = self
+    //             .synchronizer
+    //             .get_parent_block(&parent)
+    //             .await?
+    //             .expect("We should have all the ancestors by now");
+    //         to_commit.push_back(ancestor.clone());
+    //         parent = ancestor;
+    //     }
+
+    //     // Save the last committed block.
+    //     self.last_committed_view = block.view;
+
+    //     // Send all the newly committed blocks to the node's application layer.
+    //     while let Some(block) = to_commit.pop_back() {
+    //         debug!("Committed {:?}", block);
+
+    //         // Output the block to the top-level application.
+    //         if let Err(e) = self.tx_output.send(block.clone()).await {
+    //             warn!("Failed to send block through the output channel: {}", e);
+    //         }
+
+    //         let mut certs = Vec::new();
+    //         // Send the payload to the committer.
+    //         for header in block.payload {
+    //             let certificate = Certificate { header, votes: qc.clone().votes };
+    //             certs.push(certificate.clone());
+
+    //             self.tx_commit
+    //                 .send(certificate)
+    //                 .await
+    //                 .expect("Failed to send payload");
+    //         }
+
+    //         // Cleanup the mempool.
+    //         self.mempool_driver.cleanup(certs).await;
+    //     }
+    //     Ok(())
+    // }
 
     fn update_high_qc(&mut self, qc: &QC) {
         if qc.view > self.high_qc.view {
@@ -247,6 +317,68 @@ impl Core {
         Ok(())
     }
 
+    #[async_recursion]
+    async fn handle_accept_vote(&mut self, vote: &AcceptVote) -> ConsensusResult<()> {
+        debug!("Processing {:?}", vote);
+        if vote.view < self.view {
+            return Ok(());
+        }
+
+        // Ensure the vote is well formed.
+        vote.verify(&self.committee)?;
+
+        // Add the new vote to our aggregator and see if we have a quorum.
+        if let Some(qc) = self.aggregator.add_vote(vote.clone())? {
+            debug!("Assembled {:?}", qc);
+
+            // Process the QC.  Adopts view, high qc, and resets timer. //Adopt round_view if higher.
+            self.process_qc(&qc).await;
+             
+             // Broadcast the QC. //TODO: alternatively: pass it down as ticket.
+             debug!("Broadcasting {:?}", qc);
+             let addresses = self
+                 .committee
+                 .others_consensus(&self.name)
+                 .into_iter()
+                 .map(|(_, x)| x.consensus_to_consensus)
+                 .collect();
+             let message = bincode::serialize(&ConsensusMessage::QC(qc.clone()))
+                 .expect("Failed to serialize quorum (commit) certificate");
+             self.network
+                 .broadcast(addresses, Bytes::from(message))
+                 .await;
+
+            // Make a new special header if we are the next leader.
+            if self.name == self.leader_elector.get_leader(self.view) {
+                self.generate_proposal(None).await;
+                  //TODO: Pass down ticket
+            }
+        }
+        Ok(())
+    }
+
+    #[async_recursion]
+    async fn handle_qc(&mut self, qc: &QC) -> ConsensusResult<()> {
+        //verify qc
+        // Ensure the vote is well formed.
+        qc.verify(&self.committee)?;
+        
+         // Process the QC.  Adopts view, high qc, and resets timer. //Adopt round_view if higher.
+         self.process_qc(&qc).await;
+        
+        //upcall to app layer: Order dag, and execute.
+        let header = self.stored_headers.qc.hash;
+        commit(header, qc);
+
+         // Make a new special header if we are the next leader.
+         if self.name == self.leader_elector.get_leader(self.view) {
+            self.generate_proposal(None).await;
+              //TODO: Pass down ticket
+        }
+
+        Ok(())
+    }
+
     async fn handle_timeout(&mut self, timeout: &Timeout) -> ConsensusResult<()> {
         debug!("Processing {:?}", timeout);
         if timeout.view < self.view {
@@ -314,16 +446,17 @@ impl Core {
              .expect("Failed to send view");
 
              
-        self.tx_proposer
-            .send(ProposerMessage(self.view, self.high_qc.clone(), tc))
-            .await
-            .expect("Failed to send message to proposer");
+        // self.tx_proposer
+        //     .send(ProposerMessage(self.view, self.high_qc.clone(), tc))
+        //     .await
+        //     .expect("Failed to send message to proposer");
     }
 
     async fn process_qc(&mut self, qc: &QC) {
         debug!("Processing {:?}", qc);
         self.advance_view(qc.view).await;
         self.update_high_qc(qc);
+        self.round = max(self.round, qc.round_view);
     }
 
     //Call process_header upon receiving upcall from Dag layer.
@@ -367,12 +500,15 @@ impl Core {
         //6) Update latest prepared. Update latest_voted_view.
         self.view = header.view; //
         self.increase_last_voted_view(&self.view);
-        self.high_prepare = header.clone();
-        self.round = header.round; //TODO: FIXME: only update self.round upon commit(?) (Committed Headers should be monotonic. Since consensus is sequential, should suffice to update it then?)
+        let copy = header.clone();
+        self.high_prepare = &copy;
+        self.stored_headers.insert(copy.id, copy);
+       
+        //self.round = header.round; //TODO: FIXME: only update self.round upon commit(?) (Committed Headers should be monotonic. Since consensus is sequential, should suffice to update it then?)
         
        
         //FIXME: Dummy testing with validation == true.
-        let special_valid: bool = true;
+        let special_valid: u8 = 1;
         let qc: Option<QC> = None;
         let tc: Option<TC> = None;
 
@@ -390,122 +526,137 @@ impl Core {
     #[async_recursion]
     async fn process_certificate(&mut self, certificate: Certificate) -> ConsensusResult<()> {
        
-        //1) Check if cert is valid, update latest
+        //1) Check if cert is still relevant to current view, if so, update view and high_cert
+        ensure!(
+            header.view >= self.view,
+            ConsensusError::TooOld(header.id, header.view)
+        );
+        self.advance_view(header.view);
+        self.increase_last_voted_view(header.view);
+
+        self.high_cert = certificate.clone();
+        self.stored_headers.insert(certificate.header.id, certificate.header.clone());
+
         //2) Send out Vote
+
+        let vote = AcceptVote::new(&header, self.name, self.signature_service.clone());
+
+        debug!("Created {:?}", vote);
         
-        Ok(())
-    }
-
-    //Handle vote (already exists, re-factor)
-    //Handle QC (needs to be added, can re-factor process block)
-    
-
-    #[async_recursion]
-    async fn process_block(&mut self, block: &Block) -> ConsensusResult<()> {
-        debug!("Processing {:?}", block);
-
-        // Let's see if we have the last three ancestors of the block, that is:
-        //      b0 <- |qc0; b1| <- |qc1; block|
-        // If we don't, the synchronizer asks for them to other nodes. It will
-        // then ensure we process both ancestors in the correct order, and
-        // finally make us resume processing this block.
-        let (b0, b1) = match self.synchronizer.get_ancestors(block).await? {
-            Some(ancestors) => ancestors,
-            None => {
-                debug!("Processing of {} suspended: missing parent", block.digest());
-                return Ok(());
-            }
-        };
-
-        // Store the block only if we have already processed all its ancestors.
-        self.store_block(block).await;
-
-        // Construct a certificate from block.qc (qc1) //FIXME: NOTE: This set of votes are not an RB vote for header. They are a QC for Block. 
-                                                        //The Dag layer never checks these signatures again, so it's fine -- but technically its not a valid set of signatures without supplying the full block content 
-        //let certificate = Certificate {header: b1.payload[0].clone(), votes: block.qc.votes.clone()};
-
-
-
-        // // QC formed so send ticket to the consensus
-        // // TODO: add additional check to see whether you are the leader
-       
-        // self.tx_ticket
-        //     .send((b1.view, b1.payload[0].round))
-        //     .await
-        //     .expect("Failed to send view");
-
-        // Check if we can commit the head of the 2-chain.
-        // Note that we commit blocks only if we have all its ancestors.
-        if b0.view + 1 == b1.view {
-            self.commit(b0, b1.qc).await?;
-        }
-
-        // Ensure the block's view is as expected.
-        // This check is important: it prevents bad leaders from producing blocks
-        // far in the future that may cause overflow on the view number.
-        if block.view != self.view {
-            return Ok(());
-        }
-
-        // See if we can vote for this block.
-        if let Some(vote) = self.make_vote(block).await {
-            debug!("Created {:?}", vote);
-            let next_leader = self.leader_elector.get_leader(self.view + 1);
-            if next_leader == self.name {
-                self.handle_vote(&vote).await?;
-            } else {
-                debug!("Sending {:?} to {}", vote, next_leader);
-                let address = self
+        let next_leader = self.leader_elector.get_leader(self.view + 1);
+        if next_leader == self.name {
+            self.handle_accept(&vote).await?;
+        } else {
+            debug!("Sending {:?} to {}", vote, next_leader);
+            let address = self
                     .committee
                     .consensus(&next_leader)
                     .expect("The next leader is not in the committee")
                     .consensus_to_consensus;
-                let message = bincode::serialize(&ConsensusMessage::Vote(vote))
+            let message = bincode::serialize(&ConsensusMessage::AcceptVote(vote))
                     .expect("Failed to serialize vote");
-                self.network.send(address, Bytes::from(message)).await;
-            }
+            self.network.send(address, Bytes::from(message)).await;
         }
+        
         Ok(())
     }
 
-    async fn handle_proposal(&mut self, block: &Block) -> ConsensusResult<()> {
-        let digest = block.digest();
 
-        // Ensure the block proposer is the right leader for the view.
-        ensure!(
-            block.author == self.leader_elector.get_leader(block.view),
-            ConsensusError::WrongLeader {
-                digest,
-                leader: block.author,
-                view: block.view
-            }
-        );
 
-        // Check the block is correctly formed.
-        block.verify(&self.committee)?;
+    // #[async_recursion]
+    // async fn process_block(&mut self, block: &Block) -> ConsensusResult<()> {
+    //     debug!("Processing {:?}", block);
 
-        // Process the special Header. Advance round
-        let res = self.process_header(&block.payload[0], &block.author).await;
+    //     // Let's see if we have the last three ancestors of the block, that is:
+    //     //      b0 <- |qc0; b1| <- |qc1; block|
+    //     // If we don't, the synchronizer asks for them to other nodes. It will
+    //     // then ensure we process both ancestors in the correct order, and
+    //     // finally make us resume processing this block.
+    //     let (b0, b1) = match self.synchronizer.get_ancestors(block).await? {
+    //         Some(ancestors) => ancestors,
+    //         None => {
+    //             debug!("Processing of {} suspended: missing parent", block.digest());
+    //             return Ok(());
+    //         }
+    //     };
 
-        // Process the QC. This may allow us to advance view.
-        self.process_qc(&block.qc).await;
+    //     // Store the block only if we have already processed all its ancestors.
+    //     self.store_block(block).await;
 
-        // Process the TC (if any). This may also allow us to advance view.
-        if let Some(ref tc) = block.tc {
-            debug!("Processing (embedded) {:?}", tc);
-            self.advance_view(tc.view).await;
-        }
+    //     // Check if we can commit the head of the 2-chain.
+    //     // Note that we commit blocks only if we have all its ancestors.
+    //     if b0.view + 1 == b1.view {
+    //         self.commit(b0, b1.qc).await?;
+    //     }
 
-        // Check that the payload certificates are valid.
-        self.mempool_driver.verify(&block).await?;
+    //     // Ensure the block's view is as expected.
+    //     // This check is important: it prevents bad leaders from producing blocks
+    //     // far in the future that may cause overflow on the view number.
+    //     if block.view != self.view {
+    //         return Ok(());
+    //     }
 
-        // All check pass, we can process this block.
-        self.process_block(block).await
-    }
+    //     // See if we can vote for this block.
+    //     if let Some(vote) = self.make_vote(block).await {
+    //         debug!("Created {:?}", vote);
+    //         let next_leader = self.leader_elector.get_leader(self.view + 1);
+    //         if next_leader == self.name {
+    //             self.handle_vote(&vote).await?;
+    //         } else {
+    //             debug!("Sending {:?} to {}", vote, next_leader);
+    //             let address = self
+    //                 .committee
+    //                 .consensus(&next_leader)
+    //                 .expect("The next leader is not in the committee")
+    //                 .consensus_to_consensus;
+    //             let message = bincode::serialize(&ConsensusMessage::Vote(vote))
+    //                 .expect("Failed to serialize vote");
+    //             self.network.send(address, Bytes::from(message)).await;
+    //         }
+    //     }
+    //     Ok(())
+    // }
+
+    // async fn handle_proposal(&mut self, block: &Block) -> ConsensusResult<()> {
+    //     let digest = block.digest();
+
+    //     // Ensure the block proposer is the right leader for the view.
+    //     ensure!(
+    //         block.author == self.leader_elector.get_leader(block.view),
+    //         ConsensusError::WrongLeader {
+    //             digest,
+    //             leader: block.author,
+    //             view: block.view
+    //         }
+    //     );
+
+    //     // Check the block is correctly formed.
+    //     block.verify(&self.committee)?;
+
+    //     // Process the special Header. Advance round
+    //     let res = self.process_header(&block.payload[0], &block.author).await;
+
+    //     // Process the QC. This may allow us to advance view.
+    //     self.process_qc(&block.qc).await;
+
+    //     // Process the TC (if any). This may also allow us to advance view.
+    //     if let Some(ref tc) = block.tc {
+    //         debug!("Processing (embedded) {:?}", tc);
+    //         self.advance_view(tc.view).await;
+    //     }
+
+    //     // Check that the payload certificates are valid.
+    //     self.mempool_driver.verify(&block).await?;
+
+    //     // All check pass, we can process this block.
+    //     self.process_block(block).await
+    // }
     
    
 
     async fn handle_tc(&mut self, tc: TC) -> ConsensusResult<()> {
+        tc.verify(&self.committee)?; //FIXME: Added this because I didnt' see any TC validation elsewhere. If there is already, remove this.
+
         debug!("Processing {:?}", tc);
         self.advance_view(tc.view).await;
         if self.name == self.leader_elector.get_leader(self.view) {
@@ -526,22 +677,23 @@ impl Core {
         // and receive timeout notifications from our Timeout Manager.
         loop {
             let result = tokio::select! {
-                //TODO: Need to receive
+    
                 //1) DAG layer headers for special validation
                 Some(header) = self.rx_special.recv() => self.process_header(&header).await, 
                 //2) DAG layer certs to vote on
                 Some(certificate) = self.rx_consensus.recv() ==> self.process_certificate(&header).await, //TODO: WRite this: This creates an Accept Vote (rename vote to accept?)
                     // should come via proposer?
-                //3) Votes from other replicas to form QC.
-                //4) Timeouts from other replicas to form TC
-                //5) Receive QC
-                    //For now send separately; but can be made part of (1)
-                //5) Receive TC
-
+                
                 Some(message) = self.rx_message.recv() => match message {   //Receiving Messages from other Replicas
                     //NO LONGER NEEDED: ConsensusMessage::Propose(block) => self.handle_proposal(&block).await,
-                    ConsensusMessage::Vote(vote) => self.handle_vote(&vote).await,
+                    //NO LONGER NEEDED: ConsensusMessage::Vote(vote) => self.handle_vote(&vote).await,
+                    //3) Votes from other replicas to form QC.
+                    ConsensusMessage::AcceptVote(vote) => self.handle_accept_vote(&vote).await,
+                    //4) Receive QC  //For now send separately; but can be made part of (1)
+                    ConsensusMessage::QC(qc) => self.handle_qc(qc).await,
+                    //5) Timeouts from other replicas to form TC
                     ConsensusMessage::Timeout(timeout) => self.handle_timeout(&timeout).await,
+                    //6) Receive TC
                     ConsensusMessage::TC(tc) => self.handle_tc(tc).await,
                     _ => panic!("Unexpected protocol message")
                 },

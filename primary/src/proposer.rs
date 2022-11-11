@@ -33,9 +33,7 @@ pub struct Proposer {
     rx_ticket: Receiver<(View, Round)>,
     /// Sends newly created headers to the `Core`.
     tx_core: Sender<Header>,
-    // Sends new special headers to HotStuff.
-    tx_sailfish: Sender<Header>,
-
+   
     /// The current round of the dag.
     round: Round,
     // Holds the certificate id of the last header issued.
@@ -66,7 +64,6 @@ impl Proposer {
         rx_workers: Receiver<(Digest, WorkerId)>,
         rx_ticket: Receiver<(View, Round)>,
         tx_core: Sender<Header>,
-        tx_sailfish: Sender<Header>
     ) {
         let genesis: Vec<Digest> = Certificate::genesis(committee)
             .iter()
@@ -97,7 +94,6 @@ impl Proposer {
                 rx_workers,
                 rx_ticket,
                 tx_core,
-                tx_sailfish,
                 round: 1,
                 last_parents: genesis,
                 last_header_id: genesis_parent, //Digest::default(),

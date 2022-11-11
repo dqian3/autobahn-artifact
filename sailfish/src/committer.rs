@@ -143,6 +143,11 @@ impl Committer {
                             // NOTE: This log entry is used to compute performance.
                             info!("Committed {} -> {:?}", certificate.header, digest);
                         }
+
+                         // Output the block to the top-level application.
+                        if let Err(e) = self.tx_output.send(certificate.header).await {
+                            warn!("Failed to send block through the output channel: {}", e);
+            }
                     }
                 }
             }

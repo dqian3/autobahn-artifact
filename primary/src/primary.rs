@@ -5,7 +5,7 @@ use crate::error::DagError;
 use crate::garbage_collector::GarbageCollector;
 use crate::header_waiter::HeaderWaiter;
 use crate::helper::Helper;
-use crate::messages::{Certificate, Header, Vote};
+use crate::messages::{Certificate, Header, Vote, QC, TC};
 use crate::payload_receiver::PayloadReceiver;
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
@@ -70,7 +70,7 @@ impl Primary {
         rx_consensus: Receiver<Certificate>,
         tx_sailfish: Sender<Header>,
         rx_ticket: Receiver<(View, Round)>,
-        rx_validation: Receiver<Header>,
+        rx_validation: Receiver<(Header, u8, Option<QC>, Option<TC>)>,
     ) {
         let (tx_others_digests, rx_others_digests) = channel(CHANNEL_CAPACITY);
         let (tx_our_digests, rx_our_digests) = channel(CHANNEL_CAPACITY);
@@ -154,6 +154,7 @@ impl Primary {
             tx_consensus,
             /* tx_proposer */ tx_parents,
             rx_validation, 
+            tx_sailfish, 
         );
 
         // Keeps track of the latest consensus round and allows other tasks to clean up their their internal state
@@ -204,7 +205,6 @@ impl Primary {
             /* rx_workers */ rx_our_digests,
             /* rx_ticket */ rx_ticket,
             /* tx_core */ tx_headers,
-            /* tx_sailfish */ tx_sailfish,
         );
 
         // The `Helper` is dedicated to reply to certificates requests from other primaries.

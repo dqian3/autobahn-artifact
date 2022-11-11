@@ -9,7 +9,7 @@ use std::collections::HashSet;
 /// Aggregates votes for a particular header into a certificate.
 pub struct VotesAggregator {
     weight: Stake,
-    special_valids: Vec<bool>,
+    special_valids: Vec<u8>,
     votes: Vec<(PublicKey, Signature)>,
     used: HashSet<PublicKey>,
 }

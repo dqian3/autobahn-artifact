@@ -1,10 +1,11 @@
 use crate::committer::Committer;
 use crate::core::Core;
-use crate::error::ConsensusError;
+//use crate::error::ConsensusError;
 use crate::helper::Helper;
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
-use crate::messages::{Block, Timeout, Vote, TC};
+//use crate::messages::{Block, Timeout, Vote, TC};
+use primary::{Header, Certificate, Timeout, Vote, AcceptVote, QC, TC};
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
 use async_trait::async_trait;
@@ -14,7 +15,6 @@ use crypto::{Digest, PublicKey, SignatureService};
 use futures::SinkExt as _;
 use log::info;
 use network::{MessageHandler, Receiver as NetworkReceiver, Writer};
-use primary::{Certificate, Header};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use store::Store;
@@ -34,8 +34,10 @@ pub type Round= u64;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ConsensusMessage {
-    Propose(Block),
-    Vote(Vote),
+    //Propose(Block), //No longer used
+    //Vote(Vote),     //No longer used
+    AcceptVote(AcceptVote),
+    QC(QC),
     Timeout(Timeout),
     TC(TC),
     SyncRequest(Digest, PublicKey),
@@ -121,6 +123,7 @@ impl Consensus {
             tx_output,
             tx_validation,
             tx_ticket,
+            /*rx_special */ rx_sailfish,
         );
 
         // Commits the mempool certificates and their sub-dag.

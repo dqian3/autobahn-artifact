@@ -161,11 +161,69 @@ impl fmt::Debug for Vote {
         write!(f, "V({}, {}, {})", self.author, self.view, self.hash)
     }
 }
+/////////
+
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct AcceptVote {
+    pub hash: Digest,
+    pub view: View,
+    pub round_view: Round,
+    pub author: PublicKey,
+    pub signature: Signature,
+}
+
+impl AcceptVote {
+    pub async fn new(
+        header: &Header,
+        author: PublicKey,
+        mut signature_service: SignatureService,
+    ) -> Self {
+        let vote = Self {
+            hash: header.id.clone(),
+            view: header.view,
+            round_view: header.round,
+            author,
+            signature: Signature::default(),
+        };
+        let signature = signature_service.request_signature(vote.digest()).await;
+        Self { signature, ..vote }
+    }
+
+    pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
+        // Ensure the authority has voting rights.
+        ensure!(
+            committee.stake(&self.author) > 0,
+            ConsensusError::UnknownAuthority(self.author)
+        );
+
+        // Check the signature.
+        self.signature.verify(&self.digest(), &self.author)?;
+        Ok(())
+    }
+}
+
+impl Hash for AcceptVote {
+    fn digest(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(&self.hash);
+        hasher.update(self.view.to_le_bytes());
+        hasher.update(self.round_view.to_le_bytes());
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+}
+
+impl fmt::Debug for AcceptVote {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(f, "V({}, {}, {})", self.author, self.view, self.hash)
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct QC {
     pub hash: Digest,
     pub view: View,
+    pub round_view: Round,
     pub votes: Vec<(PublicKey, Signature)>,
 }
 
@@ -204,6 +262,7 @@ impl Hash for QC {
         let mut hasher = Sha512::new();
         hasher.update(&self.hash);
         hasher.update(self.view.to_le_bytes());
+        hasher.update(self.round_view.to_le_bytes());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
