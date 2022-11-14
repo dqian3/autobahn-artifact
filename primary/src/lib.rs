@@ -1,13 +1,13 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 #[macro_use]
-mod error;
+pub mod error;
 mod aggregators;
 mod certificate_waiter;
 mod core;
 mod garbage_collector;
 mod header_waiter;
 mod helper;
-mod messages;
+pub mod messages;
 mod payload_receiver;
 mod primary;
 mod proposer;

@@ -1,6 +1,6 @@
 use crate::consensus::{ConsensusMessage, CHANNEL_CAPACITY};
 use crate::error::ConsensusResult;
-use crate::messages::{Block, QC};
+use primary::messages::{Block, QC};
 use bytes::Bytes;
 use config::Committee;
 use crypto::Hash as _;

@@ -6,7 +6,8 @@ use config::Import as _;
 use config::{Committee, KeyPair, Parameters, WorkerId};
 use crypto::SignatureService;
 use env_logger::Env;
-use sailfish::{Block, Consensus};
+use sailfish::Consensus;
+use primary::Header;
 use primary::Primary;
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver};
@@ -160,7 +161,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
 
 /// Receives an ordered list of certificates and apply any application-specific logic.
 async fn analyze(mut rx_output: Receiver<Header>) {
-    while let Some(_Header) = rx_output.recv().await {
+    while let Some(_header) = rx_output.recv().await {
         // NOTE: Here goes the application logic.
     }
 }

@@ -1,6 +1,7 @@
 use crate::consensus::View;
-use crate::error::{ConsensusError, ConsensusResult};
-use crate::messages::{Timeout, Vote, QC, TC};
+//use crate::error::{ConsensusError, ConsensusResult};
+use primary::messages::{Timeout, Vote, QC, TC, AcceptVote};
+use primary::error::{ConsensusError, ConsensusResult};
 use config::{Committee, Stake};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, Signature};
@@ -36,6 +37,19 @@ impl Aggregator {
             .entry(vote.digest())
             .or_insert_with(|| Box::new(QCMaker::new()))
             .append(vote, &self.committee)
+    }
+
+    pub fn add_accept_vote(&mut self, vote: AcceptVote) -> ConsensusResult<Option<QC>> {
+        // TODO [issue #7]: A bad node may make us run out of memory by sending many votes
+        // with different view numbers or different digests.
+
+        // Add the new vote to our aggregator and see if we have a QC.
+        self.votes_aggregators
+            .entry(vote.view)
+            .or_insert_with(HashMap::new)
+            .entry(vote.digest())
+            .or_insert_with(|| Box::new(QCMaker::new()))
+            .append_accept_vote(vote, &self.committee)
     }
 
     pub fn add_timeout(&mut self, timeout: Timeout) -> ConsensusResult<Option<TC>> {
@@ -80,12 +94,36 @@ impl QCMaker {
             ConsensusError::AuthorityReuse(author)
         );
 
-        self.votes.push((author, vote.signature));
+        self.votes.push((author, vote.signature.clone()));
         self.weight += committee.stake(&author);
         if self.weight >= committee.quorum_threshold() {
             self.weight = 0; // Ensures QC is only made once.
             return Ok(Some(QC {
-                hash: vote.hash.clone(),
+                hash: vote.clone().digest(),
+                view: vote.view,
+                round_view: vote.round, //Note: Currently aren't checking anywhere that the round_views of the Votes match. However, they must be matching ransitively: Replicas only vote on certs, and a cert only is formed on matching round_view.
+                votes: self.votes.clone(),
+            }));
+        }
+        Ok(None)
+    }
+
+    /// Try to append a signature to a (partial) quorum.
+    pub fn append_accept_vote(&mut self, vote: AcceptVote, committee: &Committee) -> ConsensusResult<Option<QC>> {
+        let author = vote.author;
+
+        // Ensure it is the first time this authority votes.
+        ensure!(
+            self.used.insert(author),
+            ConsensusError::AuthorityReuse(author)
+        );
+
+        self.votes.push((author, vote.signature.clone()));
+        self.weight += committee.stake(&author);
+        if self.weight >= committee.quorum_threshold() {
+            self.weight = 0; // Ensures QC is only made once.
+            return Ok(Some(QC {
+                hash: vote.clone().digest(),
                 view: vote.view,
                 round_view: vote.round_view, //Note: Currently aren't checking anywhere that the round_views of the Votes match. However, they must be matching ransitively: Replicas only vote on certs, and a cert only is formed on matching round_view.
                 votes: self.votes.clone(),

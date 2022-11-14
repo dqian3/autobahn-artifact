@@ -8,6 +8,7 @@ use futures::stream::FuturesOrdered;
 use futures::stream::StreamExt as _;
 use log::{debug, error, info, log_enabled};
 use primary::Certificate;
+use primary::messages::Header;
 use std::cmp::max;
 use std::collections::{HashMap, HashSet};
 use store::Store;
@@ -65,6 +66,7 @@ pub struct Committer {
     gc_depth: Round,
     rx_mempool: Receiver<Certificate>,
     rx_deliver: Receiver<Certificate>,
+    tx_output: Sender<Header>,
     genesis: Vec<Certificate>,
 }
 
@@ -75,6 +77,7 @@ impl Committer {
         gc_depth: Round,
         rx_mempool: Receiver<Certificate>,
         rx_commit: Receiver<Certificate>,
+        tx_output: Sender<Header>,
     ) {
         let (tx_deliver, rx_deliver) = channel(CHANNEL_CAPACITY);
 
@@ -87,6 +90,7 @@ impl Committer {
                 gc_depth,
                 rx_mempool,
                 rx_deliver,
+                tx_output,
                 genesis: Certificate::genesis(&committee),
             }
             .run()
@@ -146,8 +150,8 @@ impl Committer {
 
                          // Output the block to the top-level application.
                         if let Err(e) = self.tx_output.send(certificate.header).await {
-                            warn!("Failed to send block through the output channel: {}", e);
-            }
+                            info!("Failed to send block through the output channel: {}", e);
+                        }
                     }
                 }
             }
@@ -266,7 +270,7 @@ impl CertificateWaiter {
                         .map(|x| (x.to_vec(), self.store.clone()))
                         .collect();
                     let fut = Self::waiter(wait_for, certificate);
-                    waiting.push(fut);
+                    waiting.push_back(fut);
                 }
                 Some(result) = waiting.next() => match result {
                     Ok(certificate) => {

@@ -1,5 +1,6 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::{DagError, DagResult, ConsensusError, ConsensusResult};
+//use sailfish::error::{DagError, DagResult, ConsensusError, ConsensusResult};
 use crate::primary::{Round, View};
 use config::{Committee, WorkerId};
 use crypto::{Digest, Hash, PublicKey, Signature, SignatureService};
@@ -136,6 +137,7 @@ pub struct Vote {
     pub origin: PublicKey,
     pub author: PublicKey,
     pub signature: Signature,
+    pub view: View,
 
     //pub is_special: bool, ==> Changed: Just check against "current header" (can confirm id matches) for specialness, view, round view, etc.
     pub special_valid: u8,
@@ -159,6 +161,7 @@ impl Vote {
             origin: header.author,
             author: *author,
             signature: Signature::default(),
+            view: 1,
             //is_special: header.is_special, 
             special_valid,
             qc,
@@ -635,7 +638,7 @@ impl fmt::Debug for Timeout {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct TC {
     pub view: View,
     pub votes: Vec<(PublicKey, Signature, View)>,

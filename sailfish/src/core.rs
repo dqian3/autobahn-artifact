@@ -1,6 +1,6 @@
 use crate::aggregator::Aggregator;
-use crate::consensus::{ConsensusMessage, View};
-use crate::error::{ConsensusError, ConsensusResult};
+use crate::consensus::{ConsensusMessage, View, Round};
+//use crate::error::{ConsensusError, ConsensusResult};
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
 //use crate::messages::{Header, Certificate, Block, Timeout, Vote, AcceptVote, QC, TC};
@@ -11,12 +11,15 @@ use async_recursion::async_recursion;
 use bytes::Bytes;
 use config::Committee;
 use crypto::Hash as _;
-use crypto::{PublicKey, SignatureService};
+use crypto::{PublicKey, SignatureService, Digest};
 use log::{debug, error, warn};
 use network::SimpleSender;
-use primary::{Round, View, Header, Certificate, Timeout, Vote, AcceptVote, QC, TC};
+use primary::messages::{Block, Header, Certificate, Timeout, AcceptVote, Vote, QC, TC};
+use primary::error::{ConsensusError, ConsensusResult};
+//use primary::messages::AcceptVote;
 use std::cmp::max;
 use std::collections::VecDeque;
+use std::collections::HashMap;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
 
@@ -33,10 +36,10 @@ pub struct Core {
     mempool_driver: MempoolDriver,
     synchronizer: Synchronizer,
     rx_message: Receiver<ConsensusMessage>,
+    rx_consensus: Receiver<Certificate>,
     rx_loopback: Receiver<Block>,
     tx_proposer: Sender<ProposerMessage>,
     tx_commit: Sender<Certificate>,
-    tx_output: Sender<Block>,
     tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>,
     tx_ticket: Sender<(View, Round)>,
     rx_special: Receiver<Header>,
@@ -66,10 +69,10 @@ impl Core {
         synchronizer: Synchronizer,
         timeout_delay: u64,
         rx_message: Receiver<ConsensusMessage>,
+        rx_consensus: Receiver<Certificate>,
         rx_loopback: Receiver<Block>,
         tx_proposer: Sender<ProposerMessage>,
         tx_commit: Sender<Certificate>,
-        tx_output: Sender<Block>,
         tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>, // Loopback Special Headers to DAG
         tx_ticket: Sender<(View, Round)>,
         rx_special: Receiver<Header>,
@@ -84,10 +87,10 @@ impl Core {
                 mempool_driver,
                 synchronizer,
                 rx_message,
+                rx_consensus,
                 rx_loopback,
                 tx_proposer,
                 tx_commit,
-                tx_output,
                 tx_validation,
                 tx_ticket,
                 rx_special,
@@ -116,7 +119,7 @@ impl Core {
     // }
 
     async fn store_header(&mut self, header: &Header) {
-        let key = header.id().to_vec();
+        let key = header.id.to_vec();
         let value = bincode::serialize(header).expect("Failed to serialize header");
         self.store.write(key, value).await;
     }
@@ -147,7 +150,7 @@ impl Core {
     //     Some(Vote::new(&block, self.name, self.signature_service.clone()).await)
     // }
     
-    async fn commit(&mut self, header: Header, qc: QC) -> ConsensusResult<()> {
+    async fn commit(&mut self, header: &Header, qc: &QC) -> ConsensusResult<()> {
         if self.last_committed_view >= header.view {
             return Ok(());
         }
@@ -172,7 +175,7 @@ impl Core {
 
         // Send all the newly committed blocks to the node's application layer.
         while let Some(header) = to_commit.pop_back() {
-            debug!("Committed {:?}", header;
+            debug!("Committed {:?}", header);
 
             // // Output the block to the top-level application. //FIXME: This should be after flattening.
             // if let Err(e) = self.tx_output.send(block.clone()).await {
@@ -181,8 +184,9 @@ impl Core {
 
             let mut certs = Vec::new();
             // Send the payload to the committer.
-            
-            let certificate = Certificate { header, votes: qc.clone().votes };
+
+            // FIXME: change special_valids to be a valid not None
+            let certificate = Certificate { header, special_valids: Vec::new(), votes: qc.clone().votes };
             certs.push(certificate.clone());
 
             self.tx_commit
@@ -328,7 +332,7 @@ impl Core {
         vote.verify(&self.committee)?;
 
         // Add the new vote to our aggregator and see if we have a quorum.
-        if let Some(qc) = self.aggregator.add_vote(vote.clone())? {
+        if let Some(qc) = self.aggregator.add_accept_vote(vote.clone())? {
             debug!("Assembled {:?}", qc);
 
             // Process the QC.  Adopts view, high qc, and resets timer. //Adopt round_view if higher.
@@ -357,18 +361,21 @@ impl Core {
         Ok(())
     }
 
-    #[async_recursion]
+    //#[async_recursion]
     async fn handle_qc(&mut self, qc: &QC) -> ConsensusResult<()> {
         //verify qc
         // Ensure the vote is well formed.
-        qc.verify(&self.committee)?;
+        //qc.verify(&self.committee)?;
         
-         // Process the QC.  Adopts view, high qc, and resets timer. //Adopt round_view if higher.
-         self.process_qc(&qc).await;
+        // Process the QC.  Adopts view, high qc, and resets timer. //Adopt round_view if higher.
+        self.process_qc(qc).await;
         
         //upcall to app layer: Order dag, and execute.
-        let header = self.stored_headers.qc.hash;
-        commit(header, qc);
+        let header = self.stored_headers.get(&qc.hash);
+
+        if header.is_some() {
+            self.commit(&header.unwrap().clone(), qc);
+        }
 
          // Make a new special header if we are the next leader.
          if self.name == self.leader_elector.get_leader(self.view) {
@@ -489,7 +496,7 @@ impl Core {
         //4) Header author == view leader
         ensure!(
             header.author == self.leader_elector.get_leader(header.view),
-            ConsensusError::WrongProposer,
+            ConsensusError::WrongProposer
         );
 
         //5) TODO: Check if Ticket valid.
@@ -499,10 +506,11 @@ impl Core {
 
         //6) Update latest prepared. Update latest_voted_view.
         self.view = header.view; //
-        self.increase_last_voted_view(&self.view);
+        self.increase_last_voted_view(self.view);
         let copy = header.clone();
-        self.high_prepare = &copy;
-        self.stored_headers.insert(copy.id, copy);
+        let id = copy.id.clone();
+        self.high_prepare = copy.clone();
+        self.stored_headers.insert(id, copy);
        
         //self.round = header.round; //TODO: FIXME: only update self.round upon commit(?) (Committed Headers should be monotonic. Since consensus is sequential, should suffice to update it then?)
         
@@ -525,7 +533,8 @@ impl Core {
     //Call process_header upon receiving upcall from Dag layer.
     #[async_recursion]
     async fn process_certificate(&mut self, certificate: Certificate) -> ConsensusResult<()> {
-       
+        let header = certificate.clone().header;
+        let id = header.clone().id;
         //1) Check if cert is still relevant to current view, if so, update view and high_cert
         ensure!(
             header.view >= self.view,
@@ -534,20 +543,20 @@ impl Core {
         self.advance_view(header.view);
         self.increase_last_voted_view(header.view);
 
-        self.high_cert = certificate.clone();
-        self.stored_headers.insert(certificate.header.id, certificate.header.clone());
+        self.high_cert = certificate;
+        self.stored_headers.insert(id, header.clone());
 
         //2) Send out Vote
 
-        let vote = AcceptVote::new(&header, self.name, self.signature_service.clone());
+        let vote = AcceptVote::new(&header, self.name, self.signature_service.clone()).await;
 
-        debug!("Created {:?}", vote);
+        debug!("Created {:?}", vote.digest());
         
         let next_leader = self.leader_elector.get_leader(self.view + 1);
         if next_leader == self.name {
-            self.handle_accept(&vote).await?;
+            self.handle_accept_vote(&vote).await?;
         } else {
-            debug!("Sending {:?} to {}", vote, next_leader);
+            debug!("Sending {:?} to {}", vote.digest(), next_leader);
             let address = self
                     .committee
                     .consensus(&next_leader)
@@ -679,10 +688,9 @@ impl Core {
             let result = tokio::select! {
     
                 //1) DAG layer headers for special validation
-                Some(header) = self.rx_special.recv() => self.process_header(&header).await, 
+                Some(header) = self.rx_special.recv() => self.process_header(header).await,
                 //2) DAG layer certs to vote on
-                Some(certificate) = self.rx_consensus.recv() ==> self.process_certificate(&header).await, //TODO: WRite this: This creates an Accept Vote (rename vote to accept?)
-                    // should come via proposer?
+                Some(certificate) = self.rx_consensus.recv() => self.process_certificate(certificate).await, //TODO: WRite this: This creates an Accept Vote (rename vote to accept?)  should come via proposer?
                 
                 Some(message) = self.rx_message.recv() => match message {   //Receiving Messages from other Replicas
                     //NO LONGER NEEDED: ConsensusMessage::Propose(block) => self.handle_proposal(&block).await,
@@ -690,7 +698,7 @@ impl Core {
                     //3) Votes from other replicas to form QC.
                     ConsensusMessage::AcceptVote(vote) => self.handle_accept_vote(&vote).await,
                     //4) Receive QC  //For now send separately; but can be made part of (1)
-                    ConsensusMessage::QC(qc) => self.handle_qc(qc).await,
+                    ConsensusMessage::QC(qc) => self.handle_qc(&qc).await,
                     //5) Timeouts from other replicas to form TC
                     ConsensusMessage::Timeout(timeout) => self.handle_timeout(&timeout).await,
                     //6) Receive TC

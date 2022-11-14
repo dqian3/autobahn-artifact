@@ -1,5 +1,5 @@
 use crate::consensus::{ConsensusMessage, View};
-use crate::messages::{Block, QC, TC};
+use primary::messages::{Block, QC, TC};
 use bytes::Bytes;
 use config::{Committee, Stake};
 use crypto::{PublicKey, SignatureService};

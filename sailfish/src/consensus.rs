@@ -1,11 +1,11 @@
 use crate::committer::Committer;
 use crate::core::Core;
-//use crate::error::ConsensusError;
+use crate::error::ConsensusError;
 use crate::helper::Helper;
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
 //use crate::messages::{Block, Timeout, Vote, TC};
-use primary::{Header, Certificate, Timeout, Vote, AcceptVote, QC, TC};
+use primary::messages::{Header, Block, Certificate, Timeout, AcceptVote, QC, TC};
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
 use async_trait::async_trait;
@@ -34,7 +34,7 @@ pub type Round= u64;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ConsensusMessage {
-    //Propose(Block), //No longer used
+    Propose(Block), //No longer used //FIXME needed to uncomment to compile
     //Vote(Vote),     //No longer used
     AcceptVote(AcceptVote),
     QC(QC),
@@ -55,20 +55,24 @@ impl Consensus {
         store: Store,
         rx_mempool: Receiver<Certificate>,
         tx_mempool: Sender<Certificate>,
-        tx_output: Sender<Block>,
+        tx_output: Sender<Header>,
         tx_ticket: Sender<(View, Round)>,
-        tx_validation: Sender<Header>,
+        tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>,
         rx_sailfish: Receiver<Header>,
     ) {
         // NOTE: This log entry is used to compute performance.
         parameters.log();
 
         let (tx_consensus, rx_consensus) = channel(CHANNEL_CAPACITY);
-        let (tx_loopback, rx_loopback) = channel(CHANNEL_CAPACITY);
         let (tx_proposer, rx_proposer) = channel(CHANNEL_CAPACITY);
         let (tx_helper, rx_helper) = channel(CHANNEL_CAPACITY);
         let (tx_commit, rx_commit) = channel(CHANNEL_CAPACITY);
         let (tx_mempool_copy, rx_mempool_copy) = channel(CHANNEL_CAPACITY);
+        let (tx_message, rx_message) = channel(CHANNEL_CAPACITY);
+        let (tx_consensus_header, rx_consensus_header) = channel(CHANNEL_CAPACITY);
+        let (tx_loop, rx_loop) = channel(CHANNEL_CAPACITY);
+        let (tx_special, rx_special) = channel(CHANNEL_CAPACITY);
+
         //let (tx_sailfish, rx_sailfish) = channel(CHANNEL_CAPACITY);
         //let (tx_dag, rx_dag) = channel(CHANNEL_CAPACITY);
 
@@ -102,7 +106,7 @@ impl Consensus {
             name,
             committee.clone(),
             store.clone(),
-            tx_loopback.clone(),
+            tx_loop.clone(),
             parameters.sync_retry_delay,
         );
 
@@ -116,14 +120,14 @@ impl Consensus {
             mempool_driver,
             synchronizer,
             parameters.timeout_delay,
-            /* rx_message */ rx_consensus,
-            rx_loopback,
+            rx_message,
+            rx_consensus_header,
+            rx_loop,
             tx_proposer,
             tx_commit,
-            tx_output,
             tx_validation,
             tx_ticket,
-            /*rx_special */ rx_sailfish,
+            /*rx_special */ rx_special,
         );
 
         // Commits the mempool certificates and their sub-dag.
@@ -133,6 +137,7 @@ impl Consensus {
             parameters.gc_depth,
             rx_mempool_copy,
             rx_commit,
+            tx_output,
         );
 
         // Spawn the block proposer.
@@ -143,7 +148,7 @@ impl Consensus {
             /* rx_consensus */ rx_sailfish,
             rx_mempool,
             /* rx_message */ rx_proposer,
-            tx_loopback,
+            tx_loop,
             tx_mempool_copy,
         );
 

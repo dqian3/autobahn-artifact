@@ -1,4 +1,4 @@
-use crate::consensus::View;
+use crate::consensus::{Round, View};
 use crate::error::{ConsensusError, ConsensusResult};
 use config::Committee;
 use crypto::{Digest, Hash, PublicKey, Signature, SignatureService};
