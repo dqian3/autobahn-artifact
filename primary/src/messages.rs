@@ -36,6 +36,7 @@ pub struct Header {
     pub is_special: bool,
     pub view: View,
     pub round_view: Round, //round that was proposed by the last view.
+    pub special_parent_round: Round, //round of the parent we have special edge to (only used to re-construct parent cert digest in committer)
    // pub ticket: Ticket, //TODO: Add ticket.
 
 }
@@ -52,6 +53,7 @@ impl Header {
         is_special: bool,
         view: View,
         round_view: Round,
+        special_parent_round: Round,
     ) -> Self {
         let header = Self {
             author,
@@ -63,6 +65,7 @@ impl Header {
             is_special: is_special,
             view: view,
             round_view: round_view,
+            special_parent_round,
         };
         let id = header.digest();
         let signature = signature_service.request_signature(id.clone()).await;
@@ -93,6 +96,14 @@ impl Header {
             .verify(&self.id, &self.author)
             .map_err(DagError::from)
     }
+
+    pub fn round(&self) -> Round {
+        self.round
+    }
+
+    pub fn origin(&self) -> PublicKey {
+        self.author
+    }
 }
 
 impl Hash for Header {
@@ -107,6 +118,13 @@ impl Hash for Header {
         for x in &self.parents {
             hasher.update(x);
         }
+
+        let f: u8 = if self.is_special { 1u8 } else { 0u8 };
+        hasher.update(f.to_le_bytes());
+        hasher.update(&self.view.to_le_bytes());
+        hasher.update(&self.round_view.to_le_bytes());
+        hasher.update(&self.special_parent_round.to_le_bytes());
+        
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
@@ -137,7 +155,7 @@ pub struct Vote {
     pub origin: PublicKey,
     pub author: PublicKey,
     pub signature: Signature,
-    pub view: View,
+    pub view: View, //FIXME: is this necessary? Given that the header specifies the view. If so, needs to be added to hash.
 
     //pub is_special: bool, ==> Changed: Just check against "current header" (can confirm id matches) for specialness, view, round view, etc.
     pub special_valid: u8,
@@ -272,7 +290,7 @@ impl Certificate {
 
         //If all votes were special_valid or invalid ==> compute single vote digest and verify it (since it is the same for all)
         if matching_valids(&self.special_valids) {
-            Signature::verify_batch(&self.digest(), &self.votes).map_err(DagError::from)
+            Signature::verify_batch(&self.verifiable_digest(), &self.votes).map_err(DagError::from)
         }
         else{ //compute all the individual vote digests and verify them  (TODO: Since there are only 2 possible types, 0 and 1 ==> Could compute 2 digests, and then insert them in the correct order)
                                                                             //E.g. could re-order Votes to be first all for 0, then all for 1. And call verify_batch separately twice
@@ -305,16 +323,7 @@ impl Certificate {
         self.header.author
     }
 
-    
-}
-
-pub fn matching_valids(vec: &Vec<u8>) -> bool {
-    vec.iter().min() == vec.iter().max()
-}
-
-
-impl Hash for Certificate {
-    fn digest(&self) -> Digest {
+    fn verifiable_digest(&self) -> Digest {
         if matching_valids(&self.special_valids) {
             let mut hasher = Sha512::new();
             hasher.update(&self.header.id);
@@ -335,7 +344,30 @@ impl Hash for Certificate {
         }
     
     }
+    
 }
+
+pub fn matching_valids(vec: &Vec<u8>) -> bool {
+    vec.iter().min() == vec.iter().max()
+}
+
+
+//TODO: FIXME: Currently made it so special_valids is not part of the Cert hash ==> I consider them part of the signature information 
+//Double check though if this is fine/safe
+impl Hash for Certificate {
+    fn digest(&self) -> Digest {
+       
+            let mut hasher = Sha512::new();
+            hasher.update(&self.header.id);
+            hasher.update(self.round().to_le_bytes());
+            hasher.update(&self.origin());
+           
+            Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+
+    }
+}
+
+
 
 impl fmt::Debug for Certificate {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {

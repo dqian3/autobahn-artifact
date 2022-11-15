@@ -66,6 +66,9 @@ pub enum DagError {
 
     #[error("Invalid vote invalidation")]
     InvalidVoteInvalidation,
+
+    #[error("Invalid special parent")]
+    InvalidSpecialParent,
 }
 
 

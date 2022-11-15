@@ -54,6 +54,7 @@ impl Consensus {
         signature_service: SignatureService,
         store: Store,
         rx_mempool: Receiver<Certificate>,
+        rx_committer: Receiver<Certificate>,
         tx_mempool: Sender<Certificate>,
         tx_output: Sender<Header>,
         tx_ticket: Sender<(View, Round)>,
@@ -135,22 +136,22 @@ impl Consensus {
             committee.clone(),
             store.clone(),
             parameters.gc_depth,
-            rx_mempool_copy,
+            /* rx_mempool */ rx_committer, //Receive certs directly.
             rx_commit,
             tx_output,
         );
 
         // Spawn the block proposer.
-        Proposer::spawn(
-            name,
-            committee.clone(),
-            signature_service,
-            /* rx_consensus */ rx_sailfish,
-            rx_mempool,
-            /* rx_message */ rx_proposer,
-            tx_loop,
-            tx_mempool_copy,
-        );
+        // Proposer::spawn(
+        //     name,
+        //     committee.clone(),
+        //     signature_service,
+        //     /* rx_consensus */ rx_sailfish,
+        //     rx_mempool,
+        //     /* rx_message */ rx_proposer,
+        //     tx_loop,
+        //     tx_mempool_copy,
+        // );
 
         // Spawn the helper module.
         Helper::spawn(committee, store, /* rx_requests */ rx_helper);

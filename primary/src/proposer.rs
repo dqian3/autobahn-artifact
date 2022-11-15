@@ -36,8 +36,10 @@ pub struct Proposer {
    
     /// The current round of the dag.
     round: Round,
-    // Holds the certificate id of the last header issued.
+    // Holds the header id of the last header issued.
     last_header_id: Digest,
+    last_header_round: Round,
+
     /// Holds the certificates' ids waiting to be included in the next header.
     last_parents: Vec<Digest>,
     /// Holds the batches' digests waiting to be included in the next header.
@@ -50,6 +52,8 @@ pub struct Proposer {
     round_view: Round,
     // Whether to propose special block
     propose_special: bool,
+    // Whether the previous block had enough parents. If yes, can issue special block without. If not, then special block must wait for parents.
+    last_has_parents: bool,
 }
 
 impl Proposer {
@@ -97,11 +101,13 @@ impl Proposer {
                 round: 1,
                 last_parents: genesis,
                 last_header_id: genesis_parent, //Digest::default(),
+                last_header_round: 1,
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
                 view: 1,
                 round_view: 1,
                 propose_special: false,
+                last_has_parents: false,
             }
             .run()
             .await;
@@ -120,6 +126,7 @@ impl Proposer {
                 is_special,
                 self.view,
                 self.round_view,
+                self.last_header_round,
             ).await;
 
         debug!("Created {:?}", header);
@@ -132,6 +139,7 @@ impl Proposer {
 
         //Store reference to our own previous header -- used for special edge. Does not include a certificate (does not exist yet)
         self.last_header_id = header.digest();
+        self.last_header_round = self.round.clone();
       
         // Send the new header to the `Core` that will broadcast and process it.
         self.tx_core
@@ -170,15 +178,23 @@ impl Proposer {
                 //Case C: Waiting for Digest AND Timer: Received both Ticket and Parent. ==> next loop will start a special header (with parents)
                
                 //Pass down round from last cert. Also pass down current parents EVEN if not full quorum: I.e. add a special flag to "process_cert" to not wait.
-                if self.propose_special { //
+                if self.propose_special && (self.last_has_parents || enough_parents) { //2nd clause: Special block must have, or extend block with n-f edges ==> cant have back to back special edges
+
                     //not waiting for n-f parent edges to create special block -- but will use them if available (Note, this will only happen in case C)
                     //Includes at least own parent as special edge.
-                    if !enough_parents { // (Note, this will only be false in case C)
+
+                    if enough_parents { // (Note, this will only be true in case C -- or if the previous header was special and used a special edge)
+                        self.last_has_parents = true;
+                    }
+                    else{  
+                        self.last_has_parents = false ;
                         self.last_parents.push(self.last_header_id.clone()); //Use last header as special edge. //TODO: Consensus should process parents. Distinguish whether n-f edges, or just 1 edge (special)
                                                                                                                     // If n-f: Do the same Synchronization/availability checks that the DAG does.
                                                                                                                     // If 1: Check if DAG has that payload. If yes, vote. If no, block processing and wait.
-                                                                                                                    //TODO: if want to simplify, can always use just 1 edge for special blocks.
+                                                                                                               //TODO: if want to simplify, can always use just 1 edge for special blocks.
                     } 
+                    
+
                     self.make_header(true).await;
                     self.propose_special = false; //reset 
                     proposing = true;
@@ -186,6 +202,7 @@ impl Proposer {
                 else if enough_parents {
                     // If not special and enough parents available make a new normal header.
                     self.make_header(false).await;
+                    self.last_has_parents = true;
                     proposing = true;
                 }
             }

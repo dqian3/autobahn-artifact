@@ -185,8 +185,8 @@ impl Core {
             let mut certs = Vec::new();
             // Send the payload to the committer.
 
-            // FIXME: change special_valids to be a valid not None
-            let certificate = Certificate { header, special_valids: Vec::new(), votes: qc.clone().votes };
+            // FIXME: change special_valids to be a valid not None 
+            let certificate = Certificate { header, special_valids: Vec::new(), votes: qc.clone().votes }; //TODO: I don't think these votes are ever used. Just create empty vec.
             certs.push(certificate.clone());
 
             self.tx_commit
@@ -690,7 +690,7 @@ impl Core {
                 //1) DAG layer headers for special validation
                 Some(header) = self.rx_special.recv() => self.process_header(header).await,
                 //2) DAG layer certs to vote on
-                Some(certificate) = self.rx_consensus.recv() => self.process_certificate(certificate).await, //TODO: WRite this: This creates an Accept Vote (rename vote to accept?)  should come via proposer?
+                Some(certificate) = self.rx_consensus.recv() => self.process_certificate(certificate).await, // This creates an Accept Vote (rename vote to accept?)  should come via proposer?
                 
                 Some(message) = self.rx_message.recv() => match message {   //Receiving Messages from other Replicas
                     //NO LONGER NEEDED: ConsensusMessage::Propose(block) => self.handle_proposal(&block).await,

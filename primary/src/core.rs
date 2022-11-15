@@ -11,6 +11,7 @@ use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
 use log::{debug, error, warn};
 use network::{CancelHandler, ReliableSender};
+use tokio::time::error::Elapsed;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -48,6 +49,9 @@ pub struct Core {
     rx_proposer: Receiver<Header>,
     /// Output special certificates to the consensus layer.
     tx_consensus: Sender<Certificate>,
+    // Output all certificates to the consensus Dag view
+    tx_committer: Sender<Certificate>,
+
     /// Send valid a quorum of certificates' ids to the `Proposer` (along with their round).
     tx_proposer: Sender<(Vec<Digest>, Round)>,
     // Receives validated special Headers & proof from the consensus layer.
@@ -87,6 +91,7 @@ impl Core {
         rx_certificate_waiter: Receiver<Certificate>,
         rx_proposer: Receiver<Header>,
         tx_consensus: Sender<Certificate>,
+        tx_committer: Sender<Certificate>,
         tx_proposer: Sender<(Vec<Digest>, Round)>,
         rx_validation: Receiver<(Header, u8, Option<QC>, Option<TC>)>,
         tx_special: Sender<Header>,
@@ -105,6 +110,7 @@ impl Core {
                 rx_certificate_waiter,
                 rx_proposer,
                 tx_consensus,
+                tx_committer,
                 tx_proposer,
                 rx_validation,
                 tx_special,
@@ -158,25 +164,42 @@ impl Core {
         // Ensure we have the parents. If at least one parent is missing, the synchronizer returns an empty
         // vector; it will gather the missing parents (as well as all ancestors) from other nodes and then
         // reschedule processing of this header.
-        let parents = self.synchronizer.get_parents(&header).await?;
-        if parents.is_empty() {
-            debug!("Processing of {} suspended: missing parent(s)", header.id);
-            return Ok(());
-        }
 
-        // Check the parent certificates. Ensure the parents form a quorum and are all from the previous round.
-        let mut stake = 0;
-        for x in parents {
-            ensure!(
-                x.round() + 1 == header.round,
+        //TODO: Modify so we don't have to wait for parent cert if the block is special -- but need to wait for parent.
+        let parents;
+        if header.is_special && header.parents.len() == 1{
+            //TODO: Check that parent header has been received. // IF so, then when a cert for this special block forms, also form a dummy cert of the parent.
+            //1) Read from store to confirm parent exists.
+            parents = self.synchronizer.get_special_parent(&header).await?;
+          
+            ensure!( //check whether special parent is from prev round
+                parents[0].round() + 1 == header.round,
                 DagError::MalformedHeader(header.id.clone())
             );
-            stake += self.committee.stake(&x.origin());
+            
         }
-        ensure!(
-            stake >= self.committee.quorum_threshold(),
-            DagError::HeaderRequiresQuorum(header.id.clone())
-        );
+        else{
+            parents = self.synchronizer.get_parents(&header).await?;
+            if parents.is_empty() {
+                debug!("Processing of {} suspended: missing parent(s)", header.id);
+                return Ok(());
+            }
+
+                // Check the parent certificates. Ensure the parents form a quorum and are all from the previous round.
+            let mut stake = 0;
+            for x in parents {
+                ensure!(
+                    x.round() + 1 == header.round,
+                    DagError::MalformedHeader(header.id.clone())
+                );
+                stake += self.committee.stake(&x.origin());
+            }
+            ensure!(
+                stake >= self.committee.quorum_threshold(),
+                DagError::HeaderRequiresQuorum(header.id.clone())
+            );
+        }
+    
 
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
         // reschedule processing of this header once we have it.
@@ -274,6 +297,8 @@ impl Core {
                 .or_insert_with(Vec::new)
                 .extend(handlers);
 
+            //TODO: Need to wait for additional votes if special and not enough valid votes. (A little tricky, since we may already be moving the round => i.e. current_header is no longer matching)
+
             // Process the new certificate.
             self.process_certificate(certificate)
                 .await
@@ -301,13 +326,35 @@ impl Core {
 
         // Ensure we have all the ancestors of this certificate yet. If we don't, the synchronizer will gather
         // them and trigger re-processing of this certificate.
-        if !self.synchronizer.deliver_certificate(&certificate).await? {
-            debug!(
-                "Processing of {:?} suspended: missing ancestors",
-                certificate
-            );
-            return Ok(());
+
+        //Note: If it is a special block, then don't need to wait for the special edge parent. ==> generate a special cert for the parent to pass to the DAG
+        if certificate.header.is_special && certificate.header.parents.len() == 1 {
+                for parent_digest in &certificate.header.parents {
+                      //TODO: create fake cert for parent and pass to commmitter.
+                      match self.store.read(parent_digest.to_vec()).await? {
+                        Some(header) => {
+                            let cert = Certificate {
+                                header: bincode::deserialize(&header)?,
+                                ..Certificate::default()
+                            };
+                            self.tx_committer.send(cert).await.expect("Failed to send special parent certificate to committer");
+                        }
+                        None => return Err(DagError::InvalidSpecialParent)
+                    };
+                }           
         }
+        else{
+
+            if !self.synchronizer.deliver_certificate(&certificate).await? {
+                debug!(
+                    "Processing of {:?} suspended: missing ancestors",
+                    certificate
+                );
+                return Ok(());
+            }
+        }
+
+        
 
         // Store the certificate.
         let bytes = bincode::serialize(&certificate).expect("Failed to serialize certificate");
@@ -327,6 +374,23 @@ impl Core {
                 .expect("Failed to send certificate");
         }
 
+
+        //Committer Invariant: In order to commit, must have stored all parent certs
+        //For normal blocks, this is guaranteed by synchronizer which forces a wait on processing until all parent certs have been processed
+        //For special blocks this is not guaranteed, since they may have a special parent edge whose cert is not available. In this case, we want to confirm that the header is available, and then 
+        //generate a special cert for it to pass  pass on. (for consistency, always make this cert have empty votes)
+       
+
+        //forward cert to Consensus Dag view. NOTE: FIXME: Forwards cert with whatever special_valids are available. This might not be the ones we use for a special block that is passed up
+        //Currently this is safe/compatible because special_valids are not part of the cert digest (I consider them to be "extra" info of the signatures)
+        debug!("Received {:?}", certificate);
+        self.tx_committer
+                .send(certificate.clone())
+                .await
+                .expect("Failed to send certificate to committer");
+        
+
+        
          //If current_header == special && whole quorum is valid ==> pass forward to consensus layer  (if not, then this cert is only relevant to the DAG layer.)
         if certificate.header.is_special && certificate.special_valids[0] == 1 && matching_valids(&certificate.special_valids){
              //Send it to the consensus layer. ==> all replicas will vote.
@@ -337,6 +401,11 @@ impl Core {
                     id, e
                 );
             }
+        }
+        else{
+            //TODO: Wait for more. ==> Problem: Need to form a new cert that has 2f+1 valids. Wouldnt match the cert we have upcalled to committer.
+            //FIXME: If its special, don't send to committer directly, but wait for timeout.
+            // The committers DAG might not keep growing async, but that doesnt matter, thats just its view. As soon as we upcall, it WILL have all the certs it needs.
         }
        
         Ok(())

@@ -101,7 +101,7 @@ impl QCMaker {
             return Ok(Some(QC {
                 hash: vote.clone().digest(),
                 view: vote.view,
-                round_view: vote.round, //Note: Currently aren't checking anywhere that the round_views of the Votes match. However, they must be matching ransitively: Replicas only vote on certs, and a cert only is formed on matching round_view.
+                round_view: vote.round, //Note: Currently aren't checking anywhere that the round_views of the Votes match. However, they must be matching transitively: Replicas only vote on certs, and a cert only is formed on matching round_view.
                 votes: self.votes.clone(),
             }));
         }
@@ -125,7 +125,7 @@ impl QCMaker {
             return Ok(Some(QC {
                 hash: vote.clone().digest(),
                 view: vote.view,
-                round_view: vote.round_view, //Note: Currently aren't checking anywhere that the round_views of the Votes match. However, they must be matching ransitively: Replicas only vote on certs, and a cert only is formed on matching round_view.
+                round_view: vote.round_view, //Note: Currently aren't checking anywhere that the round_views of the Votes match. However, they must be matching transitively: Replicas only vote on certs, and a cert only is formed on matching round_view.
                 votes: self.votes.clone(),
             }));
         }

@@ -1,3 +1,4 @@
+use crate::DagError;
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::DagResult;
 use crate::header_waiter::WaiterMessage;
@@ -81,6 +82,49 @@ impl Synchronizer {
             .await
             .expect("Failed to send sync batch request");
         Ok(true)
+    }
+
+    pub async fn get_special_parent(&mut self, header: &Header) -> DagResult<Vec<Certificate>> {
+        let mut missing = Vec::new();
+        let mut parents = Vec::new();
+        for digest in &header.parents {
+            if let Some(genesis) = self
+                .genesis
+                .iter()
+                .find(|(x, _)| x == digest)
+                .map(|(_, x)| x)
+            {
+                parents.push(genesis.clone());
+                continue;
+            }
+
+            match self.store.read(digest.to_vec()).await? {
+                Some(header) => parents.push( 
+                     Certificate {
+                      header: bincode::deserialize(&header)?,
+                      ..Certificate::default()
+                     }
+                ),
+                None => missing.push(digest.clone()),
+            };
+        }
+
+        if missing.is_empty() {
+            return Ok(parents);
+        }
+
+        else{
+            return Err(DagError::InvalidSpecialParent);
+        }
+
+        //if we dont have special parent: ignore request --> should be there when using FIFO channels
+        //TODO: Start a waiter for it. FIXME: currently SyncParents requests certs. But we just want to request a header.
+
+        // self.tx_header_waiter
+        //     .send(WaiterMessage::SyncParents(missing, header.clone()))
+        //     .await
+        //     .expect("Failed to send sync parents request");
+        //Ok(Vec::new())
     }
 
     /// Returns the parents of a header if we have them all. If at least one parent is missing,

@@ -3,6 +3,8 @@ use crate::error::{ConsensusError, ConsensusResult};
 use config::Committee;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
+use ed25519_dalek::Digest as _;
+use ed25519_dalek::Sha512;
 use futures::future::try_join_all;
 use futures::stream::FuturesOrdered;
 use futures::stream::StreamExt as _;
@@ -11,6 +13,7 @@ use primary::Certificate;
 use primary::messages::Header;
 use std::cmp::max;
 use std::collections::{HashMap, HashSet};
+use std::convert::TryInto;
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
@@ -170,15 +173,32 @@ impl Committer {
             debug!("Sequencing {:?}", x);
             ordered.push(x.clone());
             for parent in &x.header.parents {
+                let &parent_digest;
+
+                if x.header.is_special && x.header.parents.len() == 1 { // i.e. is special edge ==> manually hack the digest (only works because of requirement that header is from same node in prev round)
+                                                                        //FIXME: This is false. Currently we can skip rounds. Header needs to include parent round to solve this.
+                                                                        //FIXME: process_header needs to verify that author and rounds are correct.
+                    parent_digest =  &{
+                        let mut hasher = Sha512::new();
+                        hasher.update(&parent); //== parent_header.id
+                        hasher.update(&x.header.special_parent_round().to_le_bytes()); //parent_header.round = child round -1
+                        hasher.update(&x.header.origin()); //parent_header.origin = child_header_origin
+                        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+                    }
+                }
+                else{
+                    parent_digest = parent;
+                }
+
                 let (digest, certificate) = match state
                     .dag
                     .get(&(x.round() - 1))
-                    .map(|x| x.values().find(|(x, _)| x == parent))
+                    .map(|x| x.values().find(|(x, _)| x == parent_digest))
                     .flatten()
                 {
                     Some(x) => x,
                     None => {
-                        debug!("We already processed and cleaned up {}", parent);
+                        debug!("We already processed and cleaned up {}", parent_digest);
                         continue; // We already ordered or GC up to here.
                     }
                 };

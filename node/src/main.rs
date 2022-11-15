@@ -113,6 +113,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
         ("primary", _) => {
             let (tx_new_certificates, rx_new_certificates) = channel(CHANNEL_CAPACITY);
             let (tx_feedback, rx_feedback) = channel(CHANNEL_CAPACITY);
+            let (tx_committer, rx_committer) = channel(CHANNEL_CAPACITY);
             Primary::spawn(
                 name,
                 committee.clone(),
@@ -120,6 +121,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 signature_service.clone(),
                 store.clone(),
                 /* tx_consensus */ tx_new_certificates,
+                tx_committer,
                 /* rx_consensus */ rx_feedback,
                 tx_sailfish,
                 rx_ticket,
@@ -132,6 +134,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 signature_service,
                 store,
                 /* rx_mempool */ rx_new_certificates,
+                rx_committer.
                 /* tx_mempool */ tx_feedback,
                 tx_output,
                 tx_ticket,
