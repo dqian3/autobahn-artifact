@@ -174,6 +174,7 @@ impl Committer {
             ordered.push(x.clone());
             for parent in &x.header.parents {
                 let &parent_digest;
+                let round;
 
                 if x.header.is_special && x.header.parents.len() == 1 { // i.e. is special edge ==> manually hack the digest (only works because of requirement that header is from same node in prev round)
                                                                         //FIXME: This is false. Currently we can skip rounds. Header needs to include parent round to solve this.
@@ -181,18 +182,20 @@ impl Committer {
                     parent_digest =  &{
                         let mut hasher = Sha512::new();
                         hasher.update(&parent); //== parent_header.id
-                        hasher.update(&x.header.special_parent_round().to_le_bytes()); //parent_header.round = child round -1
+                        hasher.update(&x.header.special_parent_round.to_le_bytes()); //parent_header.round = child round -1
                         hasher.update(&x.header.origin()); //parent_header.origin = child_header_origin
                         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
                     }
+                    round = x.header.special_parent_round;
                 }
                 else{
                     parent_digest = parent;
+                    round = x.round() -1;
                 }
 
                 let (digest, certificate) = match state
                     .dag
-                    .get(&(x.round() - 1))
+                    .get(&(round)) 
                     .map(|x| x.values().find(|(x, _)| x == parent_digest))
                     .flatten()
                 {
