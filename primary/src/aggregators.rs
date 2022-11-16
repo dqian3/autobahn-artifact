@@ -84,6 +84,8 @@ impl CertificatesAggregator {
             self.weight = 0; // Ensures quorum is only reached once.
             return Ok(Some(self.certificates.drain(..).collect()));    //drain empties certificates, but keeps allocated memory (drain consumes values in collection vs into_iter that consumes the whole collection)
         }
+
+        
         Ok(None)
     }
 }

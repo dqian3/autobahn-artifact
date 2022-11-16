@@ -358,24 +358,26 @@ impl Core {
             }
         }
 
-        
 
         // Store the certificate.
         let bytes = bincode::serialize(&certificate).expect("Failed to serialize certificate");
         self.store.write(certificate.digest().to_vec(), bytes).await;
 
         // Check if we have enough certificates to enter a new dag round and propose a header.
+        //FIXME: Unit tests get stuck in here.
         if let Some(parents) = self
             .certificates_aggregators
             .entry(certificate.round())
             .or_insert_with(|| Box::new(CertificatesAggregator::new()))
             .append(certificate.clone(), &self.committee)?
         {
+            //panic!("made it here");
             // Send it to the `Proposer`.
             self.tx_proposer
-                .send((parents, certificate.round()))
+                .send((parents, certificate.round().clone()))
                 .await
                 .expect("Failed to send certificate");
+
         }
 
 

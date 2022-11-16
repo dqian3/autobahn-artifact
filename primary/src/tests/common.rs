@@ -127,6 +127,8 @@ pub fn headers() -> Vec<Header> {
                     .iter()
                     .map(|x| x.digest())
                     .collect(),
+
+                is_special: false,
                 ..Header::default()
             };
             Header {
@@ -149,6 +151,10 @@ pub fn votes(header: &Header) -> Vec<Vote> {
                 origin: header.author,
                 author,
                 signature: Signature::default(),
+                view: 1,
+                special_valid: 0u8,
+                qc: None,
+                tc: None,
             };
             Vote {
                 signature: Signature::new(&vote.digest(), &secret),
@@ -162,6 +168,7 @@ pub fn votes(header: &Header) -> Vec<Vote> {
 pub fn certificate(header: &Header) -> Certificate {
     Certificate {
         header: header.clone(),
+        special_valids: vec![0u8, 0u8, 0u8],
         votes: votes(&header)
             .into_iter()
             .map(|x| (x.author, x.signature))
