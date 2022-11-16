@@ -173,6 +173,7 @@ impl Committer {
             debug!("Sequencing {:?}", x);
             ordered.push(x.clone());
             for parent in &x.header.parents {
+
                 let &parent_digest;
                 let round;
 
@@ -185,7 +186,7 @@ impl Committer {
                         hasher.update(&x.header.special_parent_round.to_le_bytes()); //parent_header.round = child round -1
                         hasher.update(&x.header.origin()); //parent_header.origin = child_header_origin
                         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
-                    }
+                    };
                     round = x.header.special_parent_round;
                 }
                 else{
@@ -195,9 +196,9 @@ impl Committer {
 
                 let (digest, certificate) = match state
                     .dag
-                    .get(&(round)) 
-                    .map(|x| x.values().find(|(x, _)| x == parent_digest))
-                    .flatten()
+                    .get(&(round))                                           // returns Some(HashMap<key, value>)
+                    .map(|x| x.values().find(|(x, _)| x == parent_digest))   // x := Some(key, value); where key = pubkey, value = (dig, cert) ==> maps to Some(value)
+                    .flatten()                                               // result is something like Some(<Some(value)>)? => Flatten gets rid of outer Some
                 {
                     Some(x) => x,
                     None => {
@@ -212,7 +213,7 @@ impl Committer {
                 skip |= state
                     .last_committed
                     .get(&certificate.origin())
-                    .map_or_else(|| false, |r| r == &certificate.round());
+                    .map_or_else(|| false, |r| r == &certificate.round());   //stop if last committed = the round we'd evaluate next
                 if !skip {
                     buffer.push(certificate);
                     already_ordered.insert(digest);

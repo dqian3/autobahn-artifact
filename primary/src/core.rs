@@ -172,8 +172,12 @@ impl Core {
             //1) Read from store to confirm parent exists.
             parents = self.synchronizer.get_special_parent(&header).await?;
           
-            ensure!( //check whether special parent is from prev round
-                parents[0].round() + 1 == header.round,
+            ensure!( //check that special parent round matches claimed round
+                parents[0].round() == header.special_parent_round && header.special_parent_round + 1 == header.round,
+                DagError::MalformedHeader(header.id.clone())
+            );
+            ensure!( //check that special parent and special header have same parent
+                parents[0].origin() == header.author,
                 DagError::MalformedHeader(header.id.clone())
             );
             
