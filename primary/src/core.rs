@@ -386,10 +386,12 @@ impl Core {
         //For special blocks this is not guaranteed, since they may have a special parent edge whose cert is not available. In this case, we want to confirm that the header is available, and then 
         //generate a special cert for it to pass  pass on. (for consistency, always make this cert have empty votes)
        
+    
 
         //forward cert to Consensus Dag view. NOTE: FIXME: Forwards cert with whatever special_valids are available. This might not be the ones we use for a special block that is passed up
         //Currently this is safe/compatible because special_valids are not part of the cert digest (I consider them to be "extra" info of the signatures)
-        debug!("Received {:?}", certificate);
+        
+        debug!("Committer Received {:?}", certificate);
         self.tx_committer
                 .send(certificate.clone())
                 .await
@@ -516,7 +518,7 @@ impl Core {
                         },
                         PrimaryMessage::Certificate(certificate) => {
                             match self.sanitize_certificate(&certificate) {
-                                Ok(()) =>  self.process_certificate(certificate).await,
+                                Ok(()) => self.process_certificate(certificate).await,
                                 error => error
                             }
                         },

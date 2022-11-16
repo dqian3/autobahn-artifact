@@ -324,9 +324,9 @@ async fn process_certificates() {
     let (tx_consensus, mut _rx_consensus) = channel(3);
     let (tx_parents, mut rx_parents) = channel(1);
 
-    let(tx_committer, mut rx_committer) = channel(1);
+    let(tx_committer, mut rx_committer) = channel(3);
     let(_tx_validation, rx_validation) = channel(1);
-    let(tx_sailfish, _rx_special) = channel(1);
+    let(tx_sailfish, _rx_special) = channel(3);
 
     // Create a new test store.
     let path = ".db_test_process_certificates";
