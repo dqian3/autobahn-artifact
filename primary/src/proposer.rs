@@ -104,10 +104,10 @@ impl Proposer {
                 last_header_round: 1,
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
-                view: 1,
+                view: 0,
                 round_view: 1,
                 propose_special: false,
-                last_has_parents: false,
+                last_has_parents: true,
             }
             .run()
             .await;
@@ -116,6 +116,7 @@ impl Proposer {
 
     
     async fn make_header(&mut self, is_special: bool) {
+        println!("make block. special? {}", is_special);
         // Make a new header.
         let header = Header::new(
                 self.name,
@@ -173,13 +174,14 @@ impl Proposer {
 
             if timer_expired || enough_digests {
 
+                debug!("enough_digests. special? {:?}, last_parents? {:?}, enough parents? {:?}", self.propose_special, self.last_has_parents, enough_parents);
                 //Case A: Have Digests OR Timer: Receive Ticket Before parents. ==> next loop will start a special header
                 //Case B: Have Digests OR Timer: Receive Parents before ticket. ==> next loop will start a normal header
                 //Case C: Waiting for Digest AND Timer: Received both Ticket and Parent. ==> next loop will start a special header (with parents)
                
                 //Pass down round from last cert. Also pass down current parents EVEN if not full quorum: I.e. add a special flag to "process_cert" to not wait.
                 if self.propose_special && (self.last_has_parents || enough_parents) { //2nd clause: Special block must have, or extend block with n-f edges ==> cant have back to back special edges
-
+                
                     //not waiting for n-f parent edges to create special block -- but will use them if available (Note, this will only happen in case C)
                     //Includes at least own parent as special edge.
 
@@ -219,6 +221,7 @@ impl Proposer {
     
                  //Passing Ticket view AND round, i.e. round that the special Header in view belonged to. Skip to that round if lagging behind (to guarantee special headers are monotonically growing)
                 Some((view, round)) = self.rx_ticket.recv() => {
+                    debug!("   received ticket with view {:?}, and last round {:?}", view, round);
                     if view <= self.view {
                         continue; //Proposal for view already exists.
                     }
@@ -230,21 +233,39 @@ impl Proposer {
                     self.view = view;
                     self.round_view = round;
                     self.propose_special = true;
+                    debug!("Dag moved to round {}, and view {}. propose_special {}", self.round, self.view, self.propose_special);
+    
                 }
 
                 Some((parents, round)) = self.rx_core.recv() => {
-                    if round < self.round {
-                        continue;
+                    debug!("   received parents from round {:?}", round);
+                    if self.propose_special && !self.last_has_parents {   // If we are trying to propose a special block, but cannot because not enough parents are ready, and we've already exhausted last_parent_header rule
+                        if round < self.last_header_round { // i.e. these are parents for a round that we already issued.
+                            continue;
+                        }
+                        self.last_parents = parents;
+                        if round >= self.round {
+                            self.round = round + 1; // ==> special round must be bigger than parent round
+                        }
+                        //Note: If round = last_header round, then this logic is equivalent to the normal case below; but if we skipped rounds, then its possible that round > last_header_round; in which case we do want to use the parents.
                     }
 
-                    // Advance to the next round.
-                    self.round = round + 1;
-                    debug!("Dag moved to round {}", self.round);
-
-                    // Signal that we have enough parent certificates to propose a new header.
-                    self.last_parents = parents;
+                    else{ //normal case
+                        if round < self.round {
+                            continue;
+                        }
+    
+                        // Advance to the next round.
+                        self.round = round + 1;
+                        debug!("Dag moved to round {}", self.round);
+    
+                        // Signal that we have enough parent certificates to propose a new header.
+                        self.last_parents = parents;
+                    }
+                   
                 }
                 Some((digest, worker_id)) = self.rx_workers.recv() => {
+                    println!("   received payload from worker {}", worker_id);
                     self.payload_size += digest.size();
                     self.digests.push((digest, worker_id));
                 }
