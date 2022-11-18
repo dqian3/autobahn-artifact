@@ -8,7 +8,10 @@ use futures::sink::SinkExt as _;
 use futures::stream::StreamExt as _;
 use rand::rngs::StdRng;
 use rand::SeedableRng as _;
+use std::collections::{btree_set, BTreeSet};
+use std::convert::TryInto;
 use std::net::SocketAddr;
+use std::vec;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
@@ -116,6 +119,29 @@ pub fn header() -> Header {
 }
 
 // Fixture
+pub fn special_header() -> Header {
+    let (author, secret) = keys().pop().unwrap();
+    //let par = vec![header().id];
+    let par = vec![Header::default().id];
+    let header = Header {
+        author,
+        round: 2,
+        parents: par.iter().cloned().collect(),
+
+        is_special: true,
+        view: 1,
+        round_view: 1,
+        special_parent_round: 1,
+        ..Header::default()
+    };
+    Header {
+        id: header.digest(),
+        signature: Signature::new(&header.digest(), &secret),
+        ..header
+    }
+}
+
+// Fixture
 pub fn headers() -> Vec<Header> {
     keys()
         .into_iter()
@@ -165,10 +191,49 @@ pub fn votes(header: &Header) -> Vec<Vote> {
 }
 
 // Fixture
+pub fn special_votes(header: &Header) -> Vec<Vote> {
+    keys()
+        .into_iter()
+        .map(|(author, secret)| {
+            let vote = Vote {
+                id: header.id.clone(),
+                round: header.round,
+                origin: header.author,
+                author,
+                signature: Signature::default(),
+                view: header.view,
+                special_valid: author.0[0] % 2, //make half valid half invalid
+                qc: None,
+                tc: None,
+            };
+            Vote {
+                signature: Signature::new(&vote.digest(), &secret),
+                ..vote
+            }
+        })
+        .collect()
+}
+
+// Fixture
 pub fn certificate(header: &Header) -> Certificate {
     Certificate {
         header: header.clone(),
         special_valids: vec![0u8, 0u8, 0u8],
+        votes: votes(&header)
+            .into_iter()
+            .map(|x| (x.author, x.signature))
+            .collect(),
+    }
+}
+
+// Fixture
+pub fn special_certificate(header: &Header) -> Certificate {
+    Certificate {
+        header: header.clone(),
+        special_valids: votes(&header)
+            .into_iter()
+            .map(|x| x.special_valid)
+            .collect(),
         votes: votes(&header)
             .into_iter()
             .map(|x| (x.author, x.signature))

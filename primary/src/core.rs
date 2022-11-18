@@ -1,5 +1,6 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::aggregators::{CertificatesAggregator, VotesAggregator};
+use crate::common::special_header;
 use crate::error::{DagError, DagResult};
 use crate::messages::{Certificate, Header, Vote, QC, TC, matching_valids};
 use crate::primary::{PrimaryMessage, Round};
@@ -168,14 +169,19 @@ impl Core {
         //TODO: Modify so we don't have to wait for parent cert if the block is special -- but need to wait for parent.
         let parents;
         if header.is_special && header.parents.len() == 1{
+            println!("validating special");
             //TODO: Check that parent header has been received. // IF so, then when a cert for this special block forms, also form a dummy cert of the parent.
             //1) Read from store to confirm parent exists.
+            
             parents = self.synchronizer.get_special_parent(&header).await?;
           
+            println!("sync finds");
             ensure!( //check that special parent round matches claimed round
                 parents[0].round() == header.special_parent_round && header.special_parent_round + 1 == header.round,
                 DagError::MalformedHeader(header.id.clone())
             );
+
+            println!("validating special");
             ensure!( //check that special parent and special header have same parent
                 parents[0].origin() == header.author,
                 DagError::MalformedHeader(header.id.clone())
@@ -212,6 +218,7 @@ impl Core {
             return Ok(());
         }
 
+
         // Store the header.
         let bytes = bincode::serialize(&header).expect("Failed to serialize header");
         self.store.write(header.id.to_vec(), bytes).await;
@@ -221,7 +228,7 @@ impl Core {
             .last_voted
             .entry(header.round)
             .or_insert_with(HashSet::new)
-            .insert(header.author)
+            .insert(header.author)  //checks that we have not already voted.
         {
             //TODO: only do this if header is special
               //TODO: For special headers: Upcall to consensus layer to confirm whether the special header is valid for consensus
@@ -235,8 +242,12 @@ impl Core {
             }
             else{
                  // Make a vote and send it to the header's creator.
+                 
                 return self.create_vote(header, 0, None, None).await;
             }
+        }
+        else{
+            debug!("have already voted for header from author {} in round {}", header.author, header.round);
         }
            
         Ok(())
@@ -277,7 +288,7 @@ impl Core {
     async fn process_vote(&mut self, vote: Vote) -> DagResult<()> {
         debug!("Processing {:?}", vote);
 
-        
+        println!("received valid vote");
 
         // Add it to the votes' aggregator and try to make a new certificate.
         if let Some(certificate) =
@@ -285,6 +296,7 @@ impl Core {
                 .append(vote, &self.committee, &self.current_header)?   //TODO: If want to use all to all broadcast, then must create a votes_aggregator for every header we are processing.
         {
             debug!("Assembled {:?}", certificate);
+            println!("assembled cert");
 
             // Broadcast the certificate.
             let addresses = self
@@ -303,7 +315,7 @@ impl Core {
 
             //TODO: Need to wait for additional votes if special and not enough valid votes. (A little tricky, since we may already be moving the round => i.e. current_header is no longer matching)
 
-            // Process the new certificate.
+            //Process the new certificate.
             self.process_certificate(certificate)
                 .await
                 .expect("Failed to process valid certificate");
@@ -438,7 +450,6 @@ impl Core {
             self.current_header.round <= vote.round,
             DagError::VoteTooOld(vote.digest(), vote.round)
         );
-
         // Ensure we receive a vote on the expected header.
         ensure!(
             vote.id == self.current_header.id
@@ -450,7 +461,8 @@ impl Core {
         //For special blocks that were invalidated also ensure that invalidation carries a correct proof
                      //Note TODO: Currently uses current_header to lookup relevant header id-- if we want to broadcast votes instead (for special headers) then we need to look up headers in processing
         //FIXME: Can we write this code nicer... I just played around with some existing features I saw.
-        if self.current_header.is_special && vote.special_valid == 0 {
+        //TODO: Currently not in use.
+        if false && self.current_header.is_special && vote.special_valid == 0 {
             match &vote.tc {
                 Some(tc) => { //invalidation proof = a TC that formed for the current view (or a future one). Implies one cannot vote in this view anymore.
                     ensure!( 
@@ -498,6 +510,10 @@ impl Core {
 
     // Main loop listening to incoming messages.
     pub async fn run(&mut self) {
+        //write starting header to store --> just to support Special unit testing
+        let bytes = bincode::serialize(&Header::default()).expect("Failed to serialize header");
+        self.store.write(Header::default().id.to_vec(), bytes).await;
+
         loop {
             let result = tokio::select! {
                 // We receive here messages from other primaries.
