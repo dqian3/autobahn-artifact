@@ -635,7 +635,7 @@ async fn process_special_votes() {
     // let received = rx_committer.recv().await.unwrap();
     // assert_eq!(received, expected);
 
-    println!("num votes: {}", expected.votes.len());
+    println!("expected num votes: {}", expected.votes.len());
 
      // Spawn all listeners to receive our newly formed certificate.
     let cert_handles: Vec<_> = committee
@@ -647,18 +647,11 @@ async fn process_special_votes() {
     // Ensure all listeners got the certificate.
     for received in try_join_all(cert_handles).await.unwrap() {
         match bincode::deserialize(&received).unwrap() {
-            PrimaryMessage::Certificate(x) => {println!{"received cert"}; assert_eq!(x, expected)},
+            PrimaryMessage::Certificate(x) => {println!{"received cert with {} votes", x.votes.len()}; assert_eq!(x, expected)},
             x => panic!("Unexpected message: {:?}", x),
         }
     }
 }
-
-
-//todo: process special cert
-   //TODO: (for process cert): Create receiver for committer/consensus
-
-//TODO:    
-// create special head
 
 
 #[tokio::test]

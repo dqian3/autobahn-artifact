@@ -35,14 +35,15 @@ pub struct Header {
     
     pub is_special: bool,
     pub view: View,
-    pub round_view: Round, //round that was proposed by the last view.
+    pub prev_view_round: Round, //round that was proposed by the last view.
+    pub special_parent: Option<Digest>, //Digest of the header of the special parent.
     pub special_parent_round: Round, //round of the parent we have special edge to (only used to re-construct parent cert digest in committer)
    // pub ticket: Ticket, //TODO: Add ticket.
 
 }
 
-//NOTE: A header is special if "is_special = true". It contains a view, round_view, and its parents may be just a single edge -- a Digest of its parent header (notably not of a Cert)
-// Special headers currently do not need to carry the QC/TC to justify their ticket -- we keep that at the consensu layer. The view and round_view references the relevant QC/TC.
+//NOTE: A header is special if "is_special = true". It contains a view, prev_view_round, and its parents may be just a single edge -- a Digest of its parent header (notably not of a Cert)
+// Special headers currently do not need to carry the QC/TC to justify their ticket -- we keep that at the consensu layer. The view and prev_view_round references the relevant QC/TC.
 impl Header {
     pub async fn new(
         author: PublicKey,
@@ -52,8 +53,10 @@ impl Header {
         signature_service: &mut SignatureService,
         is_special: bool,
         view: View,
-        round_view: Round,
+        prev_view_round: Round,
+        special_parent: Option<Digest>,
         special_parent_round: Round,
+
     ) -> Self {
         let header = Self {
             author,
@@ -64,7 +67,8 @@ impl Header {
             signature: Signature::default(),
             is_special: is_special,
             view: view,
-            round_view: round_view,
+            prev_view_round: prev_view_round,
+            special_parent,
             special_parent_round,
         };
         let id = header.digest();
@@ -130,7 +134,12 @@ impl Hash for Header {
         let f: u8 = if self.is_special { 1u8 } else { 0u8 };
         hasher.update(f.to_le_bytes());
         hasher.update(&self.view.to_le_bytes());
-        hasher.update(&self.round_view.to_le_bytes());
+        hasher.update(&self.prev_view_round.to_le_bytes());
+        
+        match &self.special_parent {
+            Some(parent) => hasher.update(parent),
+            None => {},
+        }
         hasher.update(&self.special_parent_round.to_le_bytes());
         
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
@@ -206,7 +215,7 @@ impl Vote {
 
         // if &self.is_special && !&self.special_valid{
         //     match qc {
-        //         Some(x) => { }//TODO: Check QC larger than proposed view/round_view. //FIXME: ... must include view... Verify QC sigs }, 
+        //         Some(x) => { }//TODO: Check QC larger than proposed view/prev_view_round. //FIXME: ... must include view... Verify QC sigs }, 
         //         None => { 
         //             match qc {
         //                 Some(x) => {  }, 
@@ -506,7 +515,7 @@ impl fmt::Display for Block {
 pub struct AcceptVote {
     pub hash: Digest,
     pub view: View,
-    pub round_view: Round,
+    pub prev_view_round: Round,
     pub author: PublicKey,
     pub signature: Signature,
 }
@@ -520,7 +529,7 @@ impl AcceptVote {
         let vote = Self {
             hash: header.id.clone(),
             view: header.view,
-            round_view: header.round,
+            prev_view_round: header.round,
             author,
             signature: Signature::default(),
         };
@@ -546,7 +555,7 @@ impl Hash for AcceptVote {
         let mut hasher = Sha512::new();
         hasher.update(&self.hash);
         hasher.update(self.view.to_le_bytes());
-        hasher.update(self.round_view.to_le_bytes());
+        hasher.update(self.prev_view_round.to_le_bytes());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
@@ -561,7 +570,7 @@ impl fmt::Debug for AcceptVote {
 pub struct QC {
     pub hash: Digest,
     pub view: View,
-    pub round_view: Round,
+    pub prev_view_round: Round,
     pub votes: Vec<(PublicKey, Signature)>,
 }
 
@@ -600,7 +609,7 @@ impl Hash for QC {
         let mut hasher = Sha512::new();
         hasher.update(&self.hash);
         hasher.update(self.view.to_le_bytes());
-        hasher.update(self.round_view.to_le_bytes());
+        hasher.update(self.prev_view_round.to_le_bytes());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }

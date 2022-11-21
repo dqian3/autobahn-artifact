@@ -169,7 +169,7 @@ impl Core {
 
         //TODO: Modify so we don't have to wait for parent cert if the block is special -- but need to wait for parent.
         
-        if header.is_special && header.parents.len() == 1{
+        if header.is_special && header.special_parent.is_some() {
             //TODO: Check that parent header has been received. // IF so, then when a cert for this special block forms, also form a dummy cert of the parent.
             //1) Read from store to confirm parent exists.
             
@@ -187,27 +187,31 @@ impl Core {
             );
             
         }
-        else{
-            let parents = self.synchronizer.get_parents(&header).await?;
-            if parents.is_empty() {
-                debug!("Processing of {} suspended: missing parent(s)", header.id);
-                return Ok(());
-            }
+        
+        let (parents, is_missing_parents) = self.synchronizer.get_parents(&header).await?;
+        if is_missing_parents {
+            debug!("Processing of {} suspended: missing parent(s)", header.id);
+            return Ok(());
+        }
 
-                // Check the parent certificates. Ensure the parents form a quorum and are all from the previous round.
+            // Check the parent certificates. Ensure the parents form a quorum and are all from the previous round.
+            //Note: Does not apply to special blocks who have a special edge -> if they skip rounds can have long edges.
+        if !header.is_special || header.special_parent.is_none(){
             let mut stake = 0;
             for x in parents {
                 ensure!(
-                    x.round() + 1 == header.round,
+                    x.round() + 1 == header.round,                                                                  
                     DagError::MalformedHeader(header.id.clone())
                 );
                 stake += self.committee.stake(&x.origin());
             }
             ensure!(
-                stake >= self.committee.quorum_threshold(),
+                stake >= self.committee.quorum_threshold() || (header.is_special && header.special_parent.is_some()), 
                 DagError::HeaderRequiresQuorum(header.id.clone())
             );
         }
+            
+        
     
 
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
@@ -343,29 +347,28 @@ impl Core {
 
         // Ensure we have all the ancestors of this certificate yet. If we don't, the synchronizer will gather
         // them and trigger re-processing of this certificate.
+        if !self.synchronizer.deliver_certificate(&certificate).await? {
+            debug!(
+                "Processing of {:?} suspended: missing ancestors",
+                 certificate
+            );
+            return Ok(());
+        }
 
+        //Additional special block processing
         //Note: If it is a special block, then don't need to wait for the special edge parent. ==> generate a special cert for the parent to pass to the DAG
-        if certificate.header.is_special && certificate.header.parents.len() == 1 {
-
-            let (special_parent, is_genesis) = self.synchronizer.get_special_parent(&certificate.header).await?;
-            //Create dummy cert for parent and pass to committer.
-            let cert = Certificate {
-                header: special_parent,
-                ..Certificate::default()
-            };
-            self.tx_committer.send(cert).await.expect("Failed to send special parent certificate to committer");
-
-        }
-        else{
-
-            if !self.synchronizer.deliver_certificate(&certificate).await? {
-                debug!(
-                    "Processing of {:?} suspended: missing ancestors",
-                    certificate
-                );
-                return Ok(());
-            }
-        }
+        if certificate.header.is_special && certificate.header.special_parent.is_some() {
+            //TODO: CHeck if we already have cert.
+                        let (special_parent, is_genesis) = self.synchronizer.get_special_parent(&certificate.header).await?;
+                        //Create dummy cert for parent and pass to committer.
+                        let cert = Certificate {
+                            header: special_parent,
+                            ..Certificate::default()
+                        };
+                        self.tx_committer.send(cert).await.expect("Failed to send special parent certificate to committer");
+            
+                    }
+        
 
 
         // Store the certificate.
@@ -397,8 +400,8 @@ impl Core {
        
     
 
-        //forward cert to Consensus Dag view. NOTE: FIXME: Forwards cert with whatever special_valids are available. This might not be the ones we use for a special block that is passed up
-        //Currently this is safe/compatible because special_valids are not part of the cert digest (I consider them to be "extra" info of the signatures)
+        //forward cert to Consensus Dag view. NOTE: Forwards cert with whatever special_valids are available. This might not be the ones we use for a special block that is passed up
+        //Currently this is safe/compatible because neither votes, norspecial_valids are part of the cert digest and equality definition (I consider special_valids to be "extra" info of the signatures)
         
         debug!("Committer Received {:?}", certificate);
         self.tx_committer

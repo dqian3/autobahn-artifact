@@ -120,7 +120,7 @@ async fn propose_special_ticket_first() {
    
     assert_eq!(header.is_special, true);
     assert_eq!(header.view, 1);
-    assert_eq!(header.round_view, 5);
+    assert_eq!(header.prev_view_round, 5);
     //TODO: special_parent round
     println!("num parents {:?}", header.parents.len());
 
@@ -194,7 +194,7 @@ async fn propose_special_ticket_after() {
    
     assert_eq!(header.is_special, true);
     assert_eq!(header.view, 1);
-    assert_eq!(header.round_view, 5);
+    assert_eq!(header.prev_view_round, 5);
     //TODO: special_parent round
     assert_eq!(header.parents.len(), 1);
     assert_eq!(header.special_parent_round, last_header_round);
@@ -273,7 +273,7 @@ async fn propose_special_ticket_after_requiring_parents() {
    
     assert_eq!(header.is_special, true);
     assert_eq!(header.view, 1);
-    assert_eq!(header.round_view, 5);
+    assert_eq!(header.prev_view_round, 5);
     //TODO: special_parent round
     assert_eq!(header.parents.len(), 1);
     assert_eq!(header.special_parent_round, last_header_round);
@@ -322,7 +322,7 @@ async fn propose_special_ticket_after_requiring_parents() {
 
     assert_eq!(header.is_special, true);
     assert_eq!(header.view, 2);
-    assert_eq!(header.round_view, 6);
+    assert_eq!(header.prev_view_round, 6);
     //TODO: special_parent round
     assert_eq!(header.parents.len(), 4);
     // assert_eq!(header.special_parent_round, last_header_round);

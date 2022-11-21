@@ -49,11 +49,13 @@ pub struct Proposer {
     // The current view from consensus
     view: View,
     // The round proposed by the last view in consensus.
-    round_view: Round,
+    prev_view_round: Round,
     // Whether to propose special block
     propose_special: bool,
     // Whether the previous block had enough parents. If yes, can issue special block without. If not, then special block must wait for parents.
     last_has_parents: bool,
+    // Whether to include special edge or not.
+    use_special_parent: bool,
 }
 
 impl Proposer {
@@ -105,9 +107,10 @@ impl Proposer {
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
                 view: 0,
-                round_view: 1,
+                prev_view_round: 1,
                 propose_special: false,
                 last_has_parents: true,
+                use_special_parent: false,
             }
             .run()
             .await;
@@ -126,7 +129,8 @@ impl Proposer {
                 &mut self.signature_service,
                 is_special,
                 self.view,
-                self.round_view,
+                self.prev_view_round,
+                if self.use_special_parent {Some(self.last_header_id.clone())} else {None},
                 self.last_header_round,
             ).await;
 
@@ -190,14 +194,19 @@ impl Proposer {
                     }
                     else{  
                         self.last_has_parents = false ;
-                        self.last_parents.push(self.last_header_id.clone()); //Use last header as special edge. //TODO: Consensus should process parents. Distinguish whether n-f edges, or just 1 edge (special)
+                        self.use_special_parent = true; 
+                        //self.last_parents.push(self.last_header_id.clone()); //Use last header as special edge. //TODO: Consensus should process parents. Distinguish whether n-f edges, or just 1 edge (special)
                                                                                                                     // If n-f: Do the same Synchronization/availability checks that the DAG does.
                                                                                                                     // If 1: Check if DAG has that payload. If yes, vote. If no, block processing and wait.
                                                                                                                //TODO: if want to simplify, can always use just 1 edge for special blocks.
                     } 
-                    
+                    //TODO: Special case: Have enough parents, but they are from an older round than the latest header? ==> as far as I can tell Impossible:
+                     //if we received parents before ticket for last header, then latest header wouldve included them
+                    //if we received ticket for last header first, then we currently reject the parents, because they are for a smaller round   ( //should we keep rejecting the parents, or is there a benefit to using them?)
+                    // ==> Conclusion: If we have enough parents, and we receive a ticket for a view that is skipping ahead, then those parents must be for a round >= than our last header. Thus we should use them.
 
                     self.make_header(true).await;
+                    self.use_special_parent = false;
                     self.propose_special = false; //reset 
                     proposing = true;
                 }
@@ -231,7 +240,7 @@ impl Proposer {
                     //TODO: Note: Need a defense mechanism to ensure Byz proposer cannot arbitrarily exhaust round space. Maybe reject voting on headers that are too far ahead (avoid forming ticket)
 
                     self.view = view;
-                    self.round_view = round;
+                    self.prev_view_round = round;
                     self.propose_special = true;
                     debug!("Dag moved to round {}, and view {}. propose_special {}", self.round, self.view, self.propose_special);
     

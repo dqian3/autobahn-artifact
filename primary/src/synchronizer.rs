@@ -87,16 +87,16 @@ impl Synchronizer {
         Ok(true)
     }
 
-    pub async fn get_special_parent(&mut self, header: &Header) -> DagResult<((Header, bool))> {
+    pub async fn get_special_parent(&mut self, header: &Header) -> DagResult<(Header, bool)> {
 
-        let digest = header.parents.iter().next().unwrap().clone();
-        if digest == self.genesis_header.id {  //Note: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
+        let digest = header.special_parent.as_ref().unwrap();//header.parents.iter().next().unwrap().clone();
+        if digest == &self.genesis_header.id {  //Note: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
             //parents.push(self.genesis_header.clone());
             return Ok((self.genesis_header.clone(), true))
         }
         else{
             match self.store.read(digest.to_vec()).await? {
-                Some(header) => return Ok((bincode::deserialize(&header)?, false)),
+                Some(parent_header) => return Ok((bincode::deserialize(&parent_header)?, false)),
                 None => {},
             };
         }
@@ -118,7 +118,7 @@ impl Synchronizer {
     /// Returns the parents of a header if we have them all. If at least one parent is missing,
     /// we return an empty vector, synchronize with other nodes, and re-schedule processing
     /// of the header for when we will have all the parents.
-    pub async fn get_parents(&mut self, header: &Header) -> DagResult<Vec<Certificate>> {
+    pub async fn get_parents(&mut self, header: &Header) -> DagResult<(Vec<Certificate>, bool)> {
         let mut missing = Vec::new();
         let mut parents = Vec::new();
         for digest in &header.parents {
@@ -139,14 +139,14 @@ impl Synchronizer {
         }
 
         if missing.is_empty() {
-            return Ok(parents);
+            return Ok((parents, false));
         }
 
         self.tx_header_waiter
             .send(WaiterMessage::SyncParents(missing, header.clone()))
             .await
             .expect("Failed to send sync parents request");
-        Ok(Vec::new())
+        Ok((Vec::new(), true))
     }
 
     /// Check whether we have all the ancestors of the certificate. If we don't, send the certificate to

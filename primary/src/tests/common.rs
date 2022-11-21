@@ -109,6 +109,7 @@ pub fn header() -> Header {
             .iter()
             .map(|x| x.digest())
             .collect(),
+        is_special: false,
         ..Header::default()
     };
     Header {
@@ -122,15 +123,16 @@ pub fn header() -> Header {
 pub fn special_header() -> Header {
     let (author, secret) = keys().pop().unwrap();
     //let par = vec![header().id];
-    let par = vec![Header::default().id];
+    //let par = vec![Header::default().id];
     let header = Header {
         author,
         round: 1,
-        parents: par.iter().cloned().collect(),
+        //parents: par.iter().cloned().collect(),
 
         is_special: true,
         view: 1,
-        round_view: 0,
+        prev_view_round: 0,
+        special_parent: Some(Header::default().id),
         special_parent_round: 0,
         ..Header::default()
     };

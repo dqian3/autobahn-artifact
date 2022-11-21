@@ -335,7 +335,7 @@ impl Core {
         if let Some(qc) = self.aggregator.add_accept_vote(vote.clone())? {
             debug!("Assembled {:?}", qc);
 
-            // Process the QC.  Adopts view, high qc, and resets timer. //Adopt round_view if higher.
+            // Process the QC.  Adopts view, high qc, and resets timer. //Adopt prev_view_round if higher.
             self.process_qc(&qc).await;
              
              // Broadcast the QC. //TODO: alternatively: pass it down as ticket.
@@ -367,7 +367,7 @@ impl Core {
         // Ensure the vote is well formed.
         //qc.verify(&self.committee)?;
         
-        // Process the QC.  Adopts view, high qc, and resets timer. //Adopt round_view if higher.
+        // Process the QC.  Adopts view, high qc, and resets timer. //Adopt prev_view_round if higher.
         self.process_qc(qc).await;
         
         //upcall to app layer: Order dag, and execute.
@@ -463,7 +463,7 @@ impl Core {
         debug!("Processing {:?}", qc);
         self.advance_view(qc.view).await;
         self.update_high_qc(qc);
-        self.round = max(self.round, qc.round_view);
+        self.round = max(self.round, qc.prev_view_round);
     }
 
     //Call process_header upon receiving upcall from Dag layer.
