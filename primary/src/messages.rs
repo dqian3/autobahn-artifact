@@ -76,6 +76,14 @@ impl Header {
         }
     }
 
+    pub fn genesis(committee: &Committee) -> Self {
+        let (name, auth) = committee.authorities.iter().next().unwrap();
+        Header {
+            author: *name,
+            ..Self::default()
+        }
+    }
+
     pub fn verify(&self, committee: &Committee) -> DagResult<()> {
         // Ensure the header id is well formed.
         ensure!(self.digest() == self.id, DagError::InvalidHeaderId);

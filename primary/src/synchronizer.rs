@@ -23,6 +23,8 @@ pub struct Synchronizer {
     tx_certificate_waiter: Sender<Certificate>,
     /// The genesis and its digests.
     genesis: Vec<(Digest, Certificate)>,
+    /// Genesis header
+    genesis_header: Header, 
 }
 
 impl Synchronizer {
@@ -42,6 +44,7 @@ impl Synchronizer {
                 .into_iter()
                 .map(|x| (x.digest(), x))
                 .collect(),
+            genesis_header: Header::genesis(committee),
         }
     }
 
@@ -84,40 +87,25 @@ impl Synchronizer {
         Ok(true)
     }
 
-    pub async fn get_special_parent(&mut self, header: &Header) -> DagResult<Vec<Certificate>> {
-        let mut missing = Vec::new();
-        let mut parents = Vec::new();
-        for digest in &header.parents {
-            if let Some(genesis) = self
-                .genesis
-                .iter()
-                .find(|(x, _)| x == digest)
-                .map(|(_, x)| x)
-            {
-                parents.push(genesis.clone());
-                continue;
-            }
+    pub async fn get_special_parent(&mut self, header: &Header) -> DagResult<((Header, bool))> {
 
+        let digest = header.parents.iter().next().unwrap().clone();
+        if digest == self.genesis_header.id {  //Note: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
+            //parents.push(self.genesis_header.clone());
+            return Ok((self.genesis_header.clone(), true))
+        }
+        else{
             match self.store.read(digest.to_vec()).await? {
-                Some(header) => parents.push( 
-                     Certificate {
-                      header: bincode::deserialize(&header)?,
-                      ..Certificate::default()
-                     }
-                ),
-                None => missing.push(digest.clone()),
+                Some(header) => return Ok((bincode::deserialize(&header)?, false)),
+                None => {},
             };
         }
+      
+        return Err(DagError::InvalidSpecialParent);
+        
 
-        if missing.is_empty() {
-            return Ok(parents);
-        }
+        //if we dont have special parent: ignore request --> should be there when using FIFO channels ==> TCP is FIFO, and individual channels are FIFO (e.g. channel for receiving new header proposal)
 
-        else{
-            return Err(DagError::InvalidSpecialParent);
-        }
-
-        //if we dont have special parent: ignore request --> should be there when using FIFO channels
         //TODO: Start a waiter for it. FIXME: currently SyncParents requests certs. But we just want to request a header.
 
         // self.tx_header_waiter

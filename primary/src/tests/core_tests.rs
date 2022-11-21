@@ -4,8 +4,8 @@ use crate::common::{
     certificate, committee, committee_with_base_port, header, headers, keys, listener, votes, special_header, special_certificate, special_votes,
 };
 use futures::future::try_join_all;
-use std::fs;
-use tokio::sync::mpsc::channel;
+use std::{fs, time::Duration};
+use tokio::{sync::mpsc::channel, time::sleep};
 
 #[tokio::test]
 async fn process_header() {
@@ -300,7 +300,7 @@ async fn process_votes() {
             .await
             .unwrap();
     }
-
+    println!("num votes: {}", expected.votes.len());
     // Ensure all listeners got the certificate.
     for received in try_join_all(handles).await.unwrap() {
         match bincode::deserialize(&received).unwrap() {
@@ -525,10 +525,10 @@ async fn process_special_header() {
 //todo: process special vote
 
 
-//TODO: NOTE: To run this, the default current header of the core must be special header. FIXME: simulate this by processing own header first. (need validation reply.) (special header needs parent header first...)
-//FIXME: Also must disable process_certificate.
+
+
 #[tokio::test]
-async fn process_special_votes() { //TODO: must include processing of 1 certificate. TODO: must include parent header.
+async fn process_special_votes() { 
     let (name, secret) = keys().pop().unwrap();
     let signature_service = SignatureService::new(secret);
 
@@ -537,15 +537,15 @@ async fn process_special_votes() { //TODO: must include processing of 1 certific
     let (tx_sync_headers, _rx_sync_headers) = channel(1);
     let (tx_sync_certificates, _rx_sync_certificates) = channel(1);
     let (tx_primary_messages, rx_primary_messages) = channel(1);
-    let (tx_headers_loopback, rx_headers_loopback) = channel(1);
+    let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
     let (_tx_certificates_loopback, rx_certificates_loopback) = channel(1);
-    let (_tx_headers, rx_headers) = channel(1);
+    let (tx_headers, rx_headers) = channel(1);
     let (tx_consensus, _rx_consensus) = channel(1);
     let (tx_parents, _rx_parents) = channel(1);
 
     let(tx_committer, _rx_committer) = channel(1);
-    let(_tx_validation, rx_validation) = channel(1);
-    let(tx_sailfish, _rx_special) = channel(1);
+    let(tx_validation, rx_validation) = channel(1);
+    let(tx_sailfish, mut rx_special) = channel(1);
 
     // Create a new test store.
     let path = ".db_test_process_vote";
@@ -581,51 +581,73 @@ async fn process_special_votes() { //TODO: must include processing of 1 certific
         tx_sailfish
     );
 
-    //TODO: make own parent header.
+    // Spawn all listeners to receive our newly formed certificate.
+    let vote_handles: Vec<_> = committee
+        .others_primaries(&name)
+        .iter()
+        .map(|(_, address)| listener(address.clone().primary_to_primary))
+        .collect();
 
-    let parent = header();
-    tx_headers_loopback
-        .send(parent)
-        .await
-        .unwrap();
-    //will broadcast and process own vote.
-    //ignore all processing.
+    //Send new special header to core (to propose itself)
 
     let header = special_header();
-    tx_headers_loopback
+    tx_headers
         .send(header)
         .await
         .unwrap();
+    //will broadcast header and process own vote
 
-    //will broadcast and process own vote
+    //Ensure special header is processed first and becomes "current_header"
+    sleep(Duration::from_millis(100)).await;
 
-    //Now that we have processed header, we can process votes and cert.
 
-
-    // Make the certificate we expect to receive.
-    let expected = special_certificate(&special_header());
-
-    // Spawn all listeners to receive our newly formed certificate.
-    let handles: Vec<_> = committee
-        .others_primaries(&name)
-        .iter()
-        .map(|(_, address)| listener(address.primary_to_primary))
-        .collect();
-
-    // Send a votes to the core.
+      // Ensure all listeners got the header.
+      for received in try_join_all(vote_handles).await.unwrap() {
+        match bincode::deserialize(&received).unwrap() {
+            PrimaryMessage::Header(x) => assert_eq!(x, special_header()),
+            x => panic!("Unexpected message: {:?}", x),
+        }
+    }
+    println!("received all votes");
+    // // Send a votes to the core. ==> Sending only 2 votes. Supplementing quorum with own vote.
+    let mut count = 0;
     for vote in special_votes(&special_header()) {
+        if vote.author == name {continue;}
         tx_primary_messages
             .send(PrimaryMessage::Vote(vote))
             .await
             .unwrap();
+        count = count+1;
+        if count == 2 { break;}
     }
+
+    println!("count {}", count); 
+
+     //send back val result = correct ==> allows us to form our own vote.
+     let val = rx_special.recv().await.unwrap();
+     tx_validation.send((val, name.0[0] % 2, None, None)).await.unwrap();
 
     //Upon receiving all votes, will broadcast cert.
 
+    // Make the certificate we expect to receive.
+    let expected = special_certificate(&special_header());
+    
+    // let received = rx_committer.recv().await.unwrap();
+    // assert_eq!(received, expected);
+
+    println!("num votes: {}", expected.votes.len());
+
+     // Spawn all listeners to receive our newly formed certificate.
+    let cert_handles: Vec<_> = committee
+    .others_primaries(&name)
+    .iter()
+    .map(|(_, address)| listener(address.clone().primary_to_primary))
+    .collect();
+
     // Ensure all listeners got the certificate.
-    for received in try_join_all(handles).await.unwrap() {
+    for received in try_join_all(cert_handles).await.unwrap() {
         match bincode::deserialize(&received).unwrap() {
-            PrimaryMessage::Certificate(x) => assert_eq!(x, expected),
+            PrimaryMessage::Certificate(x) => {println!{"received cert"}; assert_eq!(x, expected)},
             x => panic!("Unexpected message: {:?}", x),
         }
     }
@@ -636,9 +658,11 @@ async fn process_special_votes() { //TODO: must include processing of 1 certific
    //TODO: (for process cert): Create receiver for committer/consensus
 
 //TODO:    
+// create special head
+
 
 #[tokio::test]
-async fn process_special_certificates() {
+async fn process_special_certificate() {
     let (name, secret) = keys().pop().unwrap();
     let signature_service = SignatureService::new(secret);
 
@@ -651,7 +675,7 @@ async fn process_special_certificates() {
     let (tx_consensus, mut _rx_consensus) = channel(3);
     let (tx_parents, mut rx_parents) = channel(1);
 
-    let(tx_committer, mut rx_committer) = channel(3);
+    let(tx_committer, mut rx_committer) = channel(2);
     let(_tx_validation, rx_validation) = channel(1);
     let(tx_sailfish, _rx_special) = channel(3);
 
@@ -689,35 +713,30 @@ async fn process_special_certificates() {
         tx_sailfish
     );
 
-    // Send enough certificates to the core.
-    let certificates: Vec<_> = headers()
-        .iter()
-        .take(3)
-        .map(|header| certificate(header))
-        .collect();
-
-    for x in certificates.clone() {
-        tx_primary_messages
-            .send(PrimaryMessage::Certificate(x))
+    //Send one special cert to core
+    let cert = special_certificate(&special_header());
+    tx_primary_messages
+            .send(PrimaryMessage::Certificate(cert.clone()))
             .await
             .unwrap();
-    }
 
-    // // Ensure the core sends the parents of the certificates to the proposer.
-    let received = rx_parents.recv().await.unwrap();
-    let parents = certificates.iter().map(|x| x.digest()).collect();
-    assert_eq!(received, (parents, 1));
+    //Make sure cert is stored
+    //Make sure committer receives two certs, one for parent, one for self.
 
     // Ensure the core sends the certificates to the consensus committer.
-    for x in certificates.clone() {
-        let received = rx_committer.recv().await.unwrap();
-        assert_eq!(received, x);
-    }
+    let expected_parent_cert = Certificate {
+        header: Header::genesis(&committee()),
+        ..Certificate::default()
+    };
+    let parent = rx_committer.recv().await.unwrap(); //TODO: Receive special parent
+    assert_eq!(parent, expected_parent_cert);
 
+    let received = rx_committer.recv().await.unwrap();
+    assert_eq!(received, cert);
+    
     // Ensure the certificates are stored.
-    for x in &certificates {
-        let stored = store.read(x.digest().to_vec()).await.unwrap();
-        let serialized = bincode::serialize(x).unwrap();
-        assert_eq!(stored, Some(serialized));
-    }
+    let stored = store.read(cert.digest().to_vec()).await.unwrap();
+    let serialized = bincode::serialize(&cert).unwrap();
+    assert_eq!(stored, Some(serialized));
+    
 }

@@ -130,6 +130,7 @@ impl Core {
     }
 
     async fn process_own_header(&mut self, header: Header) -> DagResult<()> {
+    
         // Reset the votes aggregator.
         self.current_header = header.clone();
         self.votes_aggregator = VotesAggregator::new();
@@ -167,29 +168,27 @@ impl Core {
         // reschedule processing of this header.
 
         //TODO: Modify so we don't have to wait for parent cert if the block is special -- but need to wait for parent.
-        let parents;
+        
         if header.is_special && header.parents.len() == 1{
-            println!("validating special");
             //TODO: Check that parent header has been received. // IF so, then when a cert for this special block forms, also form a dummy cert of the parent.
             //1) Read from store to confirm parent exists.
             
-            parents = self.synchronizer.get_special_parent(&header).await?;
-          
-            println!("sync finds");
+            let (special_parent, is_genesis) = self.synchronizer.get_special_parent(&header).await?;  
+            //TODO: FIXME: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
+        
             ensure!( //check that special parent round matches claimed round
-                parents[0].round() == header.special_parent_round && header.special_parent_round + 1 == header.round,
+                special_parent.round == header.special_parent_round && header.special_parent_round + 1 == header.round,
                 DagError::MalformedHeader(header.id.clone())
             );
-
-            println!("validating special");
-            ensure!( //check that special parent and special header have same parent
-                parents[0].origin() == header.author,
-                DagError::MalformedHeader(header.id.clone())
+    
+            ensure!( //check that special parent and special header have same parent //TODO: OR parent = genesis header.
+                 special_parent.author == header.author || is_genesis,
+                 DagError::MalformedHeader(header.id.clone())
             );
             
         }
         else{
-            parents = self.synchronizer.get_parents(&header).await?;
+            let parents = self.synchronizer.get_parents(&header).await?;
             if parents.is_empty() {
                 debug!("Processing of {} suspended: missing parent(s)", header.id);
                 return Ok(());
@@ -288,15 +287,17 @@ impl Core {
     async fn process_vote(&mut self, vote: Vote) -> DagResult<()> {
         debug!("Processing {:?}", vote);
 
-        println!("received valid vote");
-
+    
         // Add it to the votes' aggregator and try to make a new certificate.
         if let Some(certificate) =
             self.votes_aggregator
                 .append(vote, &self.committee, &self.current_header)?   //TODO: If want to use all to all broadcast, then must create a votes_aggregator for every header we are processing.
         {
             debug!("Assembled {:?}", certificate);
-            println!("assembled cert");
+            
+            // // //FIXME: Just testing.
+            //  self.tx_committer.send(certificate.clone()).await.expect("Failed to send special parent certificate to committer");
+
 
             // Broadcast the certificate.
             let addresses = self
@@ -315,7 +316,7 @@ impl Core {
 
             //TODO: Need to wait for additional votes if special and not enough valid votes. (A little tricky, since we may already be moving the round => i.e. current_header is no longer matching)
 
-            //Process the new certificate.
+            //Process the new certificate. 
             self.process_certificate(certificate)
                 .await
                 .expect("Failed to process valid certificate");
@@ -345,19 +346,15 @@ impl Core {
 
         //Note: If it is a special block, then don't need to wait for the special edge parent. ==> generate a special cert for the parent to pass to the DAG
         if certificate.header.is_special && certificate.header.parents.len() == 1 {
-                for parent_digest in &certificate.header.parents {
-                      //TODO: create fake cert for parent and pass to commmitter.
-                      match self.store.read(parent_digest.to_vec()).await? {
-                        Some(header) => {
-                            let cert = Certificate {
-                                header: bincode::deserialize(&header)?,
-                                ..Certificate::default()
-                            };
-                            self.tx_committer.send(cert).await.expect("Failed to send special parent certificate to committer");
-                        }
-                        None => return Err(DagError::InvalidSpecialParent)
-                    };
-                }           
+
+            let (special_parent, is_genesis) = self.synchronizer.get_special_parent(&certificate.header).await?;
+            //Create dummy cert for parent and pass to committer.
+            let cert = Certificate {
+                header: special_parent,
+                ..Certificate::default()
+            };
+            self.tx_committer.send(cert).await.expect("Failed to send special parent certificate to committer");
+
         }
         else{
 
@@ -376,7 +373,7 @@ impl Core {
         self.store.write(certificate.digest().to_vec(), bytes).await;
 
         // Check if we have enough certificates to enter a new dag round and propose a header.
-        //FIXME: Unit tests get stuck in here.
+        //TODO: Change this into streaming certs. And let the proposer determine when n-f have been collected.
         if let Some(parents) = self
             .certificates_aggregators
             .entry(certificate.round())
@@ -445,7 +442,8 @@ impl Core {
         Ok(())
     }
 
-    fn sanitize_vote(&mut self, vote: &Vote) -> DagResult<()> {
+    fn sanitize_vote(&mut self, vote: &Vote) -> DagResult<()> {  //TODO: If we want to be able to wait for additional votes for consensus, this must be changed to receive older round votes too.
+        
         ensure!(
             self.current_header.round <= vote.round,
             DagError::VoteTooOld(vote.digest(), vote.round)
@@ -457,7 +455,7 @@ impl Core {
                 && vote.round == self.current_header.round,
             DagError::UnexpectedVote(vote.id.clone())
         );
-
+        
         //For special blocks that were invalidated also ensure that invalidation carries a correct proof
                      //Note TODO: Currently uses current_header to lookup relevant header id-- if we want to broadcast votes instead (for special headers) then we need to look up headers in processing
         //FIXME: Can we write this code nicer... I just played around with some existing features I saw.
@@ -511,8 +509,8 @@ impl Core {
     // Main loop listening to incoming messages.
     pub async fn run(&mut self) {
         //write starting header to store --> just to support Special unit testing
-        let bytes = bincode::serialize(&Header::default()).expect("Failed to serialize header");
-        self.store.write(Header::default().id.to_vec(), bytes).await;
+        // let bytes = bincode::serialize(&Header::default()).expect("Failed to serialize header");
+        // self.store.write(Header::default().id.to_vec(), bytes).await;
 
         loop {
             let result = tokio::select! {

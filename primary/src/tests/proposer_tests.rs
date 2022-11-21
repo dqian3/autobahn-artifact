@@ -105,8 +105,7 @@ async fn propose_special_ticket_first() {
         .await
         .unwrap();
 
-    //FIXME: Time sensitive, still can happen out of order sometimes.
-    sleep(Duration::from_secs(1)); //just to guarantee ticket arrives before digest (else normal block can be triggered.)
+    sleep(Duration::from_secs(1)).await; //just to guarantee ticket arrives before digest (else normal block can be triggered.)
 
     // Send enough digests for the header payload.
     let digest = Digest(name.0);
@@ -305,8 +304,7 @@ async fn propose_special_ticket_after_requiring_parents() {
         .await
         .unwrap();
 
-    //FIXME: Time sensitive, still can happen out of order sometimes.
-    sleep(Duration::from_millis(100000));  //sleep to guarantee ticket arrives before parents --> otherwise normal block can form.
+    sleep(Duration::from_millis(1000)).await;  //sleep to guarantee ticket arrives before parents --> otherwise normal block can form.
     //Generate dummy parents (creating 4 here)
     let parents = Certificate::genesis(&committee())
         .iter()

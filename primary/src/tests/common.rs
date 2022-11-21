@@ -125,13 +125,13 @@ pub fn special_header() -> Header {
     let par = vec![Header::default().id];
     let header = Header {
         author,
-        round: 2,
+        round: 1,
         parents: par.iter().cloned().collect(),
 
         is_special: true,
         view: 1,
-        round_view: 1,
-        special_parent_round: 1,
+        round_view: 0,
+        special_parent_round: 0,
         ..Header::default()
     };
     Header {
@@ -165,6 +165,7 @@ pub fn headers() -> Vec<Header> {
         })
         .collect()
 }
+
 
 // Fixture
 pub fn votes(header: &Header) -> Vec<Vote> {
@@ -202,7 +203,7 @@ pub fn special_votes(header: &Header) -> Vec<Vote> {
                 author,
                 signature: Signature::default(),
                 view: header.view,
-                special_valid: author.0[0] % 2, //make half valid half invalid
+                special_valid: author.0[0] % 2, //make some valid, some invalid
                 qc: None,
                 tc: None,
             };
@@ -230,11 +231,11 @@ pub fn certificate(header: &Header) -> Certificate {
 pub fn special_certificate(header: &Header) -> Certificate {
     Certificate {
         header: header.clone(),
-        special_valids: votes(&header)
+        special_valids: special_votes(&header)
             .into_iter()
             .map(|x| x.special_valid)
             .collect(),
-        votes: votes(&header)
+        votes: special_votes(&header)
             .into_iter()
             .map(|x| (x.author, x.signature))
             .collect(),
