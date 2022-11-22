@@ -9,7 +9,7 @@ use crypto::Hash as _;
 use crypto::{generate_keypair, Digest, PublicKey, SecretKey, Signature};
 use futures::sink::SinkExt as _;
 use futures::stream::StreamExt as _;
-use primary::Certificate;
+use primary::messages::Header;
 use rand::rngs::StdRng;
 use rand::SeedableRng as _;
 use std::net::SocketAddr;

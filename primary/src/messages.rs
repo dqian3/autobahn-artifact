@@ -166,6 +166,7 @@ impl fmt::Display for Header {
     }
 }
 
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Vote {
     pub id: Digest,  //the header we are voting for.

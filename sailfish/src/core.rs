@@ -471,7 +471,6 @@ impl Core {
     //Call process_header upon receiving upcall from Dag layer.
     #[async_recursion]
     async fn process_header(&mut self, header: Header) -> ConsensusResult<()> {
-       
 
         //1) view > last voted view
         ensure!(
@@ -490,7 +489,7 @@ impl Core {
             header.round > self.round,
             ConsensusError::NonMonotonicRounds(header.round, self.round)
         );
-       
+
 
         //3) Header signature correct
         header.verify(&self.committee)?;
@@ -504,7 +503,6 @@ impl Core {
         //5) TODO: Check if Ticket valid.
         // I.e. whether have QC/TC for view v-1 
         //If don't have QC/TC. Start a waiter. If waiter triggers, call this function again (or directly call down validation complete)
-        
 
         //6) Update latest prepared. Update latest_voted_view.
         self.view = header.view; //
