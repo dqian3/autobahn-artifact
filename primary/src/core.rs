@@ -1,6 +1,6 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::aggregators::{CertificatesAggregator, VotesAggregator};
-use crate::common::special_header;
+//use crate::common::special_header;
 use crate::error::{DagError, DagResult};
 use crate::messages::{Certificate, Header, Vote, QC, TC, matching_valids};
 use crate::primary::{PrimaryMessage, Round};

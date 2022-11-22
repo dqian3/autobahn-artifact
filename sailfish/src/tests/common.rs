@@ -1,7 +1,9 @@
 use super::*;
-use crate::config::Committee;
+use config::Committee;
+//use primary::config::Committee;
 use crate::consensus::Round;
-use crate::messages::{Block, Timeout, Vote, QC};
+use crate::consensus::View;
+use primary::messages::{Block, Timeout, Vote, QC};
 use bytes::Bytes;
 use crypto::Hash as _;
 use crypto::{generate_keypair, Digest, PublicKey, SecretKey, Signature};
@@ -33,7 +35,7 @@ pub fn committee() -> Committee {
                 (name, stake, address)
             })
             .collect(),
-        /* epoch */ 100,
+        /* epoch */ //100,
     )
 }
 
@@ -41,46 +43,53 @@ pub fn committee() -> Committee {
 pub fn committee_with_base_port(base_port: u16) -> Committee {
     let mut committee = committee();
     for authority in committee.authorities.values_mut() {
-        let port = authority.address.port();
-        authority.address.set_port(base_port + port);
+        //let port = authority.address.port();
+        let port = authority.consensus.consensus_to_consensus.port();
+        //authority.address.set_port(base_port + port);
+        authority.consensus.consensus_to_consensus.set_port(base_port + port);
     }
     committee
 }
 
-impl Block {
-    pub fn new_from_key(
+/*impl Block {
+    pub fn new_from_key_block(
         qc: QC,
         author: PublicKey,
-        round: Round,
+        view: View,
         payload: Vec<Certificate>,
         secret: &SecretKey,
-    ) -> Self {
+    ) -> Block {
         let block = Block {
             qc,
             tc: None,
             author,
-            round,
+            view,
             payload,
             signature: Signature::default(),
         };
         let signature = Signature::new(&block.digest(), secret);
-        Self { signature, ..block }
+        Block { signature, ..block }
     }
-}
+}*/
 
-impl PartialEq for Block {
+/*impl PartialEq for Block {
     fn eq(&self, other: &Self) -> bool {
         self.digest() == other.digest()
     }
-}
+}*/
 
-impl Vote {
-    pub fn new_from_key(hash: Digest, round: Round, author: PublicKey, secret: &SecretKey) -> Self {
-        let vote = Self {
-            hash,
+/*impl Vote {
+    pub fn new_from_key(id: Digest, round: Round, author: PublicKey, secret: &SecretKey) -> Self {
+        let vote = Vote {
+            id,
             round,
+            origin: author,
             author,
             signature: Signature::default(),
+            view: round,
+            special_valid: 0,
+            qc: None,
+            tc: None,
         };
         let signature = Signature::new(&vote.digest(), &secret);
         Self { signature, ..vote }
@@ -91,18 +100,18 @@ impl PartialEq for Vote {
     fn eq(&self, other: &Self) -> bool {
         self.digest() == other.digest()
     }
-}
+}*/
 
-impl Timeout {
-    pub fn new_from_key(high_qc: QC, round: Round, author: PublicKey, secret: &SecretKey) -> Self {
-        let timeout = Self {
+/*impl Timeout {
+    pub fn new_from_key_timeout(high_qc: QC, round: Round, author: PublicKey, secret: &SecretKey) -> Self {
+        let timeout = Timeout {
             high_qc,
-            round,
+            view: round,
             author,
             signature: Signature::default(),
         };
         let signature = Signature::new(&timeout.digest(), &secret);
-        Self {
+        Timeout {
             signature,
             ..timeout
         }
@@ -113,7 +122,7 @@ impl PartialEq for Timeout {
     fn eq(&self, other: &Self) -> bool {
         self.digest() == other.digest()
     }
-}
+}*/
 
 // Fixture.
 pub fn block() -> Block {
@@ -131,7 +140,8 @@ pub fn vote() -> Vote {
 pub fn qc() -> QC {
     let qc = QC {
         hash: Digest::default(),
-        round: 1,
+        view: 1,
+        prev_view_round: 1,
         votes: Vec::new(),
     };
     let digest = qc.digest();
@@ -164,7 +174,8 @@ pub fn chain(keys: Vec<(PublicKey, SecretKey)>) -> Vec<Block> {
             // Make a qc for that block (it will be used for the next block).
             let qc = QC {
                 hash: block.digest(),
-                round: block.round,
+                view: block.view,
+                prev_view_round: 1,
                 votes: Vec::new(),
             };
             let digest = qc.digest();

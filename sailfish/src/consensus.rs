@@ -5,7 +5,7 @@ use crate::helper::Helper;
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
 //use crate::messages::{Block, Timeout, Vote, TC};
-use primary::messages::{Header, Block, Certificate, Timeout, AcceptVote, QC, TC};
+use primary::messages::{Header, Block, Certificate, Timeout, AcceptVote, QC, TC, Vote};
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
 use async_trait::async_trait;
@@ -35,7 +35,7 @@ pub type Round= u64;
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ConsensusMessage {
     Propose(Block), //No longer used //FIXME needed to uncomment to compile
-    //Vote(Vote),     //No longer used
+    Vote(Vote),     //No longer used
     AcceptVote(AcceptVote),
     QC(QC),
     Timeout(Timeout),
@@ -68,7 +68,7 @@ impl Consensus {
         let (tx_proposer, rx_proposer) = channel(CHANNEL_CAPACITY);
         let (tx_helper, rx_helper) = channel(CHANNEL_CAPACITY);
         let (tx_commit, rx_commit) = channel(CHANNEL_CAPACITY);
-        let (tx_mempool_copy, rx_mempool_copy) = channel(CHANNEL_CAPACITY);
+        //let (tx_mempool_copy, rx_mempool_copy) = channel(CHANNEL_CAPACITY);
         let (tx_message, rx_message) = channel(CHANNEL_CAPACITY);
         let (tx_consensus_header, rx_consensus_header) = channel(CHANNEL_CAPACITY);
         let (tx_loop, rx_loop) = channel(CHANNEL_CAPACITY);

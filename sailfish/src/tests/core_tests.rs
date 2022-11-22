@@ -20,12 +20,17 @@ fn core(
     let (tx_proposer, rx_proposer) = channel(1);
     let (tx_mempool, mut rx_mempool) = channel(1);
     let (tx_commit, rx_commit) = channel(1);
+    let (tx_consensus, rx_consensus) = channel(1);
+    let (tx_validation, rx_validation) = channel(1);
+    let (tx_ticket, rx_ticket) = channel(1);
+    let (tx_special, rx_special) = channel(1);
+    let (tx_block, rx_block) = channel(1);
 
     let signature_service = SignatureService::new(secret);
     let _ = fs::remove_dir_all(store_path);
     let store = Store::new(store_path).unwrap();
     let leader_elector = LeaderElector::new(committee.clone());
-    let mempool_driver = MempoolDriver::new(store.clone(), tx_mempool, tx_loopback.clone());
+    let mempool_driver = MempoolDriver::new(committee.clone(), tx_mempool);
     let synchronizer = Synchronizer::new(
         name,
         committee.clone(),
@@ -50,12 +55,16 @@ fn core(
         synchronizer,
         /* timeout_delay */ 100,
         /* rx_message */ rx_core,
+        rx_consensus,
         rx_loopback,
         tx_proposer,
         tx_commit,
+        tx_validation,
+        tx_ticket,
+        rx_special,
     );
 
-    (tx_core, rx_proposer, rx_commit)
+    (tx_core, rx_proposer, rx_block)
 }
 
 fn leader_keys(round: Round) -> (PublicKey, SecretKey) {
@@ -74,7 +83,7 @@ async fn handle_proposal() {
     // Make a block and the vote we expect to receive.
     let block = chain(vec![leader_keys(1)]).pop().unwrap();
     let (public_key, secret_key) = keys().pop().unwrap();
-    let vote = Vote::new_from_key(block.digest(), block.round, public_key, &secret_key);
+    let vote = Vote::new_from_key(block.digest(), block.view, public_key, &secret_key);
     let expected = bincode::serialize(&ConsensusMessage::Vote(vote)).unwrap();
 
     // Run a core instance.
@@ -105,12 +114,13 @@ async fn generate_proposal() {
     let votes: Vec<_> = keys()
         .iter()
         .map(|(public_key, secret_key)| {
-            Vote::new_from_key(hash.clone(), block.round, *public_key, &secret_key)
+            Vote::new_from_key(hash.clone(), block.view, *public_key, &secret_key)
         })
         .collect();
     let hight_qc = QC {
         hash,
-        round: block.round,
+        view: block.view,
+        prev_view_round: block.view,
         votes: votes
             .iter()
             .cloned()
@@ -180,7 +190,7 @@ async fn local_timeout_round() {
     let handles: Vec<_> = committee
         .broadcast_addresses(&public_key)
         .into_iter()
-        .map(|address| listener(address, Some(Bytes::from(expected.clone()))))
+        .map(|(_, address)| listener(address, Some(Bytes::from(expected.clone()))))
         .collect();
     assert!(try_join_all(handles).await.is_ok());
 }

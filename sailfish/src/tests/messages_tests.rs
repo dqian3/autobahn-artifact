@@ -1,4 +1,5 @@
-use super::*;
+use primary::error::ConsensusError;
+//use super::*;
 use crate::common::{committee, qc};
 use crypto::generate_keypair;
 use rand::rngs::StdRng;

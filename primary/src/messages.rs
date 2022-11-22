@@ -2,8 +2,9 @@
 use crate::error::{DagError, DagResult, ConsensusError, ConsensusResult};
 //use sailfish::error::{DagError, DagResult, ConsensusError, ConsensusResult};
 use crate::primary::{Round, View};
+//use crate::config::{Committee};
 use config::{Committee, WorkerId};
-use crypto::{Digest, Hash, PublicKey, Signature, SignatureService};
+use crypto::{Digest, Hash, PublicKey, Signature, SignatureService, SecretKey};
 use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
 use serde::{Deserialize, Serialize};
@@ -257,6 +258,31 @@ impl fmt::Debug for Vote {
     }
 }
 
+impl Vote {
+    pub fn new_from_key(id: Digest, round: Round, author: PublicKey, secret: &SecretKey) -> Self {
+        let vote = Vote {
+            id,
+            round,
+            origin: author,
+            author,
+            signature: Signature::default(),
+            view: round,
+            special_valid: 0,
+            qc: None,
+            tc: None,
+        };
+        let signature = Signature::new(&vote.digest(), &secret);
+        Self { signature, ..vote }
+    }
+}
+
+impl PartialEq for Vote {
+    fn eq(&self, other: &Self) -> bool {
+        self.digest() == other.digest()
+    }
+}
+
+
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Certificate {
     pub header: Header,
@@ -509,6 +535,34 @@ impl fmt::Display for Block {
     }
 }
 
+impl PartialEq for Block {
+    fn eq(&self, other: &Self) -> bool {
+        self.digest() == other.digest()
+    }
+}
+
+impl Block {
+    pub fn new_from_key(
+        qc: QC,
+        author: PublicKey,
+        view: View,
+        payload: Vec<Header>,
+        secret: &SecretKey,
+    ) -> Block {
+        let block = Block {
+            qc,
+            tc: None,
+            author,
+            view,
+            payload,
+            signature: Signature::default(),
+        };
+        let signature = Signature::new(&block.digest(), secret);
+        Self { signature, ..block }
+    }
+}
+
+
 
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -686,6 +740,29 @@ impl fmt::Debug for Timeout {
         write!(f, "TV({}, {}, {:?})", self.author, self.view, self.high_qc)
     }
 }
+
+impl Timeout {
+    pub fn new_from_key(high_qc: QC, round: Round, author: PublicKey, secret: &SecretKey) -> Self {
+        let timeout = Timeout {
+            high_qc,
+            view: round,
+            author,
+            signature: Signature::default(),
+        };
+        let signature = Signature::new(&timeout.digest(), &secret);
+        Self {
+            signature,
+            ..timeout
+        }
+    }
+}
+
+impl PartialEq for Timeout {
+    fn eq(&self, other: &Self) -> bool {
+        self.digest() == other.digest()
+    }
+}
+
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct TC {
