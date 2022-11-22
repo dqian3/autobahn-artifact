@@ -1,5 +1,7 @@
+use std::mem;
+
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::messages::{Certificate, Header};
+use crate::messages::{Certificate, Header, Ticket};
 use crate::primary::{Round, View};
 use config::{Committee, WorkerId};
 use crypto::Hash as _;
@@ -30,7 +32,7 @@ pub struct Proposer {
     /// Receives the batches' digests from our workers.
     rx_workers: Receiver<(Digest, WorkerId)>,
     // Receives new view from the Consensus engine
-    rx_ticket: Receiver<(View, Round)>,
+    rx_ticket: Receiver<(View, Round, Ticket)>,
     /// Sends newly created headers to the `Core`.
     tx_core: Sender<Header>,
    
@@ -56,6 +58,8 @@ pub struct Proposer {
     last_has_parents: bool,
     // Whether to include special edge or not.
     use_special_parent: bool,
+
+    ticket: Option<Ticket>,
 }
 
 impl Proposer {
@@ -68,7 +72,7 @@ impl Proposer {
         max_header_delay: u64,
         rx_core: Receiver<(Vec<Digest>, Round)>,
         rx_workers: Receiver<(Digest, WorkerId)>,
-        rx_ticket: Receiver<(View, Round)>,
+        rx_ticket: Receiver<(View, Round, Ticket)>,
         tx_core: Sender<Header>,
     ) {
         let genesis: Vec<Digest> = Certificate::genesis(committee)
@@ -111,6 +115,7 @@ impl Proposer {
                 propose_special: false,
                 last_has_parents: true,
                 use_special_parent: false,
+                ticket: None,
             }
             .run()
             .await;
@@ -120,6 +125,9 @@ impl Proposer {
     
     async fn make_header(&mut self, is_special: bool) {
         println!("make block. special? {}", is_special);
+
+        let mut ticket = None;
+        mem::swap(&mut self.ticket, &mut ticket); //Reset self.ticket; and move ticket (this just avoids copying)
         // Make a new header.
         let header = Header::new(
                 self.name,
@@ -132,6 +140,7 @@ impl Proposer {
                 self.prev_view_round,
                 if self.use_special_parent {Some(self.last_header_id.clone())} else {None},
                 self.last_header_round,
+                ticket, 
             ).await;
 
         debug!("Created {:?}", header);
@@ -206,14 +215,19 @@ impl Proposer {
                     // ==> Conclusion: If we have enough parents, and we receive a ticket for a view that is skipping ahead, then those parents must be for a round >= than our last header. Thus we should use them.
 
                     self.make_header(true).await;
+                    //reset
                     self.use_special_parent = false;
-                    self.propose_special = false; //reset 
+                    self.propose_special = false; 
+                    
+
+
                     proposing = true;
                 }
                 else if enough_parents {
                     // If not special and enough parents available make a new normal header.
                     self.make_header(false).await;
                     self.last_has_parents = true;
+
                     proposing = true;
                 }
             }
@@ -229,7 +243,7 @@ impl Proposer {
             tokio::select! {
     
                  //Passing Ticket view AND round, i.e. round that the special Header in view belonged to. Skip to that round if lagging behind (to guarantee special headers are monotonically growing)
-                Some((view, round)) = self.rx_ticket.recv() => {
+                Some((view, round, ticket)) = self.rx_ticket.recv() => {
                     debug!("   received ticket with view {:?}, and last round {:?}", view, round);
                     if view <= self.view {
                         continue; //Proposal for view already exists.
@@ -242,6 +256,7 @@ impl Proposer {
                     self.view = view;
                     self.prev_view_round = round;
                     self.propose_special = true;
+                    self.ticket = Some(ticket);
                     debug!("Dag moved to round {}, and view {}. propose_special {}", self.round, self.view, self.propose_special);
     
                 }

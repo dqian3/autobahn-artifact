@@ -5,7 +5,7 @@ use crate::helper::Helper;
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
 //use crate::messages::{Block, Timeout, Vote, TC};
-use primary::messages::{Header, Block, Certificate, Timeout, AcceptVote, QC, TC};
+use primary::messages::{Header, Block, Certificate, Timeout, AcceptVote, QC, TC, Ticket};
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
 use async_trait::async_trait;
@@ -40,7 +40,8 @@ pub enum ConsensusMessage {
     QC(QC),
     Timeout(Timeout),
     TC(TC),
-    SyncRequest(Digest, PublicKey),
+    SyncRequest(Digest, PublicKey), //Note: These Digests are now for Headers
+    Header(Header),
 }
 
 pub struct Consensus;
@@ -57,7 +58,7 @@ impl Consensus {
         rx_committer: Receiver<Certificate>,
         tx_mempool: Sender<Certificate>,
         tx_output: Sender<Header>,
-        tx_ticket: Sender<(View, Round)>,
+        tx_ticket: Sender<(View, Round, Ticket)>,
         tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>,
         rx_sailfish: Receiver<Header>,
     ) {
@@ -68,7 +69,7 @@ impl Consensus {
         let (tx_proposer, rx_proposer) = channel(CHANNEL_CAPACITY);
         let (tx_helper, rx_helper) = channel(CHANNEL_CAPACITY);
         let (tx_commit, rx_commit) = channel(CHANNEL_CAPACITY);
-        let (tx_mempool_copy, rx_mempool_copy) = channel(CHANNEL_CAPACITY);
+        //let (tx_mempool_copy, rx_mempool_copy) = channel(CHANNEL_CAPACITY);
         let (tx_message, rx_message) = channel(CHANNEL_CAPACITY);
         let (tx_consensus_header, rx_consensus_header) = channel(CHANNEL_CAPACITY);
         let (tx_loop, rx_loop) = channel(CHANNEL_CAPACITY);

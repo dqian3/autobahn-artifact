@@ -128,5 +128,8 @@ pub enum ConsensusError {
 
     #[error("Received block for round {0} smaller than current_round {1}")]
     NonMonotonicRounds(Round, Round),
+
+    #[error("Header proposer provided no ticket")]
+    InvalidTicket,
         
 }

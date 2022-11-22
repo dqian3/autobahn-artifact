@@ -14,7 +14,7 @@ use crypto::Hash as _;
 use crypto::{PublicKey, SignatureService, Digest};
 use log::{debug, error, warn};
 use network::SimpleSender;
-use primary::messages::{Block, Header, Certificate, Timeout, AcceptVote, Vote, QC, TC};
+use primary::messages::{Block, Header, Certificate, Timeout, AcceptVote, Vote, QC, TC, Ticket};
 use primary::error::{ConsensusError, ConsensusResult};
 //use primary::messages::AcceptVote;
 use std::cmp::max;
@@ -25,6 +25,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 #[cfg(test)]
 #[path = "tests/core_tests.rs"]
+
 pub mod core_tests;
 
 pub struct Core {
@@ -37,11 +38,11 @@ pub struct Core {
     synchronizer: Synchronizer,
     rx_message: Receiver<ConsensusMessage>,
     rx_consensus: Receiver<Certificate>,
-    rx_loopback: Receiver<Block>,
+    rx_loopback: Receiver<Header>,
     tx_proposer: Sender<ProposerMessage>,
     tx_commit: Sender<Certificate>,
     tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>,
-    tx_ticket: Sender<(View, Round)>,
+    tx_ticket: Sender<(View, Round, Ticket)>,
     rx_special: Receiver<Header>,
     view: View,
     last_voted_view: View,
@@ -70,11 +71,11 @@ impl Core {
         timeout_delay: u64,
         rx_message: Receiver<ConsensusMessage>,
         rx_consensus: Receiver<Certificate>,
-        rx_loopback: Receiver<Block>,
+        rx_loopback: Receiver<Header>,
         tx_proposer: Sender<ProposerMessage>,
         tx_commit: Sender<Certificate>,
         tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>, // Loopback Special Headers to DAG
-        tx_ticket: Sender<(View, Round)>,
+        tx_ticket: Sender<(View, Round, Ticket)>,
         rx_special: Receiver<Header>,
     ) {
         tokio::spawn(async move {
@@ -158,17 +159,21 @@ impl Core {
         let mut to_commit = VecDeque::new();
         to_commit.push_back(header.clone());
 
-        // Ensure we commit the entire chain. This is needed after view-change. //TODO:
-        // let mut parent = header.clone();
-        // while self.last_committed_view + 1 < parent.view {
-        //     let ancestor = self
-        //         .synchronizer
-        //         .get_parent_header(&parent)  //TODO: Define this function. It should make sure that all previous views are committed. Must retrieve all QC/TC for prior views. TODO: FIXME: Header must reference either the ticket (QC/TC)
-        //         .await?
-        //         .expect("We should have all the ancestors by now");
-        //     to_commit.push_back(ancestor.clone());
-        //     parent = ancestor;
-        // }
+        // Ensure we commit the entire chain in order. This is needed after view-change, or if the replica receives qc's out of order (e.g. it was lagging for a while, or some channels are slower/async). 
+        //TODO:
+        let mut parent = header.clone();
+        while self.last_committed_view + 1 < parent.view {
+            let ancestor = self
+                .synchronizer
+                .get_parent_header(&parent)  //TODO: Define this function. It should make sure that all previous views are committed. Must retrieve all QC/TC for prior views. TODO: FIXME: Header must reference either the ticket (QC/TC)
+                .await?
+                .expect("We should have all the ancestors by now");
+            to_commit.push_back(ancestor.clone());
+            parent = ancestor;
+        }
+        //TODO: Is it guaranteed that for each of these headers, all parent edges have already been added to committer?
+        // ==> if a header is a parent there must have been a QC for it => n-f replicas called process_header at consensus level => each must have been a cert for it
+        // but this current replica may or may not have seen that cert yet. //TODO: Ensure that primary/core/process_cert is called... (may need synchronizer)
 
         // Save the last committed block.
         self.last_committed_view = header.view;
@@ -177,7 +182,7 @@ impl Core {
         while let Some(header) = to_commit.pop_back() {
             debug!("Committed {:?}", header);
 
-            // // Output the block to the top-level application. //FIXME: This should be after flattening.
+            // // Output the Header to the top-level application. //FIXME: This should be after flattening.
             // if let Err(e) = self.tx_output.send(block.clone()).await {
             //     warn!("Failed to send block through the output channel: {}", e);
             // }
@@ -365,17 +370,21 @@ impl Core {
     async fn handle_qc(&mut self, qc: &QC) -> ConsensusResult<()> {
         //verify qc
         // Ensure the vote is well formed.
-        //qc.verify(&self.committee)?;
+        qc.verify(&self.committee)?;
         
         // Process the QC.  Adopts view, high qc, and resets timer. //Adopt prev_view_round if higher.
         self.process_qc(qc).await;
         
+        //TODO: Should only commit QC's in order. Must wait / request all intermediary QC's
         //upcall to app layer: Order dag, and execute.
-        let header = self.stored_headers.get(&qc.hash);
 
-        if header.is_some() {
-            self.commit(&header.unwrap().clone(), qc);
+        let header: Option<&Header> = self.stored_headers.get(&qc.hash);
+
+        if header.is_some(){
+            let head = header.unwrap().clone();
+            self.commit(&head, qc);
         }
+        //FIXME: SHould we be returning if none? Re-submit for commit some time later?
 
          // Make a new special header if we are the next leader.
          if self.name == self.leader_elector.get_leader(self.view) {
@@ -446,9 +455,22 @@ impl Core {
 
          // QC or TC formed so send ticket to the consensus
          // check to see whether you are the leader is implicit
-         //TODO: Also pass down QC/TC if desired.
+         
+         //pass down Qc or TC for ticket
+       
+        let ticket;
+        if self.high_qc.view + 1 == self.view {
+            ticket = Ticket::new(Some(self.high_qc.clone()), None, self.view).await;
+        }
+        else if tc.is_some() && tc.as_ref().unwrap().view +1 == self.view {  //tc.is_some_and(|&tc| (tc.view +1 == self.view)) {
+            ticket = Ticket::new(None, tc, self.view).await; 
+        }
+        else {
+            return
+        }
+       
          self.tx_ticket
-             .send((self.view, self.round))
+             .send((self.view, self.round, ticket))
              .await
              .expect("Failed to send view");
 
@@ -470,6 +492,45 @@ impl Core {
     #[async_recursion]
     async fn process_header(&mut self, header: Header) -> ConsensusResult<()> {
        
+        //0) TODO: Check if Ticket valid. If we have not processed ticket yet. Do so.
+        ensure!(
+            header.ticket.is_some(),
+            ConsensusError::InvalidTicket
+        );
+        let ticket = header.ticket.clone().unwrap();
+        match ticket.qc {
+            Some(qc) => {
+               // check if qc for prev view.
+               ensure!(
+                    header.view == qc.view + 1,
+                    ConsensusError::InvalidTicket
+                );
+               // check if we need to process qc.
+               if qc.view > self.last_committed_view { // //TODO:  Update last_committed_view only upon commit. //implies that last_committed_view <= view
+                self.handle_qc(&qc); //TODO: don't do this redundantly/check for duplicates --> + TODO: HandleQC directly, but defer Commit upcall until until parent qc has been handled. 
+                                                    //TODO: Important: Process_header should still complete, since validation needs to be asynchronous --> it suffices to check that the ticket QC is correct.
+               }
+                
+            },
+            None => {
+                match ticket.tc {
+                    Some(tc) => {
+                        // check if tc for prev view.
+                        ensure!(
+                            header.view == tc.view + 1,
+                            ConsensusError::InvalidTicket
+                        );
+                        // check if we need to process qc.
+                        if tc.view > self.last_committed_view {
+                            self.handle_tc(&tc);
+                        }
+                    },
+                    None => return Err(ConsensusError::InvalidTicket)
+                }
+            }
+        }
+        // I.e. whether have QC/TC for view v-1 
+        //If don't have QC/TC. Start a waiter. If waiter triggers, call this function again (or directly call down validation complete)
 
         //1) view > last voted view
         ensure!(
@@ -499,9 +560,6 @@ impl Core {
             ConsensusError::WrongProposer
         );
 
-        //5) TODO: Check if Ticket valid.
-        // I.e. whether have QC/TC for view v-1 
-        //If don't have QC/TC. Start a waiter. If waiter triggers, call this function again (or directly call down validation complete)
         
 
         //6) Update latest prepared. Update latest_voted_view.
@@ -663,13 +721,13 @@ impl Core {
     
    
 
-    async fn handle_tc(&mut self, tc: TC) -> ConsensusResult<()> {
+    async fn handle_tc(&mut self, tc: &TC) -> ConsensusResult<()> {
         tc.verify(&self.committee)?; //FIXME: Added this because I didnt' see any TC validation elsewhere. If there is already, remove this.
 
         debug!("Processing {:?}", tc);
         self.advance_view(tc.view).await;
         if self.name == self.leader_elector.get_leader(self.view) {
-            self.generate_proposal(Some(tc)).await;
+            self.generate_proposal(Some(tc.clone())).await;
         }
         Ok(())
     }
@@ -702,9 +760,13 @@ impl Core {
                     //5) Timeouts from other replicas to form TC
                     ConsensusMessage::Timeout(timeout) => self.handle_timeout(&timeout).await,
                     //6) Receive TC
-                    ConsensusMessage::TC(tc) => self.handle_tc(tc).await,
+                    ConsensusMessage::TC(tc) => self.handle_tc(&tc).await,
+                    //7) Sync Headers
+                    ConsensusMessage::Header(header) => self.process_header(header).await,  //TODO: Sanity check that this is fine. ==> Sync Headers will also cause a vote at the Dag layer to be generated.
                     _ => panic!("Unexpected protocol message")
                 },
+
+                Some(header) = self.rx_loopback.recv() => self.process_header(header).await,  //Processing Header that we resume via Synchronizer upcall
                 
                 //NO LONGER NEEDED: Some(block) = self.rx_loopback.recv() => self.process_block(&block).await,  //Processing Block that we propose ourselves. (or that we resume via Synchronizer upcall)
                 () = &mut self.timer => self.local_timeout_view().await,

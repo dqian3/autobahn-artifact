@@ -5,7 +5,7 @@ use crate::error::DagError;
 use crate::garbage_collector::GarbageCollector;
 use crate::header_waiter::HeaderWaiter;
 use crate::helper::Helper;
-use crate::messages::{Certificate, Header, Vote, QC, TC};
+use crate::messages::{Certificate, Header, Vote, QC, TC, Ticket};
 use crate::payload_receiver::PayloadReceiver;
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
@@ -71,7 +71,7 @@ impl Primary {
         tx_committer: Sender<Certificate>,
         rx_consensus: Receiver<Certificate>,
         tx_sailfish: Sender<Header>,
-        rx_ticket: Receiver<(View, Round)>,
+        rx_ticket: Receiver<(View, Round, Ticket)>,
         rx_validation: Receiver<(Header, u8, Option<QC>, Option<TC>)>,
     ) {
         let (tx_others_digests, rx_others_digests) = channel(CHANNEL_CAPACITY);

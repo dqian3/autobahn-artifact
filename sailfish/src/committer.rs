@@ -180,13 +180,14 @@ impl Committer {
                 if x.header.is_special && x.header.special_parent.is_some() { // i.e. is special edge ==> manually hack the digest (only works because of requirement that header is from same node in prev round)
                                                                         //Currently we can skip rounds. Header needs to include parent round to solve this.
                                                                         //Note: process_header verifies that author and rounds are correct.
-                    parent_digest =  &{
-                        let mut hasher = Sha512::new();
-                        hasher.update(&parent); //== parent_header.id
-                        hasher.update(&x.header.special_parent_round.to_le_bytes()); //parent_header.round = child round -1
-                        hasher.update(&x.header.origin()); //parent_header.origin = child_header_origin
-                        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
-                    };
+                    
+                    let mut hasher = Sha512::new();
+                    hasher.update(&parent); //== parent_header.id
+                    hasher.update(&x.header.special_parent_round.to_le_bytes()); //parent_header.round = child round -1
+                    hasher.update(&x.header.origin()); //parent_header.origin = child_header_origin
+                    let dig = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
+                    
+                    parent_digest = &dig;
                     round = x.header.special_parent_round;
                 }
                 else{

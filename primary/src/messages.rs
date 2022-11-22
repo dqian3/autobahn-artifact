@@ -16,13 +16,47 @@ use std::fmt;
 
 
 ///////////
-// #[derive(Serialize, Deserialize, Default, Clone)]
-// pub struct Ticket {
-//     pub qc: Option<QC>,
-//     pub tc: Option<TC>,
-//     pub round: Round,
-// }
-// //TODO: Implement Ticket. Need to know references from Consensus, e.g. "use sailfish{QC, TC};"" -- problem: would be cyclic dependency rn. //Should we just 2add our consensus directly into the primary layer; instead of a consensus module?
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct Ticket {
+    pub qc: Option<QC>,
+    pub tc: Option<TC>,
+    pub view: View,
+}
+
+impl Ticket {
+    pub async fn new(
+        qc: Option<QC>,
+        tc: Option<TC>,
+        view: View,
+    ) -> Self {
+        let ticket = Self {
+            qc,
+            tc,
+            view,
+        
+        };
+        ticket
+    }
+}
+
+impl fmt::Debug for Ticket {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(
+            f,
+            "T{})",
+            self.view,
+            // self.qc,
+            // self.tc,
+        )
+    }
+}
+
+impl fmt::Display for Ticket {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(f, "T{}", self.view)
+    }
+}
+
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Header {
@@ -38,7 +72,7 @@ pub struct Header {
     pub prev_view_round: Round, //round that was proposed by the last view.
     pub special_parent: Option<Digest>, //Digest of the header of the special parent.
     pub special_parent_round: Round, //round of the parent we have special edge to (only used to re-construct parent cert digest in committer)
-   // pub ticket: Ticket, //TODO: Add ticket.
+    pub ticket: Option<Ticket>, 
 
 }
 
@@ -56,6 +90,7 @@ impl Header {
         prev_view_round: Round,
         special_parent: Option<Digest>,
         special_parent_round: Round,
+        ticket: Option<Ticket>,
 
     ) -> Self {
         let header = Self {
@@ -65,11 +100,12 @@ impl Header {
             parents,
             id: Digest::default(),
             signature: Signature::default(),
-            is_special: is_special,
-            view: view,
-            prev_view_round: prev_view_round,
+            is_special,
+            view,
+            prev_view_round,
             special_parent,
             special_parent_round,
+            ticket
         };
         let id = header.digest();
         let signature = signature_service.request_signature(id.clone()).await;
