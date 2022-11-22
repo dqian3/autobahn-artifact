@@ -37,6 +37,7 @@ pub enum PrimaryMessage {
     Vote(Vote),
     Certificate(Certificate),
     CertificatesRequest(Vec<Digest>, /* requestor */ PublicKey),
+    HeaderRequest(Digest, /* requestor */ PublicKey),
 }
 
 /// The messages sent by the primary to its workers.
@@ -83,6 +84,7 @@ impl Primary {
         let (tx_certificates_loopback, rx_certificates_loopback) = channel(CHANNEL_CAPACITY);
         let (tx_primary_messages, rx_primary_messages) = channel(CHANNEL_CAPACITY);
         let (tx_cert_requests, rx_cert_requests) = channel(CHANNEL_CAPACITY);
+        let (tx_header_requests, rx_header_requests) = channel(CHANNEL_CAPACITY);
 
         // Write the parameters to the logs.
         // NOTE: These log entries are needed to compute performance.
@@ -104,6 +106,7 @@ impl Primary {
             PrimaryReceiverHandler {
                 tx_primary_messages,
                 tx_cert_requests,
+                tx_header_requests,
             },
         );
         info!(
@@ -210,7 +213,7 @@ impl Primary {
         );
 
         // The `Helper` is dedicated to reply to certificates requests from other primaries.
-        Helper::spawn(committee.clone(), store, rx_cert_requests);
+        Helper::spawn(committee.clone(), store, rx_cert_requests, rx_header_requests);
 
         // NOTE: This log entry is used to compute performance.
         info!(
@@ -230,6 +233,7 @@ impl Primary {
 struct PrimaryReceiverHandler {
     tx_primary_messages: Sender<PrimaryMessage>,
     tx_cert_requests: Sender<(Vec<Digest>, PublicKey)>,
+    tx_header_requests: Sender<(Digest, PublicKey)>,
 }
 
 #[async_trait]
@@ -242,6 +246,11 @@ impl MessageHandler for PrimaryReceiverHandler {
         match bincode::deserialize(&serialized).map_err(DagError::SerializationError)? {
             PrimaryMessage::CertificatesRequest(missing, requestor) => self
                 .tx_cert_requests
+                .send((missing, requestor))
+                .await
+                .expect("Failed to send primary message"),
+            PrimaryMessage::HeaderRequest(missing, requestor) => self
+                .tx_header_requests
                 .send((missing, requestor))
                 .await
                 .expect("Failed to send primary message"),

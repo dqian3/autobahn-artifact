@@ -81,7 +81,7 @@ impl Header {
     }
 
     pub fn genesis(committee: &Committee) -> Self {
-        let (name, auth) = committee.authorities.iter().next().unwrap();
+        let (name, _) = committee.authorities.iter().next().unwrap();
         Header {
             author: *name,
             ..Self::default()

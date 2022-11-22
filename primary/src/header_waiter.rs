@@ -27,6 +27,7 @@ const TIMER_RESOLUTION: u64 = 1_000;
 pub enum WaiterMessage {
     SyncBatches(HashMap<Digest, WorkerId>, Header),
     SyncParents(Vec<Digest>, Header),
+    SyncSpecialParent(Digest, Header),
 }
 
 /// Waits for missing parent certificates and batches' digests.
@@ -53,9 +54,12 @@ pub struct HeaderWaiter {
 
     /// Network driver allowing to send messages.
     network: SimpleSender,
+
     /// Keeps the digests of the all certificates for which we sent a sync request,
     /// along with a timestamp (`u128`) indicating when we sent the request.
     parent_requests: HashMap<Digest, (Round, u128)>,
+    //same, but for special parents
+    special_parent_requests: HashMap<Digest, (Round, u128)>, 
     /// Keeps the digests of the all tx batches for which we sent a sync request,
     /// similarly to `header_requests`.
     batch_requests: HashMap<Digest, Round>,
@@ -90,6 +94,7 @@ impl HeaderWaiter {
                 tx_core,
                 network: SimpleSender::new(),
                 parent_requests: HashMap::new(),
+                special_parent_requests: HashMap::new(),
                 batch_requests: HashMap::new(),
                 pending: HashMap::new(),
             }
@@ -220,6 +225,51 @@ impl HeaderWaiter {
                                 self.network.send(address, Bytes::from(bytes)).await;
                             }
                         }
+
+                        WaiterMessage::SyncSpecialParent(missing_parent, header) => {
+                            debug!("Synching the parents of {}", header);
+                            let header_id = header.id.clone();
+                            let round = header.round;
+                            let author = header.author;
+
+                            // Ensure we sync only once per header.
+                            if self.pending.contains_key(&header_id) {  //TODO: Want to allow both normal parent sync and this sync in parallel?
+                                continue;
+                            }
+
+                            // Add the header to the waiter pool. The waiter will return it to us
+                            // when all its parents are in the store.
+
+                            let wait_for = vec![(missing_parent.to_vec(), self.store.clone())];
+                            
+                            let (tx_cancel, rx_cancel) = channel(1);
+                            self.pending.insert(header_id, (round, tx_cancel));
+                            let fut = Self::waiter(wait_for, header, rx_cancel);
+                            waiting.push(fut);
+
+                            // Ensure we didn't already sent a sync request for this special parent.
+                            // Optimistically send the sync request to the node that issued the header. 
+                            // If this fails (after a timeout), we broadcast the sync request.
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .expect("Failed to measure time")
+                                .as_millis();
+                           
+                    
+                            self.parent_requests.entry(missing_parent.clone()).or_insert_with(|| {
+                                (round, now)
+                            });
+                            
+                            
+                                let address = self.committee
+                                    .primary(&author)
+                                    .expect("Author of valid header not in the committee")
+                                    .primary_to_primary;
+                                let message = PrimaryMessage::HeaderRequest(missing_parent, self.name);
+                                let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
+                                self.network.send(address, Bytes::from(bytes)).await;
+                            
+                        }
                     }
                 },
 
@@ -233,7 +283,11 @@ impl HeaderWaiter {
                         for x in &header.parents {
                             let _ = self.parent_requests.remove(x);
                         }
-                        self.tx_core.send(header).await.expect("Failed to send header");
+                        if header.special_parent.is_some() {
+                            let head_ref = &header.special_parent.as_ref().unwrap();
+                            let _ = self.special_parent_requests.remove(head_ref);
+                        }
+                        self.tx_core.send(header).await.expect("Failed to send header"); 
                     },
                     Ok(None) => {
                         // This request has been canceled.
@@ -288,6 +342,7 @@ impl HeaderWaiter {
                 self.pending.retain(|_, (r, _)| r > &mut gc_round);
                 self.batch_requests.retain(|_, r| r > &mut gc_round);
                 self.parent_requests.retain(|_, (r, _)| r > &mut gc_round);
+                self.special_parent_requests.retain(|_, (r, _)| r > &mut gc_round);
             }
         }
     }

@@ -87,32 +87,33 @@ impl Synchronizer {
         Ok(true)
     }
 
-    pub async fn get_special_parent(&mut self, header: &Header) -> DagResult<(Header, bool)> {
+    pub async fn get_special_parent(&mut self, header: &Header, sync: bool) -> DagResult<(Option<Header>, bool)> {
 
         let digest = header.special_parent.as_ref().unwrap();//header.parents.iter().next().unwrap().clone();
         if digest == &self.genesis_header.id {  //Note: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
             //parents.push(self.genesis_header.clone());
-            return Ok((self.genesis_header.clone(), true))
+            return Ok((Some(self.genesis_header.clone()), true))
         }
         else{
             match self.store.read(digest.to_vec()).await? {
-                Some(parent_header) => return Ok((bincode::deserialize(&parent_header)?, false)),
+                Some(parent_header) => return Ok((Some(bincode::deserialize(&parent_header)?), false)),
                 None => {},
             };
         }
       
-        return Err(DagError::InvalidSpecialParent);
+        if !sync {
+            return Err(DagError::InvalidSpecialParent);
+        }
         
-
         //if we dont have special parent: ignore request --> should be there when using FIFO channels ==> TCP is FIFO, and individual channels are FIFO (e.g. channel for receiving new header proposal)
 
         //TODO: Start a waiter for it. FIXME: currently SyncParents requests certs. But we just want to request a header.
 
-        // self.tx_header_waiter
-        //     .send(WaiterMessage::SyncParents(missing, header.clone()))
-        //     .await
-        //     .expect("Failed to send sync parents request");
-        //Ok(Vec::new())
+        self.tx_header_waiter
+            .send(WaiterMessage::SyncSpecialParent(digest.clone(), header.clone()))  //TODO: send message to header.author to request previous header digest.
+            .await
+            .expect("Failed to send sync special parent request");
+        Ok((None, false))
     }
 
     /// Returns the parents of a header if we have them all. If at least one parent is missing,
@@ -166,5 +167,64 @@ impl Synchronizer {
             };
         }
         Ok(true)
+    }
+
+    //Checks whether we have special parent cert or header (based on header.id)
+    // If we have special parent cert ==> do nothing.
+    // If we have only special parent header ==> send dummy cert to committer
+    // If we have neither, return error or sync. 
+    
+    pub async fn deliver_special_certificate(&mut self, certificate: &Certificate, sync: bool) -> DagResult<(Option<Certificate>, bool)> { //bool value indicates that we have real_cert. No sync or error necessary
+
+        let digest = certificate.header.special_parent.as_ref().unwrap();//header.parents.iter().next().unwrap().clone();
+
+        if digest == &self.genesis_header.id {  //Note: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
+            //parents.push(self.genesis_header.clone());
+            let dummy_parent_cert = Certificate {
+                header: self.genesis_header.clone(),
+                ..Certificate::default()
+            };
+            return Ok((Some(dummy_parent_cert), true));
+        }
+        else{
+            match self.store.read(digest.to_vec()).await? {
+                Some(special_parent_header) => {
+                    //Create dummy cert for parent 
+                    let dummy_parent_cert = Certificate {
+                        header: bincode::deserialize(&special_parent_header)?,
+                        ..Certificate::default()
+                    };
+
+                    //Lookup whether real cert exists. Abusing the fact that dummy_cert and real_cert have the same digest (since votes and special_valids are not part of digest.)
+                    match self.store.read(dummy_parent_cert.digest().to_vec()).await? {
+                        Some(_) => {  //Some(real_cert)
+                            //let real_special_parent_cert = bincode::deserialize(&real_cert)?;
+                            return Ok((None, true));
+                        },
+                        None => {
+                            return Ok((Some(dummy_parent_cert), true));
+                        }
+                    }
+                }
+                
+                None => {}
+            };
+        }
+
+        if !sync {
+            return Err(DagError::InvalidSpecialParent);
+            //return Ok((None, false));
+        }
+        
+
+        //if we dont have special parent: ignore request --> should be there when using FIFO channels ==> TCP is FIFO, and individual channels are FIFO (e.g. channel for receiving new header proposal)
+
+        //TODO: Start a waiter for it. FIXME: currently SyncParents requests certs. But we just want to request a header. ==> certificate waiter needs to be modified to check special parent too.
+
+        self.tx_certificate_waiter
+            .send(certificate.clone())  //TODO: send message to header.author to request previous header digest.
+            .await
+            .expect("Failed to send sync special parent request");
+        Ok((None, false))
     }
 }

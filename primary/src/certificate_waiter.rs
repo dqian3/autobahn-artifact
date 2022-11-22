@@ -61,13 +61,23 @@ impl CertificateWaiter {
                 Some(certificate) = self.rx_synchronizer.recv() => {
                     // Add the certificate to the waiter pool. The waiter will return it to us
                     // when all its parents are in the store.
-                    let wait_for = certificate
+                    let mut wait_for: Vec<(Vec<u8>, Store)> = certificate
                         .header
                         .parents
                         .iter()
                         .cloned()
                         .map(|x| (x.to_vec(), self.store.clone()))
                         .collect();
+
+                    //Add a waiter for the special parent header.
+                    let special_wait_for = certificate
+                        .header
+                        .special_parent
+                        .clone();
+                    if special_wait_for.is_some() {
+                        wait_for.push(  (special_wait_for.unwrap().to_vec(), self.store.clone())  );
+                    }
+
                     let fut = Self::waiter(wait_for, certificate);
                     waiting.push(fut);
                 }

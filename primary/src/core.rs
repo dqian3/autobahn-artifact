@@ -1,6 +1,6 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::aggregators::{CertificatesAggregator, VotesAggregator};
-use crate::common::special_header;
+//use crate::common::special_header;
 use crate::error::{DagError, DagResult};
 use crate::messages::{Certificate, Header, Vote, QC, TC, matching_valids};
 use crate::primary::{PrimaryMessage, Round};
@@ -12,7 +12,7 @@ use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
 use log::{debug, error, warn};
 use network::{CancelHandler, ReliableSender};
-use tokio::time::error::Elapsed;
+//use tokio::time::error::Elapsed;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -173,19 +173,25 @@ impl Core {
             //TODO: Check that parent header has been received. // IF so, then when a cert for this special block forms, also form a dummy cert of the parent.
             //1) Read from store to confirm parent exists.
             
-            let (special_parent, is_genesis) = self.synchronizer.get_special_parent(&header).await?;  
-            //TODO: FIXME: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
-        
-            ensure!( //check that special parent round matches claimed round
-                special_parent.round == header.special_parent_round && header.special_parent_round + 1 == header.round,
-                DagError::MalformedHeader(header.id.clone())
-            );
-    
-            ensure!( //check that special parent and special header have same parent //TODO: OR parent = genesis header.
-                 special_parent.author == header.author || is_genesis,
-                 DagError::MalformedHeader(header.id.clone())
-            );
+             // let (special_parent, is_genesis) = self.synchronizer.get_special_parent(&header, false).await?;  
+            let sync_if_missing = false;
+            match self.synchronizer.get_special_parent(&header, sync_if_missing).await? {
+                (None, _) => return Ok(()),
+                (Some(special_parent_header), is_genesis) => { 
+                  //TODO: FIXME: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
+                   
+                  ensure!( //check that special parent round matches claimed round
+                        special_parent_header.round == header.special_parent_round && header.special_parent_round + 1 == header.round,
+                        DagError::MalformedHeader(header.id.clone())
+                    );
             
+                    ensure!( //check that special parent and special header have same parent //TODO: OR parent = genesis header.
+                         special_parent_header.author == header.author || is_genesis,
+                         DagError::MalformedHeader(header.id.clone())
+                    );
+                }
+                
+            };
         }
         
         let (parents, is_missing_parents) = self.synchronizer.get_parents(&header).await?;
@@ -355,22 +361,22 @@ impl Core {
             return Ok(());
         }
 
-        //Additional special block processing
-        //Note: If it is a special block, then don't need to wait for the special edge parent. ==> generate a special cert for the parent to pass to the DAG
+         //Additional special block processing
+         // //Note: If it is a special block, then don't need to wait for the special edge parent. ==> generate a special cert for the parent to pass to the DAG
         if certificate.header.is_special && certificate.header.special_parent.is_some() {
-            //TODO: CHeck if we already have cert.
-                        let (special_parent, is_genesis) = self.synchronizer.get_special_parent(&certificate.header).await?;
-                        //Create dummy cert for parent and pass to committer.
-                        let cert = Certificate {
-                            header: special_parent,
-                            ..Certificate::default()
-                        };
-                        self.tx_committer.send(cert).await.expect("Failed to send special parent certificate to committer");
-            
-                    }
-        
-
-
+            let sync_if_missing = false;
+            match self.synchronizer.deliver_special_certificate(&certificate, sync_if_missing).await? {
+                //If we have parent cert => do nothing
+                (None, true) => {},
+                // If we have parent header => create cert for committer
+                (Some(special_parent_dummy_cert), _) => {
+                    self.tx_committer.send(special_parent_dummy_cert).await.expect("Failed to send special parent certificate to committer");
+                },
+                // If we don't have parent => create a waiter. (or just return -- since process_header should have added it.)
+                _ => return Ok(())
+            }
+        }
+       
         // Store the certificate.
         let bytes = bincode::serialize(&certificate).expect("Failed to serialize certificate");
         self.store.write(certificate.digest().to_vec(), bytes).await;

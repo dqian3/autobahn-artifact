@@ -177,9 +177,9 @@ impl Committer {
                 let &parent_digest;
                 let round;
 
-                if x.header.is_special && x.header.parents.len() == 1 { // i.e. is special edge ==> manually hack the digest (only works because of requirement that header is from same node in prev round)
-                                                                        //FIXME: This is false. Currently we can skip rounds. Header needs to include parent round to solve this.
-                                                                        //FIXME: process_header needs to verify that author and rounds are correct.
+                if x.header.is_special && x.header.special_parent.is_some() { // i.e. is special edge ==> manually hack the digest (only works because of requirement that header is from same node in prev round)
+                                                                        //Currently we can skip rounds. Header needs to include parent round to solve this.
+                                                                        //Note: process_header verifies that author and rounds are correct.
                     parent_digest =  &{
                         let mut hasher = Sha512::new();
                         hasher.update(&parent); //== parent_header.id
