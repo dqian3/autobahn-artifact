@@ -1,6 +1,6 @@
 use super::*;
 use crate::common::{committee_with_base_port, keys};
-use crate::config::Parameters;
+use config::Parameters;
 use crypto::SecretKey;
 use futures::future::try_join_all;
 use std::fs;
@@ -27,6 +27,13 @@ fn spawn_nodes(
             let (tx_consensus_to_mempool, mut rx_consensus_to_mempool) = channel(10);
             let (_tx_mempool_to_consensus, rx_mempool_to_consensus) = channel(1);
             let (tx_commit, mut rx_commit) = channel(1);
+            let (tx_committer, rx_committer) = channel(1);
+
+            let (tx_output, rx_output) = channel(1);
+            let (tx_ticket, rx_ticket) = channel(1);
+            let (tx_validation, rx_validation) = channel(1);
+            let (tx_sailfish, rx_sailfish) = channel(1);
+
 
             // Sink the mempool channel.
             tokio::spawn(async move {
@@ -44,8 +51,12 @@ fn spawn_nodes(
                     signature_service,
                     store,
                     rx_mempool_to_consensus,
+                    rx_committer,
                     tx_consensus_to_mempool,
-                    tx_commit,
+                    tx_output,
+                    tx_ticket,
+                    tx_validation,
+                    rx_sailfish,
                 );
 
                 rx_commit.recv().await.unwrap()

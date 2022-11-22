@@ -158,6 +158,18 @@ pub struct Committee {
 impl Import for Committee {}
 
 impl Committee {
+    pub fn new(info: Vec<(PublicKey, Stake, SocketAddr)>) -> Self {
+        Self {
+            authorities: info
+                .into_iter()
+                .map(|(name, stake, address)| {
+                    let authority = Authority { stake, consensus: ConsensusAddresses { consensus_to_consensus: address }, primary: PrimaryAddresses { primary_to_primary: address, worker_to_primary: address }, workers: HashMap::new() };
+                    (name, authority)
+                })
+                .collect(),
+        }
+    }
+
     /// Returns the number of authorities.
     pub fn size(&self) -> usize {
         self.authorities.len()
@@ -272,6 +284,18 @@ impl Committee {
                     .find(|(worker_id, _)| worker_id == &id)
                     .map(|(_, addresses)| (*name, addresses.clone()))
             })
+            .collect()
+    }
+
+    pub fn address(&self, name: &PublicKey) -> Option<SocketAddr> {
+        self.authorities.get(name).map(|x| x.consensus.consensus_to_consensus)
+    }
+
+    pub fn broadcast_addresses(&self, myself: &PublicKey) -> Vec<(PublicKey, SocketAddr)> {
+        self.authorities
+            .iter()
+            .filter(|(name, _)| name != &myself)
+            .map(|(name, x)| (*name, x.consensus.consensus_to_consensus))
             .collect()
     }
 }

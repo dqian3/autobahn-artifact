@@ -178,6 +178,8 @@ impl Core {
         // Save the last committed block.
         self.last_committed_view = header.view;
 
+        // TODO: Implement view change/indirect commit rule here
+
         // Send all the newly committed blocks to the node's application layer.
         while let Some(header) = to_commit.pop_back() {
             debug!("Committed {:?}", header);
@@ -549,7 +551,7 @@ impl Core {
             header.round > self.round,
             ConsensusError::NonMonotonicRounds(header.round, self.round)
         );
-       
+
 
         //3) Header signature correct
         header.verify(&self.committee)?;

@@ -5,7 +5,7 @@ use crate::helper::Helper;
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
 //use crate::messages::{Block, Timeout, Vote, TC};
-use primary::messages::{Header, Block, Certificate, Timeout, AcceptVote, QC, TC, Ticket};
+use primary::messages::{Header, Block, Certificate, Timeout, AcceptVote, QC, TC, Ticket, Vote};
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
 use async_trait::async_trait;
@@ -35,7 +35,7 @@ pub type Round= u64;
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ConsensusMessage {
     Propose(Block), //No longer used //FIXME needed to uncomment to compile
-    //Vote(Vote),     //No longer used
+    Vote(Vote),     //No longer used
     AcceptVote(AcceptVote),
     QC(QC),
     Timeout(Timeout),

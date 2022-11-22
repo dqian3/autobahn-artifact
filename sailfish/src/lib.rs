@@ -4,6 +4,7 @@ mod aggregator;
 mod committer;
 mod consensus;
 mod core;
+//mod config;
 mod helper;
 mod leader;
 mod mempool;

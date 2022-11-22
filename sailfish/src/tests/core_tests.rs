@@ -1,8 +1,9 @@
 use super::*;
 use crate::common::{chain, committee, committee_with_base_port, keys, listener};
-use crypto::SecretKey;
+use crypto::{SecretKey, Signature};
+use primary::messages::{Header, QC, TC, Vote};
 use futures::future::try_join_all;
-use std::fs;
+use std::{fs, collections::BTreeMap, collections::BTreeSet};
 use tokio::sync::mpsc::channel;
 
 fn core(
@@ -14,18 +15,25 @@ fn core(
     Sender<ConsensusMessage>,
     Receiver<ProposerMessage>,
     Receiver<Block>,
+    Receiver<(Header, u8, Option<QC>, Option<TC>)>,
+    Sender<Header>,
 ) {
     let (tx_core, rx_core) = channel(1);
     let (tx_loopback, rx_loopback) = channel(1);
     let (tx_proposer, rx_proposer) = channel(1);
     let (tx_mempool, mut rx_mempool) = channel(1);
     let (tx_commit, rx_commit) = channel(1);
+    let (tx_consensus, rx_consensus) = channel(1);
+    let (tx_validation, mut rx_validation) = channel(1);
+    let (tx_ticket, rx_ticket) = channel(1);
+    let (tx_special, rx_special) = channel(1);
+    let (tx_block, rx_block) = channel(1);
 
     let signature_service = SignatureService::new(secret);
     let _ = fs::remove_dir_all(store_path);
     let store = Store::new(store_path).unwrap();
     let leader_elector = LeaderElector::new(committee.clone());
-    let mempool_driver = MempoolDriver::new(store.clone(), tx_mempool, tx_loopback.clone());
+    let mempool_driver = MempoolDriver::new(committee.clone(), tx_mempool);
     let synchronizer = Synchronizer::new(
         name,
         committee.clone(),
@@ -50,12 +58,16 @@ fn core(
         synchronizer,
         /* timeout_delay */ 100,
         /* rx_message */ rx_core,
+        rx_consensus,
         rx_loopback,
         tx_proposer,
         tx_commit,
+        tx_validation,
+        tx_ticket,
+        rx_special,
     );
 
-    (tx_core, rx_proposer, rx_commit)
+    (tx_core, rx_proposer, rx_block, rx_validation, tx_special)
 }
 
 fn leader_keys(round: Round) -> (PublicKey, SecretKey) {
@@ -68,29 +80,43 @@ fn leader_keys(round: Round) -> (PublicKey, SecretKey) {
 }
 
 #[tokio::test]
-async fn handle_proposal() {
+async fn handle_header() {
     let committee = committee_with_base_port(16_000);
 
     // Make a block and the vote we expect to receive.
-    let block = chain(vec![leader_keys(1)]).pop().unwrap();
+    //let block = chain(vec![leader_keys(1)]).pop().unwrap();
     let (public_key, secret_key) = keys().pop().unwrap();
-    let vote = Vote::new_from_key(block.digest(), block.round, public_key, &secret_key);
-    let expected = bincode::serialize(&ConsensusMessage::Vote(vote)).unwrap();
+    let (public_key_1, secret_key_1) = leader_keys(1);
+    //let vote = Vote::new_from_key(block.digest(), block.view, public_key, &secret_key);
+
+    let header = Header {author: public_key_1, round: 2, payload: BTreeMap::new(), parents: BTreeSet::new(), id: Digest::default(), signature: Signature::default(), is_special: true, view: 1, prev_view_round: 1, special_parent: None, special_parent_round: 1};
+    let id = header.digest();
+    let signature = Signature::new(&id, &secret_key_1);
+
+    let head = Header {id, signature, ..header};
+        //(public_key, 1, BTreeMap::new(), BTreeSet::new(), sig_service, true, 1, 1, None, 1).await;
+    let validate: (Header, u8, Option<QC>, Option<TC>) = (head.clone(), 1, None, None);
+    //let expected = bincode::serialize(&validate).unwrap();
 
     // Run a core instance.
     let store_path = ".db_test_handle_proposal";
-    let (tx_core, _rx_proposer, _rx_commit) =
+    let (_, _rx_proposer, _rx_commit, mut rx_validation, tx_special) =
         core(public_key, secret_key, committee.clone(), store_path);
 
-    // Send a block to the core.
-    let message = ConsensusMessage::Propose(block.clone());
-    tx_core.send(message).await.unwrap();
+    // Send a header to the core.
+    //let message = ConsensusMessage::Propose(block.clone());
+    tx_special.send(head).await.unwrap();
+
+    let received = rx_validation.recv().await.unwrap();
+
+    assert_eq!(received.1, validate.1);
 
     // Ensure the next leaders gets the vote.
-    let (next_leader, _) = leader_keys(2);
-    let address = committee.address(&next_leader).unwrap();
-    let handle = listener(address, Some(Bytes::from(expected)));
-    assert!(handle.await.is_ok());
+
+    //let (next_leader, _) = leader_keys(1);
+    //let address = committee.address(&next_leader).unwrap();
+    //let handle = listener(address, Some(Bytes::from(expected)));
+    //assert!(handle.await.is_ok());
 }
 
 #[tokio::test]
@@ -105,12 +131,13 @@ async fn generate_proposal() {
     let votes: Vec<_> = keys()
         .iter()
         .map(|(public_key, secret_key)| {
-            Vote::new_from_key(hash.clone(), block.round, *public_key, &secret_key)
+            Vote::new_from_key(hash.clone(), block.view, *public_key, &secret_key)
         })
         .collect();
     let hight_qc = QC {
         hash,
-        round: block.round,
+        view: block.view,
+        prev_view_round: block.view,
         votes: votes
             .iter()
             .cloned()
@@ -120,7 +147,7 @@ async fn generate_proposal() {
 
     // Run a core instance.
     let store_path = ".db_test_generate_proposal";
-    let (tx_core, mut rx_proposer, _rx_commit) =
+    let (tx_core, mut rx_proposer, _rx_commit, _, _) =
         core(next_leader, next_leader_key, committee(), store_path);
 
     // Send all votes to the core.
@@ -145,7 +172,7 @@ async fn commit_block() {
     // Run a core instance.
     let store_path = ".db_test_commit_block";
     let (public_key, secret_key) = keys().pop().unwrap();
-    let (tx_core, _rx_proposer, mut rx_commit) =
+    let (tx_core, _rx_proposer, mut rx_commit, _, _) =
         core(public_key, secret_key, committee(), store_path);
 
     // Send a the blocks to the core.
@@ -173,14 +200,14 @@ async fn local_timeout_round() {
 
     // Run a core instance.
     let store_path = ".db_test_local_timeout_round";
-    let (_tx_core, _rx_proposer, _rx_commit) =
+    let (_tx_core, _rx_proposer, _rx_commit, _, _) =
         core(public_key, secret_key, committee.clone(), store_path);
 
     // Ensure the node broadcasts a timeout vote.
     let handles: Vec<_> = committee
         .broadcast_addresses(&public_key)
         .into_iter()
-        .map(|address| listener(address, Some(Bytes::from(expected.clone()))))
+        .map(|(_, address)| listener(address, Some(Bytes::from(expected.clone()))))
         .collect();
     assert!(try_join_all(handles).await.is_ok());
 }

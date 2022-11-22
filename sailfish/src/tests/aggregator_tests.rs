@@ -15,7 +15,7 @@ fn make_qc() {
     let mut keys = keys();
     let qc = qc();
     let hash = qc.digest();
-    let round = qc.round;
+    let round = qc.view;
 
     // Add 2f+1 votes to the aggregator and ensure it returns the cryptographic
     // material to make a valid QC.

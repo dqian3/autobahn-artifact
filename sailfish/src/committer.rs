@@ -172,9 +172,9 @@ impl Committer {
         while let Some(x) = buffer.pop() {
             debug!("Sequencing {:?}", x);
             ordered.push(x.clone());
-            for parent in &x.header.parents {
+            for parent in x.header.parents.clone() {
 
-                let &parent_digest;
+                let parent_digest;
                 let round;
 
                 if x.header.is_special && x.header.special_parent.is_some() { // i.e. is special edge ==> manually hack the digest (only works because of requirement that header is from same node in prev round)
@@ -198,7 +198,7 @@ impl Committer {
                 let (digest, certificate) = match state
                     .dag
                     .get(&(round))                                           // returns Some(HashMap<key, value>)
-                    .map(|x| x.values().find(|(x, _)| x == parent_digest))   // x := Some(key, value); where key = pubkey, value = (dig, cert) ==> maps to Some(value)
+                    .map(|x| x.values().find(|(x, _)| x == &parent_digest))   // x := Some(key, value); where key = pubkey, value = (dig, cert) ==> maps to Some(value)
                     .flatten()                                               // result is something like Some(<Some(value)>)? => Flatten gets rid of outer Some
                 {
                     Some(x) => x,
