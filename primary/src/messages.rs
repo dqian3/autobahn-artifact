@@ -284,12 +284,16 @@ impl Vote {
 
 impl Hash for Vote {
     fn digest(&self) -> Digest {
+        // TODO: This digest function must match the QC digest in order for QCMaker/aggregator to work
+        // FIXME: Solve this issue so that there does not need to be a dependency
         let mut hasher = Sha512::new();
         hasher.update(&self.id);
-        hasher.update(self.round.to_le_bytes());
-        hasher.update(&self.origin);
+        hasher.update(self.view.to_le_bytes());
+        //hasher.update(&self.id);
+        //hasher.update(self.round.to_le_bytes());
+        //hasher.update(&self.origin);
         //hasher.update(self.is_special);
-        hasher.update(self.special_valid.to_le_bytes());
+        //hasher.update(self.special_valid.to_le_bytes());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
@@ -310,7 +314,7 @@ impl fmt::Debug for Vote {
 impl Vote {
     pub fn new_from_key(id: Digest, round: Round, author: PublicKey, secret: &SecretKey) -> Self {
         let vote = Vote {
-            id,
+            id: id.clone(),
             round,
             origin: author,
             author,
@@ -701,7 +705,7 @@ impl QC {
             weight >= committee.quorum_threshold(),
             ConsensusError::QCRequiresQuorum
         );
-
+        println!("Made it to qc verify {}, {}", self.digest(), self.votes.len());
         // Check the signatures.
         Signature::verify_batch(&self.digest(), &self.votes).map_err(ConsensusError::from)
     }
@@ -711,8 +715,9 @@ impl Hash for QC {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
         hasher.update(&self.hash);
+        //hasher.update(self.view.to_le_bytes());
+        //hasher.update(self.prev_view_round.to_le_bytes());
         hasher.update(self.view.to_le_bytes());
-        hasher.update(self.view_round.to_le_bytes());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }

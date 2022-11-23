@@ -141,7 +141,7 @@ pub fn qc() -> QC {
     let qc = QC {
         hash: Digest::default(),
         view: 1,
-        prev_view_round: 1,
+        view_round: 1,
         votes: Vec::new(),
     };
     let digest = qc.digest();
@@ -175,7 +175,7 @@ pub fn chain(keys: Vec<(PublicKey, SecretKey)>) -> Vec<Block> {
             let qc = QC {
                 hash: block.digest(),
                 view: block.view,
-                prev_view_round: 1,
+                view_round: 1,
                 votes: Vec::new(),
             };
             let digest = qc.digest();

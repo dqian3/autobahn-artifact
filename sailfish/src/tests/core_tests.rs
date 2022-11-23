@@ -17,6 +17,8 @@ fn core(
     Receiver<Block>,
     Receiver<(Header, u8, Option<QC>, Option<TC>)>,
     Sender<Header>,
+    Receiver<(u64, u64, Ticket)>,
+    Receiver<Certificate>,
 ) {
     let (tx_core, rx_core) = channel(1);
     let (tx_loopback, rx_loopback) = channel(1);
@@ -67,7 +69,7 @@ fn core(
         rx_special,
     );
 
-    (tx_core, rx_proposer, rx_block, rx_validation, tx_special)
+    (tx_core, rx_proposer, rx_block, rx_validation, tx_special, rx_ticket, rx_commit)
 }
 
 fn leader_keys(round: Round) -> (PublicKey, SecretKey) {
@@ -89,7 +91,9 @@ async fn handle_header() {
     let (public_key_1, secret_key_1) = leader_keys(1);
     //let vote = Vote::new_from_key(block.digest(), block.view, public_key, &secret_key);
 
-    let header = Header {author: public_key_1, round: 2, payload: BTreeMap::new(), parents: BTreeSet::new(), id: Digest::default(), signature: Signature::default(), is_special: true, view: 1, prev_view_round: 1, special_parent: None, special_parent_round: 1};
+    let header = Header {author: public_key_1, round: 2, payload: BTreeMap::new(), parents: BTreeSet::new(),
+                         id: Digest::default(), signature: Signature::default(), is_special: true, view: 1,
+                         prev_view_round: 1, special_parent: None, special_parent_round: 1, ticket: None, prev_view_header: None};
     let id = header.digest();
     let signature = Signature::new(&id, &secret_key_1);
 
@@ -100,7 +104,7 @@ async fn handle_header() {
 
     // Run a core instance.
     let store_path = ".db_test_handle_proposal";
-    let (_, _rx_proposer, _rx_commit, mut rx_validation, tx_special) =
+    let (_, _rx_proposer, _rx_commit, mut rx_validation, tx_special, _, _) =
         core(public_key, secret_key, committee.clone(), store_path);
 
     // Send a header to the core.
@@ -109,7 +113,10 @@ async fn handle_header() {
 
     let received = rx_validation.recv().await.unwrap();
 
+    //assert!(received.0.eq(&validate.0));
     assert_eq!(received.1, validate.1);
+    assert_eq!(received.2, validate.2);
+    //assert_eq!(received.3, validate.3);
 
     // Ensure the next leaders gets the vote.
 
@@ -134,10 +141,10 @@ async fn generate_proposal() {
             Vote::new_from_key(hash.clone(), block.view, *public_key, &secret_key)
         })
         .collect();
-    let hight_qc = QC {
+    let high_qc = QC {
         hash,
         view: block.view,
-        prev_view_round: block.view,
+        view_round: block.view,
         votes: votes
             .iter()
             .cloned()
@@ -147,20 +154,24 @@ async fn generate_proposal() {
 
     // Run a core instance.
     let store_path = ".db_test_generate_proposal";
-    let (tx_core, mut rx_proposer, _rx_commit, _, _) =
+    let (tx_core, mut rx_proposer, _rx_commit, _, _, mut rx_ticket, _) =
         core(next_leader, next_leader_key, committee(), store_path);
 
+    let message = ConsensusMessage::QC(high_qc.clone());
+    tx_core.send(message).await.unwrap();
+
     // Send all votes to the core.
-    for vote in votes.clone() {
+    /*for vote in votes.clone() {
         let message = ConsensusMessage::Vote(vote);
         tx_core.send(message).await.unwrap();
-    }
+    }*/
 
     // Ensure the core sends a new block.
-    let ProposerMessage(round, qc, tc) = rx_proposer.recv().await.unwrap();
-    assert_eq!(round, 2);
-    assert_eq!(qc, hight_qc);
-    assert!(tc.is_none());
+    let (view, round, _) = rx_ticket.recv().await.unwrap();
+    assert_eq!(round, 1);
+    assert_eq!(view, 2);
+    //assert_eq!(qc, high_qc);
+    //assert!(tc.is_none());
 }
 
 #[tokio::test]
@@ -172,21 +183,63 @@ async fn commit_block() {
     // Run a core instance.
     let store_path = ".db_test_commit_block";
     let (public_key, secret_key) = keys().pop().unwrap();
-    let (tx_core, _rx_proposer, mut rx_commit, _, _) =
+    let (tx_core, _rx_proposer, _, mut rx_validation, tx_special, mut rx_ticket, mut rx_commit) =
         core(public_key, secret_key, committee(), store_path);
 
-    // Send a the blocks to the core.
-    let committed = chain[0].clone();
-    for block in chain {
-        let message = ConsensusMessage::Propose(block);
-        tx_core.send(message).await.unwrap();
-    }
+    let header = Header {author: leader_keys(1).0, round: 2, payload: BTreeMap::new(), parents: BTreeSet::new(),
+                         id: Digest::default(), signature: Signature::default(), is_special: true, view: 1,
+                         prev_view_round: 1, special_parent: None, special_parent_round: 1, prev_view_header: None, ticket: None};
+    let id = header.digest();
+    let signature = Signature::new(&id, &leader_keys(1).1);
 
+    let head = Header {id: id.clone(), signature, ..header};
+
+    tx_special.send(head.clone()).await.unwrap();
+    rx_validation.recv().await.unwrap();
+
+    let mut payload = Vec::new();
+    payload.push(head.clone());
+
+    //let block = Block::new_from_key(QC::genesis(), leaders[0].0, 1, Vec::new(), &leaders[0].1);
+    let mut block = chain[0].clone();
+    block.payload = payload;
+    let hash = block.digest();
+    let votes: Vec<_> = keys()
+        .iter()
+        .map(|(public_key, secret_key)| {
+            Vote::new_from_key(hash.clone(), block.view, *public_key, &secret_key)
+        })
+        .collect();
+    let high_qc = QC {
+        hash: id,
+        view: block.view,
+        view_round: block.view,
+        votes: votes
+            .iter()
+            .cloned()
+            .map(|x| (x.author, x.signature))
+            .collect(),
+    };
+
+    let message = ConsensusMessage::QC(high_qc.clone());
+    tx_core.send(message).await.unwrap();
+    //rx_validation.recv().await.unwrap();
+
+    // Send a the blocks to the core.
+    //let committed = chain[0].clone();
+    let committed = Certificate { header: head, special_valids: Vec::new(), votes: high_qc.votes.clone() };
+    //for block in chain {
+//        let message = ConsensusMessage::Propose(block);
+  //      tx_core.send(message).await.unwrap();
+    //}
+
+    let b = rx_commit.recv().await.unwrap();
+    assert_eq!(b, committed);
     // Ensure the core commits the head.
-    match rx_commit.recv().await {
+    /*match rx_commit.recv().await {
         Some(b) => assert_eq!(b, committed),
         _ => assert!(false),
-    }
+    }*/
 }
 
 #[tokio::test]
@@ -200,7 +253,7 @@ async fn local_timeout_round() {
 
     // Run a core instance.
     let store_path = ".db_test_local_timeout_round";
-    let (_tx_core, _rx_proposer, _rx_commit, _, _) =
+    let (_tx_core, _rx_proposer, _rx_commit, _, _, _, _) =
         core(public_key, secret_key, committee.clone(), store_path);
 
     // Ensure the node broadcasts a timeout vote.
