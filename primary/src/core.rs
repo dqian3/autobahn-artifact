@@ -370,7 +370,13 @@ impl Core {
                 (None, true) => {},
                 // If we have parent header => create cert for committer
                 (Some(special_parent_dummy_cert), _) => {
-                    self.tx_committer.send(special_parent_dummy_cert).await.expect("Failed to send special parent certificate to committer");
+                    self.process_certificate(special_parent_dummy_cert).await?;
+                     //Note: This shouldn't be directly sent to committer; it should recursively check for all of its parents as well. 
+                            // Just call process_cert, don't need to sanitize - transitively validated via child already)
+                            //NOTE: Digest of dummy_cert equivalent to real cert ==> just missing signatures & special_valids
+                    //self.tx_committer.send(special_parent_dummy_cert).await.expect("Failed to send special parent certificate to committer");
+                   
+                    //
                 },
                 // If we don't have parent => create a waiter. (or just return -- since process_header should have added it.)
                 _ => return Ok(())

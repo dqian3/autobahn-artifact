@@ -134,7 +134,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 signature_service,
                 store,
                 /* rx_mempool */ rx_new_certificates,
-                rx_committer.
+                rx_committer,
                 /* tx_mempool */ tx_feedback,
                 tx_output,
                 tx_ticket,

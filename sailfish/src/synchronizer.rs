@@ -172,7 +172,8 @@ impl Synchronizer {
         match ticket.qc {
             Some(qc) => {
                // check if qc for prev view.
-                parent = qc.hash;
+                parent = Header::default().digest(); //FIXME: THis is just a placeholder for compilation. ; Either QC and TC should hold hash of the header they commit; or that parent_header needs to be part of Header 
+                                                                                                            //But to set it, would need QC or TC to contain header... ==> so just edit that.
             },
             None => {
                 match ticket.tc {

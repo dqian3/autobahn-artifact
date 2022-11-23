@@ -70,10 +70,14 @@ pub struct Header {
     
     pub is_special: bool,
     pub view: View,
-    pub prev_view_round: Round, //round that was proposed by the last view.
+    //edges within DAG
     pub special_parent: Option<Digest>, //Digest of the header of the special parent.
     pub special_parent_round: Round, //round of the parent we have special edge to (only used to re-construct parent cert digest in committer)
     pub ticket: Option<Ticket>, 
+    //Consensus parent
+    pub prev_view_round: Round, //round that was proposed by the last view.
+    pub prev_view_header: Option<Digest>, 
+    
 
 }
 
@@ -88,10 +92,11 @@ impl Header {
         signature_service: &mut SignatureService,
         is_special: bool,
         view: View,
-        prev_view_round: Round,
         special_parent: Option<Digest>,
         special_parent_round: Round,
         ticket: Option<Ticket>,
+        prev_view_round: Round,
+        prev_view_header: Option<Digest>,
 
     ) -> Self {
         let header = Self {
@@ -103,10 +108,11 @@ impl Header {
             signature: Signature::default(),
             is_special,
             view,
-            prev_view_round,
             special_parent,
             special_parent_round,
-            ticket
+            ticket,
+            prev_view_round,
+            prev_view_header,
         };
         let id = header.digest();
         let signature = signature_service.request_signature(id.clone()).await;
@@ -171,13 +177,19 @@ impl Hash for Header {
         let f: u8 = if self.is_special { 1u8 } else { 0u8 };
         hasher.update(f.to_le_bytes());
         hasher.update(&self.view.to_le_bytes());
-        hasher.update(&self.prev_view_round.to_le_bytes());
         
+    
         match &self.special_parent {
             Some(parent) => hasher.update(parent),
             None => {},
         }
         hasher.update(&self.special_parent_round.to_le_bytes());
+
+        hasher.update(&self.prev_view_round.to_le_bytes());
+        match &self.prev_view_header {
+            Some(parent) => hasher.update(parent),
+            None => {},
+        }
         
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
@@ -606,7 +618,7 @@ impl Block {
 pub struct AcceptVote {
     pub hash: Digest,
     pub view: View,
-    pub prev_view_round: Round,
+    pub view_round: Round,
     pub author: PublicKey,
     pub signature: Signature,
 }
@@ -620,7 +632,7 @@ impl AcceptVote {
         let vote = Self {
             hash: header.id.clone(),
             view: header.view,
-            prev_view_round: header.round,
+            view_round: header.round,
             author,
             signature: Signature::default(),
         };
@@ -646,7 +658,7 @@ impl Hash for AcceptVote {
         let mut hasher = Sha512::new();
         hasher.update(&self.hash);
         hasher.update(self.view.to_le_bytes());
-        hasher.update(self.prev_view_round.to_le_bytes());
+        hasher.update(self.view_round.to_le_bytes());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
@@ -661,7 +673,7 @@ impl fmt::Debug for AcceptVote {
 pub struct QC {
     pub hash: Digest,
     pub view: View,
-    pub prev_view_round: Round,
+    pub view_round: Round,
     pub votes: Vec<(PublicKey, Signature)>,
 }
 
@@ -700,7 +712,7 @@ impl Hash for QC {
         let mut hasher = Sha512::new();
         hasher.update(&self.hash);
         hasher.update(self.view.to_le_bytes());
-        hasher.update(self.prev_view_round.to_le_bytes());
+        hasher.update(self.view_round.to_le_bytes());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
@@ -803,6 +815,7 @@ impl PartialEq for Timeout {
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct TC {
+    //TODO: TC should contain hash of the header we vote to commit too. This can be an Option, I.e. there might be none for this view. ==> TODO: Need to include quorum of messages to endorse header 
     pub view: View,
     pub votes: Vec<(PublicKey, Signature, View)>,
 }

@@ -70,13 +70,14 @@ impl CertificateWaiter {
                         .collect();
 
                     //Add a waiter for the special parent header.
-                    let special_wait_for = certificate
+                    if certificate.header.special_parent.is_some(){
+                        let special_wait_for = certificate
                         .header
                         .special_parent
                         .clone();
-                    if special_wait_for.is_some() {
                         wait_for.push(  (special_wait_for.unwrap().to_vec(), self.store.clone())  );
-                    }
+                     }
+                    
 
                     let fut = Self::waiter(wait_for, certificate);
                     waiting.push(fut);

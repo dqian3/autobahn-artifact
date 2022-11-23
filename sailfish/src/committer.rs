@@ -183,11 +183,12 @@ impl Committer {
                     
                     let mut hasher = Sha512::new();
                     hasher.update(&parent); //== parent_header.id
-                    hasher.update(&x.header.special_parent_round.to_le_bytes()); //parent_header.round = child round -1
+                    hasher.update(&x.header.special_parent_round.to_le_bytes()); 
                     hasher.update(&x.header.origin()); //parent_header.origin = child_header_origin
-                    let dig = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
-                    
-                    parent_digest = &dig;
+                    parent_digest = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
+
+                    //TODO: Check if store does not contain this cert => Create one and add to state (and store)
+
                     round = x.header.special_parent_round;
                 }
                 else{
@@ -287,13 +288,24 @@ impl CertificateWaiter {
 
                     // Add the certificate to the waiter pool. The waiter will return it to us
                     // when all its parents are in the store.
-                    let wait_for = certificate
+                    let mut wait_for: Vec<(Vec<u8>, Store)>= certificate
                         .header
                         .parents
                         .iter()
                         .cloned()
                         .map(|x| (x.to_vec(), self.store.clone()))
                         .collect();
+
+                     //Add a waiter for the special parent header.
+                     if certificate.header.special_parent.is_some(){
+                        let special_wait_for = certificate
+                        .header
+                        .special_parent
+                        .clone();
+                        wait_for.push(  (special_wait_for.unwrap().to_vec(), self.store.clone())  );
+                     }
+                    
+
                     let fut = Self::waiter(wait_for, certificate);
                     waiting.push_back(fut);
                 }

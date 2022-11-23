@@ -192,11 +192,13 @@ impl Core {
             let mut certs = Vec::new();
             // Send the payload to the committer.
 
-            // FIXME: change special_valids to be a valid not None 
+            // FIXME: change special_valids to be a valid not None ?
+            //FIXME: The cert for the header is not enough => need to ensure that all edges of this header have certs in the committer
+            //TODO: Need to sync on all edges if not already stored ==> this needs to be able to call back into the DAG layer to call process_cert (might need to sync to get that real cert first.)
             let certificate = Certificate { header, special_valids: Vec::new(), votes: qc.clone().votes }; //TODO: I don't think these votes are ever used. Just create empty vec.
             certs.push(certificate.clone());
 
-            self.tx_commit
+            self.tx_commit   //Note: This is sent to the commiter/CertificateWaiter
                 .send(certificate)
                 .await
                 .expect("Failed to send payload");
@@ -384,7 +386,7 @@ impl Core {
 
         if header.is_some(){
             let head = header.unwrap().clone();
-            self.commit(&head, qc);
+            self.commit(&head, qc).await?;
         }
         //FIXME: SHould we be returning if none? Re-submit for commit some time later?
 
@@ -452,14 +454,18 @@ impl Core {
         self.aggregator.cleanup(&self.view);
     }
 
+    // QC or TC formed so send ticket to the consensus
+    // check to see whether you are the leader is implicit
     #[async_recursion]
     async fn generate_proposal(&mut self, tc: Option<TC>) {
 
-         // QC or TC formed so send ticket to the consensus
-         // check to see whether you are the leader is implicit
+
+        //TODO: Pass down as part of ticket or header the digest of the previously committed header. 
+        //(Either store it as part of QC/TC -> then its implicit and it does not need to be passed)
+        //(Or store locally self.ticket_header as last)  --> Note: We cannot just use last committed, because a TC may propose a header that only gets committed upon next QC (yet the TC proposal should count as ticket)
+
          
          //pass down Qc or TC for ticket
-       
         let ticket;
         if self.high_qc.view + 1 == self.view {
             ticket = Ticket::new(Some(self.high_qc.clone()), None, self.view).await;
@@ -487,7 +493,7 @@ impl Core {
         debug!("Processing {:?}", qc);
         self.advance_view(qc.view).await;
         self.update_high_qc(qc);
-        self.round = max(self.round, qc.prev_view_round);
+        self.round = max(self.round, qc.view_round);
     }
 
     //Call process_header upon receiving upcall from Dag layer.
@@ -509,7 +515,7 @@ impl Core {
                 );
                // check if we need to process qc.
                if qc.view > self.last_committed_view { // //TODO:  Update last_committed_view only upon commit. //implies that last_committed_view <= view
-                self.handle_qc(&qc); //TODO: don't do this redundantly/check for duplicates --> + TODO: HandleQC directly, but defer Commit upcall until until parent qc has been handled. 
+                self.handle_qc(&qc).await?; //TODO: don't do this redundantly/check for duplicates --> + TODO: HandleQC directly, but defer Commit upcall until until parent qc has been handled. 
                                                     //TODO: Important: Process_header should still complete, since validation needs to be asynchronous --> it suffices to check that the ticket QC is correct.
                }
                 
@@ -524,7 +530,7 @@ impl Core {
                         );
                         // check if we need to process qc.
                         if tc.view > self.last_committed_view {
-                            self.handle_tc(&tc);
+                            self.handle_tc(&tc).await?;
                         }
                     },
                     None => return Err(ConsensusError::InvalidTicket)
@@ -546,7 +552,7 @@ impl Core {
                 //NOTE: Proofs thus only need to prove timeout case (since otherwise replicas would stay silent) ==> i.e. checking TC (or a consecutive QC) for higher view suffices. (I.e. don't need to check round number)
 
         //2) round > last round
-        //Only process special header if the round number is increasing
+        //Only process special header if the round number is increasing  // self.round >= ticket.qc.view_round since we process_qc first.
         ensure!(
             header.round > self.round,
             ConsensusError::NonMonotonicRounds(header.round, self.round)

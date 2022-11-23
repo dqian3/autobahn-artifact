@@ -52,6 +52,8 @@ pub struct Proposer {
     view: View,
     // The round proposed by the last view in consensus.
     prev_view_round: Round,
+    prev_view_header: Option<Digest>,
+
     // Whether to propose special block
     propose_special: bool,
     // Whether the previous block had enough parents. If yes, can issue special block without. If not, then special block must wait for parents.
@@ -112,6 +114,7 @@ impl Proposer {
                 payload_size: 0,
                 view: 0,
                 prev_view_round: 1,
+                prev_view_header: None,
                 propose_special: false,
                 last_has_parents: true,
                 use_special_parent: false,
@@ -128,6 +131,8 @@ impl Proposer {
 
         let mut ticket = None;
         mem::swap(&mut self.ticket, &mut ticket); //Reset self.ticket; and move ticket (this just avoids copying)
+        let mut prev_view_header = None;
+        mem::swap(&mut self.prev_view_header, &mut prev_view_header);
         // Make a new header.
         let header = Header::new(
                 self.name,
@@ -137,10 +142,11 @@ impl Proposer {
                 &mut self.signature_service,
                 is_special,
                 self.view,
-                self.prev_view_round,
                 if self.use_special_parent {Some(self.last_header_id.clone())} else {None},
                 self.last_header_round,
                 ticket, 
+                self.prev_view_round,
+                prev_view_header,
             ).await;
 
         debug!("Created {:?}", header);
