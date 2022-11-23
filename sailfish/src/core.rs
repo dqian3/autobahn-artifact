@@ -382,11 +382,11 @@ impl Core {
         //TODO: Should only commit QC's in order. Must wait / request all intermediary QC's
         //upcall to app layer: Order dag, and execute.
 
+
         let header: Option<&Header> = self.stored_headers.get(&qc.hash);
 
-        if header.is_some(){
-            let head = header.unwrap().clone();
-            self.commit(&head, qc).await?;
+        if header.is_some() {
+            self.commit(&header.unwrap().clone(), qc).await;
         }
         //FIXME: SHould we be returning if none? Re-submit for commit some time later?
 
@@ -545,6 +545,7 @@ impl Core {
             header.view >self.last_voted_view,
             ConsensusError::TooOld(header.id, header.view)
         );
+
                     //TODO: If we have already voted for this view; or we have already voted in a previoius view for this vote round or bigger ==> then don't vote at all. The proposer must be byz.
                 // But if we cannot vote for this view because of a timeout; then do want to vote for Dag, but invalidate the specialness. Problem: Might not have a proof yet. ==> Need to wait for it. 
                 //(I.e. if don't have conflict QC/TC, start a waiter)
@@ -562,13 +563,17 @@ impl Core {
         //3) Header signature correct
         header.verify(&self.committee)?;
 
+
         //4) Header author == view leader
         ensure!(
             header.author == self.leader_elector.get_leader(header.view),
             ConsensusError::WrongProposer
         );
 
-        
+
+        //5) TODO: Check if Ticket valid.
+        // I.e. whether have QC/TC for view v-1 
+        //If don't have QC/TC. Start a waiter. If waiter triggers, call this function again (or directly call down validation complete)
 
         //6) Update latest prepared. Update latest_voted_view.
         self.view = header.view; //

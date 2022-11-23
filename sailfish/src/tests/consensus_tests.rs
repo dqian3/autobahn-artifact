@@ -39,6 +39,7 @@ fn spawn_nodes(
             tokio::spawn(async move {
                 loop {
                     rx_consensus_to_mempool.recv().await;
+                    //rx_sailfish.recv().await;
                 }
             });
 
@@ -65,7 +66,9 @@ fn spawn_nodes(
         .collect()
 }
 
-#[tokio::test]
+// TODO: This test is not applicable since primary module aids in consensus
+
+/*#[tokio::test]
 async fn end_to_end() {
     let committee = committee_with_base_port(15_000);
 
@@ -76,4 +79,4 @@ async fn end_to_end() {
     // Ensure all threads terminated correctly.
     let blocks = try_join_all(handles).await.unwrap();
     assert!(blocks.windows(2).all(|w| w[0] == w[1]));
-}
+}*/

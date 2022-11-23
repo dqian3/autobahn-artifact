@@ -96,10 +96,11 @@ impl QCMaker {
 
         self.votes.push((author, vote.signature.clone()));
         self.weight += committee.stake(&author);
+        println!("self weight is {}", self.votes.len());
         if self.weight >= committee.quorum_threshold() {
             self.weight = 0; // Ensures QC is only made once.
             return Ok(Some(QC {
-                hash: vote.clone().digest(),
+                hash: vote.id.clone(),
                 view: vote.view,
                 view_round: vote.round, //Note: Currently aren't checking anywhere that the view_rounds of the Votes match. However, they must be matching transitively: Replicas only vote on certs, and a cert only is formed on matching view_round.
                 votes: self.votes.clone(),
@@ -123,7 +124,7 @@ impl QCMaker {
         if self.weight >= committee.quorum_threshold() {
             self.weight = 0; // Ensures QC is only made once.
             return Ok(Some(QC {
-                hash: vote.clone().digest(),
+                hash: vote.hash.clone(),
                 view: vote.view,
                 view_round: vote.view_round, //Note: Currently aren't checking anywhere that the view_rounds of the Votes match. However, they must be matching transitively: Replicas only vote on certs, and a cert only is formed on matching view_round.
                 votes: self.votes.clone(),

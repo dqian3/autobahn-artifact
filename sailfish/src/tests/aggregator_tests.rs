@@ -21,18 +21,21 @@ fn make_qc() {
     // material to make a valid QC.
     let (public_key, secret_key) = keys.pop().unwrap();
     let vote = Vote::new_from_key(hash.clone(), round, public_key, &secret_key);
-    let result = aggregator.add_vote(vote);
+    let result = aggregator.add_vote(vote.clone());
+
     assert!(result.is_ok());
     assert!(result.unwrap().is_none());
 
     let (public_key, secret_key) = keys.pop().unwrap();
     let vote = Vote::new_from_key(hash.clone(), round, public_key, &secret_key);
-    let result = aggregator.add_vote(vote);
+    let result = aggregator.add_vote(vote.clone());
+
     assert!(result.is_ok());
     assert!(result.unwrap().is_none());
 
     let (public_key, secret_key) = keys.pop().unwrap();
     let vote = Vote::new_from_key(hash.clone(), round, public_key, &secret_key);
+
     match aggregator.add_vote(vote) {
         Ok(Some(qc)) => assert!(qc.verify(&committee()).is_ok()),
         _ => assert!(false),
