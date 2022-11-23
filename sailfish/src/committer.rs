@@ -168,38 +168,26 @@ impl Committer {
         let mut ordered = Vec::new();
         let mut already_ordered = HashSet::new();
 
+        let dummy = (Digest::default(), Certificate::default());
+    
+
         let mut buffer = vec![tip];
         while let Some(x) = buffer.pop() {
             debug!("Sequencing {:?}", x);
             ordered.push(x.clone());
-            for parent in x.header.parents.clone() {
+
+            for parent in &x.header.parents.clone() {
 
                 let parent_digest;
                 let round;
 
-                if x.header.is_special && x.header.special_parent.is_some() { // i.e. is special edge ==> manually hack the digest (only works because of requirement that header is from same node in prev round)
-                                                                        //Currently we can skip rounds. Header needs to include parent round to solve this.
-                                                                        //Note: process_header verifies that author and rounds are correct.
-                    
-                    let mut hasher = Sha512::new();
-                    hasher.update(&parent); //== parent_header.id
-                    hasher.update(&x.header.special_parent_round.to_le_bytes()); 
-                    hasher.update(&x.header.origin()); //parent_header.origin = child_header_origin
-                    parent_digest = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
-
-                    //TODO: Check if store does not contain this cert => Create one and add to state (and store)
-
-                    round = x.header.special_parent_round;
-                }
-                else{
-                    parent_digest = parent;
-                    round = x.round() -1;
-                }
+                parent_digest = parent;
+                round = x.round() -1;
 
                 let (digest, certificate) = match state
                     .dag
                     .get(&(round))                                           // returns Some(HashMap<key, value>)
-                    .map(|x| x.values().find(|(x, _)| x == &parent_digest))   // x := Some(key, value); where key = pubkey, value = (dig, cert) ==> maps to Some(value)
+                    .map(|x| x.values().find(|(x, _)| x == parent_digest))   // x := Some(key, value); where key = pubkey, value = (dig, cert) ==> maps to Some(value)
                     .flatten()                                               // result is something like Some(<Some(value)>)? => Flatten gets rid of outer Some
                 {
                     Some(x) => x,
@@ -220,7 +208,53 @@ impl Committer {
                     buffer.push(certificate);
                     already_ordered.insert(digest);
                 }
+                
             }
+
+            if x.header.is_special && x.header.special_parent.is_some() { // i.e. is special edge ==> manually hack the digest (only works because of requirement that header is from same node in prev round)
+                //Currently we can skip rounds. Header needs to include parent round to solve this.
+                //Note: process_header verifies that author and rounds are correct.
+
+                //generate digest of dummy cert
+                let mut hasher = Sha512::new();
+                hasher.update(&x.header.special_parent.as_ref().unwrap()); //== parent_header.id
+                hasher.update(&x.header.special_parent_round.to_le_bytes()); 
+                hasher.update(&x.header.origin()); //parent_header.origin = child_header_origin
+                let parent_digest = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
+
+                let round = x.header.special_parent_round;
+
+                let mut skip: bool = false; 
+                
+    
+
+                let (digest, certificate) = match state
+                    .dag
+                    .get(&(round))                                           // returns Some(HashMap<key, value>)
+                    .map(|x| x.values().find(|(x, _)| x == &parent_digest))   // x := Some(key, value); where key = pubkey, value = (dig, cert) ==> maps to Some(value)
+                    .flatten()                                               // result is something like Some(<Some(value)>)? => Flatten gets rid of outer Some
+                {
+                    Some(x) => x,
+                    None => {
+                        debug!("We already processed and cleaned up {}", parent_digest);
+                        skip = true; // We already ordered or GC up to here.
+                        &dummy
+                    }
+                };
+
+                // We skip the certificate if we (1) already processed it or (2) we reached a round that we already
+                // committed for this authority.
+                skip |= already_ordered.contains(&digest);
+                skip |= state
+                    .last_committed
+                    .get(&certificate.origin())
+                    .map_or_else(|| false, |r| r == &certificate.round());   //stop if last committed = the round we'd evaluate next
+                if !skip {
+                    buffer.push(certificate);
+                    already_ordered.insert(digest);
+                }
+            }
+
         }
 
         // Ensure we do not commit garbage collected certificates.
@@ -232,6 +266,8 @@ impl Committer {
     }
 }
 
+ //TODO: Create a sync call to request sync at the dag layer
+                    
 /// Waits to receive all the ancestors of a certificate before sending it through the output
 /// channel. The outputs are in the same order as the input (FIFO).
 pub struct CertificateWaiter {
@@ -298,13 +334,18 @@ impl CertificateWaiter {
 
                      //Add a waiter for the special parent header.
                      if certificate.header.special_parent.is_some(){
-                        let special_wait_for = certificate
+                        let special_parent = certificate
                         .header
                         .special_parent
-                        .clone();
-                        wait_for.push(  (special_wait_for.unwrap().to_vec(), self.store.clone())  );
+                        .clone().unwrap();
+                        //create dummy digest
+                        let mut hasher = Sha512::new();
+                        hasher.update(&special_parent); //== parent_header.id
+                        hasher.update(&certificate.header.special_parent_round.to_le_bytes()); 
+                        hasher.update(&certificate.header.origin()); //parent_header.origin = child_header_origin
+                        let special_wait_for = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
+                        wait_for.push(  (special_wait_for.to_vec(), self.store.clone())  );
                      }
-                    
 
                     let fut = Self::waiter(wait_for, certificate);
                     waiting.push_back(fut);
