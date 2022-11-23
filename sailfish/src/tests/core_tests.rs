@@ -17,7 +17,7 @@ fn core(
     Receiver<Block>,
     Receiver<(Header, u8, Option<QC>, Option<TC>)>,
     Sender<Header>,
-    Receiver<(u64, u64)>,
+    Receiver<(u64, u64, Ticket)>,
     Receiver<Certificate>,
 ) {
     let (tx_core, rx_core) = channel(1);
@@ -91,7 +91,9 @@ async fn handle_header() {
     let (public_key_1, secret_key_1) = leader_keys(1);
     //let vote = Vote::new_from_key(block.digest(), block.view, public_key, &secret_key);
 
-    let header = Header {author: public_key_1, round: 2, payload: BTreeMap::new(), parents: BTreeSet::new(), id: Digest::default(), signature: Signature::default(), is_special: true, view: 1, prev_view_round: 1, special_parent: None, special_parent_round: 1};
+    let header = Header {author: public_key_1, round: 2, payload: BTreeMap::new(), parents: BTreeSet::new(),
+                         id: Digest::default(), signature: Signature::default(), is_special: true, view: 1,
+                         prev_view_round: 1, special_parent: None, special_parent_round: 1, ticket: None, prev_view_header: None};
     let id = header.digest();
     let signature = Signature::new(&id, &secret_key_1);
 
@@ -142,7 +144,7 @@ async fn generate_proposal() {
     let high_qc = QC {
         hash,
         view: block.view,
-        prev_view_round: block.view,
+        view_round: block.view,
         votes: votes
             .iter()
             .cloned()
@@ -165,7 +167,7 @@ async fn generate_proposal() {
     }*/
 
     // Ensure the core sends a new block.
-    let (view, round) = rx_ticket.recv().await.unwrap();
+    let (view, round, _) = rx_ticket.recv().await.unwrap();
     assert_eq!(round, 1);
     assert_eq!(view, 2);
     //assert_eq!(qc, high_qc);
@@ -184,7 +186,9 @@ async fn commit_block() {
     let (tx_core, _rx_proposer, _, mut rx_validation, tx_special, mut rx_ticket, mut rx_commit) =
         core(public_key, secret_key, committee(), store_path);
 
-    let header = Header {author: leader_keys(1).0, round: 2, payload: BTreeMap::new(), parents: BTreeSet::new(), id: Digest::default(), signature: Signature::default(), is_special: true, view: 1, prev_view_round: 1, special_parent: None, special_parent_round: 1};
+    let header = Header {author: leader_keys(1).0, round: 2, payload: BTreeMap::new(), parents: BTreeSet::new(),
+                         id: Digest::default(), signature: Signature::default(), is_special: true, view: 1,
+                         prev_view_round: 1, special_parent: None, special_parent_round: 1, prev_view_header: None, ticket: None};
     let id = header.digest();
     let signature = Signature::new(&id, &leader_keys(1).1);
 
@@ -209,7 +213,7 @@ async fn commit_block() {
     let high_qc = QC {
         hash: id,
         view: block.view,
-        prev_view_round: block.view,
+        view_round: block.view,
         votes: votes
             .iter()
             .cloned()
