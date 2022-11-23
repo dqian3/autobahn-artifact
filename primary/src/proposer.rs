@@ -132,7 +132,7 @@ impl Proposer {
         let mut ticket = None;
         mem::swap(&mut self.ticket, &mut ticket); //Reset self.ticket; and move ticket (this just avoids copying)
         let mut prev_view_header = None;
-        mem::swap(&mut self.prev_view_header, &mut prev_view_header);
+        mem::swap(&mut self.prev_view_header, &mut prev_view_header);  //TODO: Currently unused = just None. Need to pass a prev_view_header digest as part of ticket channel. (or include it inside ticket => preferred)
         // Make a new header.
         let header = Header::new(
                 self.name,
