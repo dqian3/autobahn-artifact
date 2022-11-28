@@ -41,6 +41,7 @@ pub enum ConsensusMessage {
     Timeout(Timeout),
     TC(TC),
     SyncRequest(Digest, PublicKey), //Note: These Digests are now for Headers
+    SyncRequestCert(Digest, PublicKey),
     Header(Header),
 }
 

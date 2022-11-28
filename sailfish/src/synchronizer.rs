@@ -2,7 +2,7 @@ use crate::consensus::{ConsensusMessage, CHANNEL_CAPACITY};
 //use crate::error::ConsensusResult;
 use primary::Header;
 use primary::error::{ConsensusResult, ConsensusError};
-use primary::messages::{Block, QC};
+use primary::messages::{QC, Certificate};
 use bytes::Bytes;
 use config::Committee;
 use crypto::Hash as _;
@@ -26,6 +26,7 @@ const TIMER_ACCURACY: u64 = 5_000;
 pub struct Synchronizer {
     store: Store,
     inner_channel: Sender<(Header, Digest)>,
+    inner_channel_cert: Sender<Header>,
 }
 
 impl Synchronizer {
@@ -38,6 +39,7 @@ impl Synchronizer {
     ) -> Self {
         let mut network = SimpleSender::new();
         let (tx_inner, mut rx_inner): (_, Receiver<(Header, Digest)>) = channel(CHANNEL_CAPACITY);
+        let (tx_cert, mut rx_cert): (_, Receiver<Header>) = channel(CHANNEL_CAPACITY);
 
         let store_copy = store.clone();
         tokio::spawn(async move {
@@ -73,6 +75,28 @@ impl Synchronizer {
                                     .expect("Failed to serialize sync request");
                                 network.send(address, Bytes::from(message)).await;
                             }
+                        }
+                    },
+                    Some(header) = rx_cert.recv() => {
+                        let cert_digest = header.clone().digest();
+                        let fut = Self::waiter(store_copy.clone(), cert_digest.clone(), header.clone());
+                        waiting.push(fut);
+
+                        if !requests.contains_key(&cert_digest){
+                            debug!("Requesting sync for header {}", cert_digest);
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .expect("Failed to measure time")
+                                .as_millis();
+                            requests.insert(cert_digest.clone(), now);
+                            let address = committee
+                                .consensus(&header.author)
+                                .expect("Author of valid header is not in the committee")
+                                .consensus_to_consensus;
+                            let message = ConsensusMessage::SyncRequestCert(cert_digest, name);
+                            let message = bincode::serialize(&message)
+                                .expect("Failed to serialize sync request");
+                            network.send(address, Bytes::from(message)).await;
                         }
                     },
                     // Some(block) = rx_inner.recv() => {
@@ -138,6 +162,7 @@ impl Synchronizer {
         Self {
             store,
             inner_channel: tx_inner,
+            inner_channel_cert: tx_cert,
         }
     }
 
@@ -166,31 +191,18 @@ impl Synchronizer {
         //TODO: Replace all this with dedicated consensus parent edge (digest of header ordered before) -> that can be a header ordered by the preceding Qc or Tc
         //use parent digest = Ticket Qc.hash
         //TODO: Need to find a similar mechanism for TC tickets. //For now this hack suffices.
-
         let ticket = header.ticket.clone().unwrap();
-        let parent: Digest; //Header digest!
-        match ticket.qc {
-            Some(qc) => {
-               // check if qc for prev view.
-                parent = Header::default().digest(); //FIXME: THis is just a placeholder for compilation. ; Either QC and TC should hold hash of the header they commit; or that parent_header needs to be part of Header 
-                                                                                                            //But to set it, would need QC or TC to contain header... ==> so just edit that.
-            },
-            None => {
-                match ticket.tc {
-                    Some(tc) => {
-                       parent = Header::default().digest(); //FIXME: THis is just a placeholder for compilation. 
-                    },
-                    None => return Err(ConsensusError::InvalidTicket),
-                }
-            }
+        let parent: Digest = ticket.qc.clone().hash; //Header digest!
 
+        // If QC not in previous view then there must be a TC
+        if ticket.qc.clone().view + 1 != header.view && ticket.tc.is_none() {
+            return Err(ConsensusError::InvalidTicket);
+        }
+
+        if ticket.qc == QC::genesis() {
+            return Ok(None)
         }
             
-        //TODO: Genesis cutoff    let parent = qc.hash
-        // if block.qc == QC::genesis() {
-        //     return Ok(Some(Block::genesis()));
-        // }
-
         match self.store.read(parent.to_vec()).await? {
             Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
             None => {
@@ -201,6 +213,36 @@ impl Synchronizer {
             }
         }
     }
+
+    pub async fn get_special_parent_header(&mut self, header: &Header) -> ConsensusResult<Option<Header>> {
+        let parent = header.special_parent.clone();
+        let mut return_value = Ok(None);
+
+        if parent.is_some() {
+            match self.store.read(parent.clone().unwrap().to_vec()).await? {
+                Some(bytes) => return_value = Ok(Some(bincode::deserialize(&bytes)?)),
+                None  => {
+                    if let Err(e) = self.inner_channel.send((header.clone(), parent.unwrap())).await {
+                        panic!("Failed to send request to synchronizer: {}", e);
+                    }
+                }
+            }
+        }
+        return_value
+    }
+
+    pub async fn get_cert(&mut self, header: &Header) -> ConsensusResult<Option<Certificate>> {
+        match self.store.read(header.clone().digest().to_vec()).await? {
+            Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
+            None  => {
+                if let Err(e) = self.inner_channel_cert.send(header.clone()).await {
+                     panic!("Failed to send request to synchronizer: {}", e);
+                }
+                Ok(None)
+            }
+        }
+    }
+
 
     // pub async fn get_ancestors(
     //     &mut self,

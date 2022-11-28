@@ -1,7 +1,7 @@
 use super::*;
 use crate::common::{chain, committee, committee_with_base_port, keys, listener};
 use crypto::{SecretKey, Signature};
-use primary::messages::{Header, QC, TC, Vote};
+use primary::messages::{Header, QC, TC, Vote, Block};
 use futures::future::try_join_all;
 use std::{fs, collections::BTreeMap, collections::BTreeSet};
 use tokio::sync::mpsc::channel;

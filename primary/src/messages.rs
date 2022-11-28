@@ -19,14 +19,14 @@ use std::fmt;
 ///////////
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Ticket {
-    pub qc: Option<QC>,
+    pub qc: QC,
     pub tc: Option<TC>,
     pub view: View,
 }
 
 impl Ticket {
     pub async fn new(
-        qc: Option<QC>,
+        qc: QC,
         tc: Option<TC>,
         view: View,
     ) -> Self {
