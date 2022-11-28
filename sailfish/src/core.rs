@@ -649,6 +649,12 @@ impl Core {
         Ok(())
     }
 
+    #[async_recursion]
+    async fn process_sync_cert(&mut self, certificate: Certificate) -> ConsensusResult<()> {
+        //TODO: call down to Dag layer.
+        Ok(())
+    }
+
     //Call process_header upon receiving upcall from Dag layer.
     #[async_recursion]
     async fn process_certificate(&mut self, certificate: Certificate) -> ConsensusResult<()> {
