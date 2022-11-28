@@ -164,11 +164,11 @@ impl Core {
         //TODO:
         let mut parent = header.clone();
         while self.last_committed_view + 1 < parent.view {
-            let special_parent = self.synchronizer.get_special_parent_header(&parent).await?;
+            // let special_parent = self.synchronizer.get_special_parent_header(&parent).await?;
 
-            if special_parent.is_some() {
-                to_commit.push_back(special_parent.unwrap());
-            }
+            // if special_parent.is_some() {
+            //     to_commit.push_back(special_parent.unwrap());
+            // }
 
             let ancestor = self
                 .synchronizer
@@ -517,6 +517,10 @@ impl Core {
     async fn process_header(&mut self, header: Header) -> ConsensusResult<()> {
        
         //0) TODO: Check if Ticket valid. If we have not processed ticket yet. Do so.
+
+        //FIXME: If no TC present, must check that QC is for the preceeding view
+        //FIXME: Currently always checks if TC present, and returns Error if not => shouldn't do this.
+
         ensure!(
             header.ticket.is_some(),
             ConsensusError::InvalidTicket
@@ -821,6 +825,8 @@ impl Core {
                 },
 
                 Some(header) = self.rx_loopback.recv() => self.process_header(header).await,  //Processing Header that we resume via Synchronizer upcall
+                //TODO: Add loopback for certificates we sync? Don't think we need it.
+
                 
                 //NO LONGER NEEDED: Some(block) = self.rx_loopback.recv() => self.process_block(&block).await,  //Processing Block that we propose ourselves. (or that we resume via Synchronizer upcall)
                 () = &mut self.timer => self.local_timeout_view().await,

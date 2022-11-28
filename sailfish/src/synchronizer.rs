@@ -7,11 +7,14 @@ use bytes::Bytes;
 use config::Committee;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
+use ed25519_dalek::Digest as _;
+use ed25519_dalek::Sha512;
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::stream::StreamExt as _;
 use log::{debug, error};
 use network::SimpleSender;
 use std::collections::{HashMap, HashSet};
+use std::convert::TryInto;
 use std::time::{SystemTime, UNIX_EPOCH};
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -26,7 +29,7 @@ const TIMER_ACCURACY: u64 = 5_000;
 pub struct Synchronizer {
     store: Store,
     inner_channel: Sender<(Header, Digest)>,
-    inner_channel_cert: Sender<Header>,
+    inner_channel_cert: Sender<(Header, Digest)>,
 }
 
 impl Synchronizer {
@@ -39,7 +42,7 @@ impl Synchronizer {
     ) -> Self {
         let mut network = SimpleSender::new();
         let (tx_inner, mut rx_inner): (_, Receiver<(Header, Digest)>) = channel(CHANNEL_CAPACITY);
-        let (tx_cert, mut rx_cert): (_, Receiver<Header>) = channel(CHANNEL_CAPACITY);
+        let (tx_cert, mut rx_cert): (_, Receiver<(Header, Digest)>) = channel(CHANNEL_CAPACITY);
 
         let store_copy = store.clone();
         tokio::spawn(async move {
@@ -77,12 +80,13 @@ impl Synchronizer {
                             }
                         }
                     },
-                    Some(header) = rx_cert.recv() => {
-                        let cert_digest = header.clone().digest();
+                    Some((header, cert_digest)) = rx_cert.recv() => {
+    
                         let fut = Self::waiter(store_copy.clone(), cert_digest.clone(), header.clone());
                         waiting.push(fut);
 
-                        if !requests.contains_key(&cert_digest){
+                        if !requests.contains_key(&cert_digest){    //TODO: FIXME: Does this need to be a separate requests list? Otherwise could have cert sync not start if header sync is active (should never happen though) =
+                                                                    // ==> Nah, the cert_digest is for a certificate. The parent_digest above is for a Header
                             debug!("Requesting sync for header {}", cert_digest);
                             let now = SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
@@ -187,6 +191,7 @@ impl Synchronizer {
     //     }
     // }
 
+    //FIXME: 
     pub async fn get_parent_header(&mut self, header: &Header) -> ConsensusResult<Option<Header>> {
         //TODO: Replace all this with dedicated consensus parent edge (digest of header ordered before) -> that can be a header ordered by the preceding Qc or Tc
         //use parent digest = Ticket Qc.hash
@@ -232,10 +237,24 @@ impl Synchronizer {
     }
 
     pub async fn get_cert(&mut self, header: &Header) -> ConsensusResult<Option<Certificate>> {
-        match self.store.read(header.clone().digest().to_vec()).await? {
+
+        // let cert_dig: Digest = Certificate {
+        //     header: header.clone(),
+        //     ..Certificate::default()
+        // }.digest();
+
+         //directly generating the hash avoids copying the header.
+        let mut hasher = Sha512::new();
+        hasher.update(&header.id); //== parent_header.id
+        hasher.update(&header.round().to_le_bytes()); 
+        hasher.update(&header.origin()); //parent_header.origin = child_header_origin
+        let cert_digest = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
+
+
+        match self.store.read(cert_digest.to_vec()).await? {   
             Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
             None  => {
-                if let Err(e) = self.inner_channel_cert.send(header.clone()).await {
+                if let Err(e) = self.inner_channel_cert.send((header.clone(), cert_digest)).await {
                      panic!("Failed to send request to synchronizer: {}", e);
                 }
                 Ok(None)
