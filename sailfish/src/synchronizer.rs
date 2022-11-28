@@ -29,7 +29,7 @@ const TIMER_ACCURACY: u64 = 5_000;
 pub struct Synchronizer {
     store: Store,
     inner_channel: Sender<(Header, Digest)>,
-    inner_channel_cert: Sender<(Header, Digest)>,
+    inner_channel_cert: Sender<Certificate>,
 }
 
 impl Synchronizer {
@@ -37,16 +37,18 @@ impl Synchronizer {
         name: PublicKey,
         committee: Committee,
         store: Store,
-        tx_loopback: Sender<Header>,
+        tx_loopback_header: Sender<Header>,
+        tx_loopback_certs: Sender<Certificate>,
         sync_retry_delay: u64,
     ) -> Self {
         let mut network = SimpleSender::new();
         let (tx_inner, mut rx_inner): (_, Receiver<(Header, Digest)>) = channel(CHANNEL_CAPACITY);
-        let (tx_cert, mut rx_cert): (_, Receiver<(Header, Digest)>) = channel(CHANNEL_CAPACITY);
+        let (tx_cert, mut rx_cert): (_, Receiver<Certificate>) = channel(CHANNEL_CAPACITY);
 
         let store_copy = store.clone();
         tokio::spawn(async move {
-            let mut waiting = FuturesUnordered::new();
+            let mut waiting_headers = FuturesUnordered::new();
+            let mut waiting_certs = FuturesUnordered::new();
             let mut pending = HashSet::new();
             let mut requests = HashMap::new();
 
@@ -54,13 +56,13 @@ impl Synchronizer {
             tokio::pin!(timer);
             loop {
                 tokio::select! {
-                    //TODO: Re-factor to headers.
+                    
                     Some((header, parent_dig)) = rx_inner.recv() => {
                         if pending.insert(header.digest()) {
                             let parent = parent_dig.clone();
                             let author = header.author;
-                            let fut = Self::waiter(store_copy.clone(), parent.clone(), header);
-                            waiting.push(fut);
+                            let fut = Self::header_waiter(store_copy.clone(), parent.clone(), header);
+                            waiting_headers.push(fut);
 
                             if !requests.contains_key(&parent){
                                 debug!("Requesting sync for header {}", parent);
@@ -80,28 +82,50 @@ impl Synchronizer {
                             }
                         }
                     },
-                    Some((header, cert_digest)) = rx_cert.recv() => {
-    
-                        let fut = Self::waiter(store_copy.clone(), cert_digest.clone(), header.clone());
-                        waiting.push(fut);
+                    Some(result) = waiting_headers.next() => match result {
+                        Ok((header, parent)) => {
+                            let _ = pending.remove(&header.digest());
+                            let _ = requests.remove(&parent);
+                            if let Err(e) = tx_loopback_header.send(header).await {
+                                panic!("Failed to send message through core channel: {}", e);
+                            }
+                        },
+                        Err(e) => error!("{}", e)
+                    },
 
-                        if !requests.contains_key(&cert_digest){    //TODO: FIXME: Does this need to be a separate requests list? Otherwise could have cert sync not start if header sync is active (should never happen though) =
-                                                                    // ==> Nah, the cert_digest is for a certificate. The parent_digest above is for a Header
-                            debug!("Requesting sync for header {}", cert_digest);
-                            let now = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .expect("Failed to measure time")
-                                .as_millis();
-                            requests.insert(cert_digest.clone(), now);
-                            let address = committee
-                                .consensus(&header.author)
-                                .expect("Author of valid header is not in the committee")
-                                .consensus_to_consensus;
-                            let message = ConsensusMessage::SyncRequestCert(cert_digest, name);
-                            let message = bincode::serialize(&message)
-                                .expect("Failed to serialize sync request");
-                            network.send(address, Bytes::from(message)).await;
+                    Some(cert) = rx_cert.recv() => {
+                        if pending.insert(cert.digest()) {
+                            let parent_cert_digest = cert.header.prev_view_header.clone().unwrap();
+                            let fut = Self::cert_waiter(store_copy.clone(), parent_cert_digest.clone(), cert.clone());
+                            waiting_certs.push(fut);
+
+                            if !requests.contains_key(&parent_cert_digest){    
+                                debug!("Requesting sync for certificate {}", parent_cert_digest);
+                                let now = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .expect("Failed to measure time")
+                                    .as_millis();
+                                requests.insert(parent_cert_digest.clone(), now);
+                                let address = committee
+                                    .consensus(&cert.header.author)
+                                    .expect("Author of valid header is not in the committee")
+                                    .consensus_to_consensus;
+                                let message = ConsensusMessage::SyncRequestCert(parent_cert_digest, name);
+                                let message = bincode::serialize(&message)
+                                    .expect("Failed to serialize sync request");
+                                network.send(address, Bytes::from(message)).await;
+                            }
                         }
+                    },
+                    Some(result) = waiting_certs.next() => match result {
+                        Ok((cert, parent)) => {
+                            let _ = pending.remove(&cert.digest());
+                            let _ = requests.remove(&parent);
+                            if let Err(e) = tx_loopback_certs.send(cert).await {
+                                panic!("Failed to send message through core channel: {}", e);
+                            }
+                        },
+                        Err(e) => error!("{}", e)
                     },
                     // Some(block) = rx_inner.recv() => {
                     //     if pending.insert(block.digest()) {
@@ -128,16 +152,7 @@ impl Synchronizer {
                     //         }
                     //     }
                     // },
-                    Some(result) = waiting.next() => match result {
-                        Ok((header, parent)) => {
-                            let _ = pending.remove(&header.digest());
-                            let _ = requests.remove(&parent);
-                            if let Err(e) = tx_loopback.send(header).await {
-                                panic!("Failed to send message through core channel: {}", e);
-                            }
-                        },
-                        Err(e) => error!("{}", e)
-                    },
+                   
                     () = &mut timer => {
                         // This implements the 'perfect point to point link' abstraction.
                         for (digest, timestamp) in &requests {
@@ -170,7 +185,12 @@ impl Synchronizer {
         }
     }
 
-    async fn waiter(mut store: Store, wait_on: Digest, deliver: Header) -> ConsensusResult<(Header, Digest)> {
+    async fn header_waiter(mut store: Store, wait_on: Digest, deliver: Header) -> ConsensusResult<(Header, Digest)> {
+        let _ = store.notify_read(wait_on.to_vec()).await?;
+        Ok((deliver, wait_on))
+    }
+
+    async fn cert_waiter(mut store: Store, wait_on: Digest, deliver: Certificate) -> ConsensusResult<(Certificate, Digest)> {
         let _ = store.notify_read(wait_on.to_vec()).await?;
         Ok((deliver, wait_on))
     }
@@ -254,9 +274,7 @@ impl Synchronizer {
         match self.store.read(cert_digest.to_vec()).await? {   
             Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
             None  => {
-                if let Err(e) = self.inner_channel_cert.send((header.clone(), cert_digest)).await {
-                     panic!("Failed to send request to synchronizer: {}", e);
-                }
+                panic!("Ancestor cert not available");
                 Ok(None)
             }
         }
@@ -277,4 +295,16 @@ impl Synchronizer {
     //         .expect("We should have all ancestors of delivered blocks");
     //     Ok(Some((b0, b1)))
     // }
+
+    pub async fn deliver_consensus_ancestor(&mut self, cert: &Certificate) -> ConsensusResult<bool>{
+
+        if self.store.read(cert.header.prev_view_header.as_ref().unwrap().to_vec()).await?.is_none(){
+            if let Err(e) = self.inner_channel_cert.send(cert.clone()).await {
+                panic!("Failed to send request to synchronizer: {}", e);
+           }
+           return Ok(false);
+        }
+
+        Ok(true)
+    }
 }

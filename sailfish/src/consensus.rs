@@ -43,6 +43,7 @@ pub enum ConsensusMessage {
     SyncRequest(Digest, PublicKey), //Note: These Digests are now for Headers
     SyncRequestCert(Digest, PublicKey),
     Header(Header),
+    Certificate(Certificate),
 }
 
 pub struct Consensus;
@@ -68,12 +69,14 @@ impl Consensus {
 
         let (tx_consensus, rx_consensus) = channel(CHANNEL_CAPACITY);
         let (tx_proposer, rx_proposer) = channel(CHANNEL_CAPACITY);
-        let (tx_helper, rx_helper) = channel(CHANNEL_CAPACITY);
+        let (tx_helper_header, rx_helper_header) = channel(CHANNEL_CAPACITY);
+        let (tx_helper_cert, rx_helper_cert) = channel(CHANNEL_CAPACITY);
         let (tx_commit, rx_commit) = channel(CHANNEL_CAPACITY);
         //let (tx_mempool_copy, rx_mempool_copy) = channel(CHANNEL_CAPACITY);
         let (tx_message, rx_message) = channel(CHANNEL_CAPACITY);
         let (tx_consensus_header, rx_consensus_header) = channel(CHANNEL_CAPACITY);
-        let (tx_loop, rx_loop) = channel(CHANNEL_CAPACITY);
+        let (tx_loop_header, rx_loop_header) = channel(CHANNEL_CAPACITY);
+        let (tx_loop_cert, rx_loop_cert) = channel(CHANNEL_CAPACITY);
         let (tx_special, rx_special) = channel(CHANNEL_CAPACITY);
 
         //let (tx_sailfish, rx_sailfish) = channel(CHANNEL_CAPACITY);
@@ -90,7 +93,8 @@ impl Consensus {
             /* handler */
             ConsensusReceiverHandler {
                 tx_consensus,
-                tx_helper,
+                tx_helper_header,
+                tx_helper_cert
             },
         );
         info!(
@@ -109,7 +113,8 @@ impl Consensus {
             name,
             committee.clone(),
             store.clone(),
-            tx_loop.clone(),
+            tx_loop_header.clone(),
+            tx_loop_cert,
             parameters.sync_retry_delay,
         );
 
@@ -125,7 +130,8 @@ impl Consensus {
             parameters.timeout_delay,
             rx_message,
             rx_consensus_header,
-            rx_loop,
+            rx_loop_header,
+            rx_loop_cert,
             tx_proposer,
             tx_commit,
             tx_validation,
@@ -151,12 +157,12 @@ impl Consensus {
         //     /* rx_consensus */ rx_sailfish,
         //     rx_mempool,
         //     /* rx_message */ rx_proposer,
-        //     tx_loop,
+        //     tx_loop_header,
         //     tx_mempool_copy,
         // );
 
         // Spawn the helper module.
-        Helper::spawn(committee, store, /* rx_requests */ rx_helper);
+        Helper::spawn(committee, store, /* rx_requests */ rx_helper_header, rx_helper_cert);
     }
 }
 
@@ -164,7 +170,8 @@ impl Consensus {
 #[derive(Clone)]
 struct ConsensusReceiverHandler {
     tx_consensus: Sender<ConsensusMessage>,
-    tx_helper: Sender<(Digest, PublicKey)>,
+    tx_helper_header: Sender<(Digest, PublicKey)>,
+    tx_helper_cert: Sender<(Digest, PublicKey)>,
 }
 
 #[async_trait]
@@ -173,7 +180,12 @@ impl MessageHandler for ConsensusReceiverHandler {
         // Deserialize and parse the message.
         match bincode::deserialize(&serialized).map_err(ConsensusError::SerializationError)? {
             ConsensusMessage::SyncRequest(missing, origin) => self
-                .tx_helper
+                .tx_helper_header
+                .send((missing, origin))
+                .await
+                .expect("Failed to send consensus message"),
+            ConsensusMessage::SyncRequestCert(missing, origin) => self
+                .tx_helper_cert
                 .send((missing, origin))
                 .await
                 .expect("Failed to send consensus message"),

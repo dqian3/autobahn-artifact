@@ -38,7 +38,8 @@ pub struct Core {
     synchronizer: Synchronizer,
     rx_message: Receiver<ConsensusMessage>,
     rx_consensus: Receiver<Certificate>,
-    rx_loopback: Receiver<Header>,
+    rx_loopback_header: Receiver<Header>,
+    rx_loopback_cert: Receiver<Certificate>,
     tx_proposer: Sender<ProposerMessage>,
     tx_commit: Sender<Certificate>,
     tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>,
@@ -71,7 +72,8 @@ impl Core {
         timeout_delay: u64,
         rx_message: Receiver<ConsensusMessage>,
         rx_consensus: Receiver<Certificate>,
-        rx_loopback: Receiver<Header>,
+        rx_loopback_header: Receiver<Header>,
+        rx_loopback_cert: Receiver<Certificate>,
         tx_proposer: Sender<ProposerMessage>,
         tx_commit: Sender<Certificate>,
         tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>, // Loopback Special Headers to DAG
@@ -89,7 +91,8 @@ impl Core {
                 synchronizer,
                 rx_message,
                 rx_consensus,
-                rx_loopback,
+                rx_loopback_header,
+                rx_loopback_cert,
                 tx_proposer,
                 tx_commit,
                 tx_validation,
@@ -169,7 +172,7 @@ impl Core {
             // if special_parent.is_some() {
             //     to_commit.push_back(special_parent.unwrap());
             // }
-
+            
             let ancestor = self
                 .synchronizer
                 .get_parent_header(&parent)  //TODO: Define this function. It should make sure that all previous views are committed. Must retrieve all QC/TC for prior views. TODO: FIXME: Header must reference either the ticket (QC/TC)
@@ -651,6 +654,16 @@ impl Core {
     async fn process_certificate(&mut self, certificate: Certificate) -> ConsensusResult<()> {
         let header = certificate.clone().header;
         let id = header.clone().id;
+
+        //Ensure we have the consensus parent of this certificate. If not, the synchronizer will fetch it and trigger re-processing.
+        if !self.synchronizer.deliver_consensus_ancestor(&certificate).await? {
+            debug!(
+                "Processing of {:?} suspended: missing consensus ancestors",
+                 certificate
+            );
+            return Ok(());
+        }
+
         //1) Check if cert is still relevant to current view, if so, update view and high_cert
         ensure!(
             header.view >= self.view,
@@ -821,14 +834,15 @@ impl Core {
                     ConsensusMessage::TC(tc) => self.handle_tc(&tc).await,
                     //7) Sync Headers
                     ConsensusMessage::Header(header) => self.process_header(header).await,  //TODO: Sanity check that this is fine. ==> Sync Headers will also cause a vote at the Dag layer to be generated.
+                    //8) Sync Headers
+                    ConsensusMessage::Certificate(cert) => self.process_sync_cert(cert).await,  //TODO: Sanity check that this is fine. ==> Sync Headers will also cause a vote at the Dag layer to be generated.
                     _ => panic!("Unexpected protocol message")
                 },
 
-                Some(header) = self.rx_loopback.recv() => self.process_header(header).await,  //Processing Header that we resume via Synchronizer upcall
-                //TODO: Add loopback for certificates we sync? Don't think we need it.
-
+                Some(header) = self.rx_loopback_header.recv() => self.process_header(header).await,  //Processing Header that we resume via Synchronizer upcall
+                Some(cert) = self.rx_loopback_cert.recv() => self.process_certificate(cert).await,  //Processing Header that we resume via Synchronizer upcall
                 
-                //NO LONGER NEEDED: Some(block) = self.rx_loopback.recv() => self.process_block(&block).await,  //Processing Block that we propose ourselves. (or that we resume via Synchronizer upcall)
+                //NO LONGER NEEDED: Some(block) = self.rx_loopback_header.recv() => self.process_block(&block).await,  //Processing Block that we propose ourselves. (or that we resume via Synchronizer upcall)
                 () = &mut self.timer => self.local_timeout_view().await,
             };
             match result {

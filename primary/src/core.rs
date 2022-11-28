@@ -351,7 +351,7 @@ impl Core {
             self.process_header(certificate.header.clone()).await?;
         }
 
-        // Ensure we have all the ancestors of this certificate yet. If we don't, the synchronizer will gather
+        // Ensure we have all the DAG ancestors of this certificate yet. If we don't, the synchronizer will gather
         // them and trigger re-processing of this certificate.
         if !self.synchronizer.deliver_certificate(&certificate).await? {
             debug!(

@@ -76,7 +76,7 @@ pub struct Header {
     pub ticket: Option<Ticket>, 
     //Consensus parent
     pub prev_view_round: Round, //round that was proposed by the last view.
-    pub prev_view_header: Option<Digest>, 
+    pub prev_view_header: Option<Digest>, //Digest of the certificate that was committed in the last view
     
 
 }
