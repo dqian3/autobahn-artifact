@@ -63,6 +63,7 @@ impl Consensus {
         tx_ticket: Sender<(View, Round, Ticket)>,
         tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>,
         rx_sailfish: Receiver<Header>,
+        tx_pushdown_cert: Sender<Certificate>,
     ) {
         // NOTE: This log entry is used to compute performance.
         parameters.log();
@@ -132,6 +133,7 @@ impl Consensus {
             rx_consensus_header,
             rx_loop_header,
             rx_loop_cert,
+            tx_pushdown_cert,
             tx_proposer,
             tx_commit,
             tx_validation,

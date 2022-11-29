@@ -59,6 +59,8 @@ pub struct Core {
     rx_validation: Receiver<(Header, u8, Option<QC>, Option<TC>)>,
     tx_special: Sender<Header>,
 
+    rx_pushdown_cert: Receiver<Certificate>,
+
     /// The last garbage collected round.
     gc_round: Round,
     /// The authors of the last voted headers.
@@ -96,6 +98,7 @@ impl Core {
         tx_proposer: Sender<(Vec<Digest>, Round)>,
         rx_validation: Receiver<(Header, u8, Option<QC>, Option<TC>)>,
         tx_special: Sender<Header>,
+        rx_pushdown_cert: Receiver<Certificate>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -115,6 +118,7 @@ impl Core {
                 tx_proposer,
                 rx_validation,
                 tx_special,
+                rx_pushdown_cert,
                 gc_round: 0,
                 last_voted: HashMap::with_capacity(2 * gc_depth as usize),
                 processing: HashMap::with_capacity(2 * gc_depth as usize),
@@ -563,6 +567,8 @@ impl Core {
                 // we interrupted execution (we were missing some of their ancestors) and we are now ready to resume
                 // processing.
                 Some(certificate) = self.rx_certificate_waiter.recv() => self.process_certificate(certificate).await,
+                // Loopback certificates from Consensus layer. Those are certificates of consensus parents. //TODO: This might be redundant sync with the Dag layers sync.
+                Some(certificate) = self.rx_pushdown_cert.recv() => self.process_certificate(certificate).await,
 
                 // We also receive here our new headers created by the `Proposer`.
                 Some(header) = self.rx_proposer.recv() => self.process_own_header(header).await,

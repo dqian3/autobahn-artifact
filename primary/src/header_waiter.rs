@@ -255,12 +255,13 @@ impl HeaderWaiter {
                                 .expect("Failed to measure time")
                                 .as_millis();
                            
-                    
+                            let mut requires_sync = false;
                             self.parent_requests.entry(missing_parent.clone()).or_insert_with(|| {
+                                requires_sync = true;
                                 (round, now)
                             });
                             
-                            
+                            if requires_sync {
                                 let address = self.committee
                                     .primary(&author)
                                     .expect("Author of valid header not in the committee")
@@ -268,7 +269,7 @@ impl HeaderWaiter {
                                 let message = PrimaryMessage::HeaderRequest(missing_parent, self.name);
                                 let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
                                 self.network.send(address, Bytes::from(bytes)).await;
-                            
+                            }
                         }
                     }
                 },

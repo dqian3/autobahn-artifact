@@ -211,6 +211,16 @@ impl Synchronizer {
     //     }
     // }
 
+    pub async fn get_parent_cert(&mut self, cert: &Certificate) -> ConsensusResult<Option<Certificate>> {
+        
+        match self.store.read(cert.header.prev_view_header.as_ref().unwrap().to_vec()).await? {
+            Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
+            None => {
+                Ok(None)
+            }
+        }
+    }
+
     //FIXME: 
     pub async fn get_parent_header(&mut self, header: &Header) -> ConsensusResult<Option<Header>> {
         //TODO: Replace all this with dedicated consensus parent edge (digest of header ordered before) -> that can be a header ordered by the preceding Qc or Tc
@@ -299,6 +309,18 @@ impl Synchronizer {
     pub async fn deliver_consensus_ancestor(&mut self, cert: &Certificate) -> ConsensusResult<bool>{
 
         if self.store.read(cert.header.prev_view_header.as_ref().unwrap().to_vec()).await?.is_none(){
+            if let Err(e) = self.inner_channel_cert.send(cert.clone()).await {
+                panic!("Failed to send request to synchronizer: {}", e);
+           }
+           return Ok(false);
+        }
+
+        Ok(true)
+    }
+
+    pub async fn deliver_self(&mut self, cert: &Certificate) -> ConsensusResult<bool>{
+
+        if self.store.read(cert.header.id.to_vec()).await?.is_none(){
             if let Err(e) = self.inner_channel_cert.send(cert.clone()).await {
                 panic!("Failed to send request to synchronizer: {}", e);
            }
