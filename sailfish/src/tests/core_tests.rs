@@ -19,9 +19,11 @@ fn core(
     Sender<Header>,
     Receiver<(u64, u64, Ticket)>,
     Receiver<Certificate>,
+    Sender<Certificate>,
 ) {
     let (tx_core, rx_core) = channel(1);
     let (tx_loopback, rx_loopback) = channel(1);
+    let (tx_loopback_cert, rx_loopback_cert) = channel(1);
     let (tx_proposer, rx_proposer) = channel(1);
     let (tx_mempool, mut rx_mempool) = channel(1);
     let (tx_commit, rx_commit) = channel(1);
@@ -41,6 +43,7 @@ fn core(
         committee.clone(),
         store.clone(),
         tx_loopback,
+        tx_loopback_cert,
         /* sync_retry_delay */ 100_000,
     );
 
@@ -62,6 +65,7 @@ fn core(
         /* rx_message */ rx_core,
         rx_consensus,
         rx_loopback,
+        rx_loopback_cert,
         tx_proposer,
         tx_commit,
         tx_validation,
@@ -69,7 +73,7 @@ fn core(
         rx_special,
     );
 
-    (tx_core, rx_proposer, rx_block, rx_validation, tx_special, rx_ticket, rx_commit)
+    (tx_core, rx_proposer, rx_block, rx_validation, tx_special, rx_ticket, rx_commit, tx_consensus)
 }
 
 fn leader_keys(round: Round) -> (PublicKey, SecretKey) {
@@ -90,10 +94,13 @@ async fn handle_header() {
     let (public_key, secret_key) = keys().pop().unwrap();
     let (public_key_1, secret_key_1) = leader_keys(1);
     //let vote = Vote::new_from_key(block.digest(), block.view, public_key, &secret_key);
+    //
+
+    let ticket = Ticket { qc: QC::genesis(), tc: None, view: 1 };
 
     let header = Header {author: public_key_1, round: 2, payload: BTreeMap::new(), parents: BTreeSet::new(),
                          id: Digest::default(), signature: Signature::default(), is_special: true, view: 1,
-                         prev_view_round: 1, special_parent: None, special_parent_round: 1, ticket: None, prev_view_header: None};
+                         prev_view_round: 1, special_parent: None, special_parent_round: 1, ticket: Some(ticket), prev_view_header: None};
     let id = header.digest();
     let signature = Signature::new(&id, &secret_key_1);
 
@@ -104,7 +111,7 @@ async fn handle_header() {
 
     // Run a core instance.
     let store_path = ".db_test_handle_proposal";
-    let (_, _rx_proposer, _rx_commit, mut rx_validation, tx_special, _, _) =
+    let (_, _rx_proposer, _rx_commit, mut rx_validation, tx_special, _, _, _) =
         core(public_key, secret_key, committee.clone(), store_path);
 
     // Send a header to the core.
@@ -138,7 +145,7 @@ async fn generate_proposal() {
     let votes: Vec<_> = keys()
         .iter()
         .map(|(public_key, secret_key)| {
-            Vote::new_from_key(hash.clone(), block.view, *public_key, &secret_key)
+            AcceptVote::new_from_key(hash.clone(), block.view, *public_key, &secret_key)
         })
         .collect();
     let high_qc = QC {
@@ -154,7 +161,7 @@ async fn generate_proposal() {
 
     // Run a core instance.
     let store_path = ".db_test_generate_proposal";
-    let (tx_core, mut rx_proposer, _rx_commit, _, _, mut rx_ticket, _) =
+    let (tx_core, mut rx_proposer, _rx_commit, _, _, mut rx_ticket, _, _) =
         core(next_leader, next_leader_key, committee(), store_path);
 
     let message = ConsensusMessage::QC(high_qc.clone());
@@ -175,20 +182,22 @@ async fn generate_proposal() {
 }
 
 #[tokio::test]
-async fn commit_block() {
+async fn commit_header() {
     // Get enough distinct leaders to form a quorum.
     let leaders = vec![leader_keys(1), leader_keys(2), leader_keys(3)];
-    let chain = chain(leaders);
+    //let chain = chain(leaders);
 
     // Run a core instance.
     let store_path = ".db_test_commit_block";
     let (public_key, secret_key) = keys().pop().unwrap();
-    let (tx_core, _rx_proposer, _, mut rx_validation, tx_special, mut rx_ticket, mut rx_commit) =
+    let (tx_core, _rx_proposer, _, mut rx_validation, tx_special, mut rx_ticket, mut rx_commit, tx_consensus) =
         core(public_key, secret_key, committee(), store_path);
+
+    let ticket = Ticket { qc: QC::genesis(), tc: None, view: 1 };
 
     let header = Header {author: leader_keys(1).0, round: 2, payload: BTreeMap::new(), parents: BTreeSet::new(),
                          id: Digest::default(), signature: Signature::default(), is_special: true, view: 1,
-                         prev_view_round: 1, special_parent: None, special_parent_round: 1, prev_view_header: None, ticket: None};
+                         prev_view_round: 1, special_parent: None, special_parent_round: 0, prev_view_header: None, ticket: Some(ticket)};
     let id = header.digest();
     let signature = Signature::new(&id, &leader_keys(1).1);
 
@@ -197,23 +206,16 @@ async fn commit_block() {
     tx_special.send(head.clone()).await.unwrap();
     rx_validation.recv().await.unwrap();
 
-    let mut payload = Vec::new();
-    payload.push(head.clone());
-
-    //let block = Block::new_from_key(QC::genesis(), leaders[0].0, 1, Vec::new(), &leaders[0].1);
-    let mut block = chain[0].clone();
-    block.payload = payload;
-    let hash = block.digest();
     let votes: Vec<_> = keys()
         .iter()
         .map(|(public_key, secret_key)| {
-            Vote::new_from_key(hash.clone(), block.view, *public_key, &secret_key)
+            AcceptVote::new_from_key(id.clone(), 1, *public_key, &secret_key)
         })
         .collect();
     let high_qc = QC {
         hash: id,
-        view: block.view,
-        view_round: block.view,
+        view: 1,
+        view_round: 1,
         votes: votes
             .iter()
             .cloned()
@@ -221,13 +223,17 @@ async fn commit_block() {
             .collect(),
     };
 
+    let committed = Certificate { header: head, special_valids: Vec::new(), votes: high_qc.votes.clone() };
+    tx_consensus.send(committed.clone()).await.unwrap();
+
+
     let message = ConsensusMessage::QC(high_qc.clone());
     tx_core.send(message).await.unwrap();
     //rx_validation.recv().await.unwrap();
 
     // Send a the blocks to the core.
     //let committed = chain[0].clone();
-    let committed = Certificate { header: head, special_valids: Vec::new(), votes: high_qc.votes.clone() };
+    //let committed = Certificate { header: head, special_valids: Vec::new(), votes: high_qc.votes.clone() };
     //for block in chain {
 //        let message = ConsensusMessage::Propose(block);
   //      tx_core.send(message).await.unwrap();
@@ -253,7 +259,7 @@ async fn local_timeout_round() {
 
     // Run a core instance.
     let store_path = ".db_test_local_timeout_round";
-    let (_tx_core, _rx_proposer, _rx_commit, _, _, _, _) =
+    let (_tx_core, _rx_proposer, _rx_commit, _, _, _, _, _) =
         core(public_key, secret_key, committee.clone(), store_path);
 
     // Ensure the node broadcasts a timeout vote.

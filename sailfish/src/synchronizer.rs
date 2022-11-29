@@ -47,10 +47,13 @@ impl Synchronizer {
 
         let store_copy = store.clone();
         tokio::spawn(async move {
+
             let mut waiting_headers = FuturesUnordered::new();
             let mut waiting_certs = FuturesUnordered::new();
+
             let mut pending = HashSet::new();
             let mut requests = HashMap::new();
+            //let mut cert_requests = HashMap::new();
 
             let timer = sleep(Duration::from_millis(TIMER_ACCURACY));
             tokio::pin!(timer);
@@ -82,6 +85,7 @@ impl Synchronizer {
                             }
                         }
                     },
+
                     Some(result) = waiting_headers.next() => match result {
                         Ok((header, parent)) => {
                             let _ = pending.remove(&header.digest());
@@ -297,6 +301,10 @@ impl Synchronizer {
     // }
 
     pub async fn deliver_consensus_ancestor(&mut self, cert: &Certificate) -> ConsensusResult<bool>{
+
+        if cert.header.special_parent_round == 0 {
+            return Ok(true);
+        }
 
         if self.store.read(cert.header.prev_view_header.as_ref().unwrap().to_vec()).await?.is_none(){
             if let Err(e) = self.inner_channel_cert.send(cert.clone()).await {

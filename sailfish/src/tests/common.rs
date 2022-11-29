@@ -3,7 +3,7 @@ use config::Committee;
 //use primary::config::Committee;
 use crate::consensus::Round;
 use crate::consensus::View;
-use primary::messages::{Block, Timeout, Vote, QC};
+use primary::messages::{Block, Timeout, AcceptVote, QC};
 use bytes::Bytes;
 use crypto::Hash as _;
 use crypto::{generate_keypair, Digest, PublicKey, SecretKey, Signature};
@@ -131,9 +131,9 @@ pub fn block() -> Block {
 }
 
 // Fixture.
-pub fn vote() -> Vote {
+pub fn vote() -> AcceptVote {
     let (public_key, secret_key) = keys().pop().unwrap();
-    Vote::new_from_key(block().digest(), 1, public_key, &secret_key)
+    AcceptVote::new_from_key(block().digest(), 1, public_key, &secret_key)
 }
 
 // Fixture.
