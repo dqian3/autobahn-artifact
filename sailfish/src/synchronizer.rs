@@ -329,9 +329,9 @@ impl Synchronizer {
     pub async fn deliver_self(&mut self, cert: &Certificate) -> ConsensusResult<bool>{
 
         if self.store.read(cert.header.id.to_vec()).await?.is_none(){
-            if let Err(e) = self.inner_channel_cert.send(cert.clone()).await {
-                panic!("Failed to send request to synchronizer: {}", e);
-           }
+        //     if let Err(e) = self.inner_channel_cert.send(cert.clone()).await {
+        //         panic!("Failed to send request to synchronizer: {}", e);
+        //    }
            return Ok(false);
         }
 

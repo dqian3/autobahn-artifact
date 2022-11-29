@@ -829,6 +829,7 @@ impl Core {
                 "Processing of {:?} suspended: missing consensus ancestors",
                  certificate
             );
+            self.process_sync_cert(certificate);
             return Ok(());
         }
 
