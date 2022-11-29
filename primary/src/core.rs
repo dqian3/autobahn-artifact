@@ -375,6 +375,12 @@ impl Core {
                 // If we have parent header => create cert for committer
                 (Some(special_parent_dummy_cert), _) => {
                     self.process_certificate(special_parent_dummy_cert).await?;
+
+                        //FIXME: this process_cert call will result in a dummy cert being stored. Future sync requests will retrieve the dummy cert and fail sanitization....
+                            //-> Can fix this by only writing to store if not empty
+                        //FIXME: Likewise, when we store a quorum of invalids problems can arise. If we sync on a consensus parent, and downcall to the Dag, the Dag won't upcall to consensus again.
+                            // -> can fix this by adding a waiter that retriggers Dag processing upcon being added to store.
+
                      //Note: This shouldn't be directly sent to committer; it should recursively check for all of its parents as well. 
                             // Just call process_cert, don't need to sanitize - transitively validated via child already)
                             //NOTE: Digest of dummy_cert equivalent to real cert ==> just missing signatures & special_valids

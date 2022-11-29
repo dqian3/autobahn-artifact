@@ -624,7 +624,6 @@ impl Core {
 
     //Call process_special_header upon receiving upcall from Dag layer.
     #[async_recursion]
-<<<<<<< HEAD
     async fn process_special_header(&mut self, header: Header) -> ConsensusResult<()> {
        
         if self.last_committed_view >= header.view {
@@ -639,9 +638,6 @@ impl Core {
             .insert(header.id.clone());
 
         
-=======
-    async fn process_header(&mut self, header: Header) -> ConsensusResult<()> {
->>>>>>> b184f3ff3f5f6b2dbf5357f622830d0a7873c6a1
         //0) TODO: Check if Ticket valid. If we have not processed ticket yet. Do so.
 
         //FIXME: If no TC present, must check that QC is for the preceeding view
@@ -829,8 +825,8 @@ impl Core {
                 "Processing of {:?} suspended: missing consensus ancestors",
                  certificate
             );
-            self.process_sync_cert(certificate);
-            return Ok(());
+            self.process_sync_cert(certificate.clone());
+            //return Ok(());
         }
 
         //Ensure we have the consensus parent of this certificate. If not, the synchronizer will fetch it and trigger re-processing of the current cert.
@@ -854,15 +850,10 @@ impl Core {
         self.advance_view(header.view);
         self.increase_last_voted_view(header.view);
 
-<<<<<<< HEAD
-        self.high_cert = certificate;
-        self.stored_headers.insert(id.clone(), header.clone());
-=======
         self.high_cert = certificate.clone();
-        self.stored_headers.insert(id, header.clone());
+        self.stored_headers.insert(id.clone(), header.clone());
         self.store_cert(&certificate).await;
 
->>>>>>> b184f3ff3f5f6b2dbf5357f622830d0a7873c6a1
 
         //2) Set marker that process_cert is complete.
         self.ready_to_commit.insert(id.clone());
