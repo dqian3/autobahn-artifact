@@ -1,3 +1,4 @@
+use std::convert::TryInto;
 use crate::aggregator::Aggregator;
 use crate::consensus::{ConsensusMessage, View, Round};
 //use crate::error::{ConsensusError, ConsensusResult};
@@ -22,6 +23,9 @@ use std::collections::{VecDeque, HashSet};
 use std::collections::HashMap;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
+use ed25519_dalek::Sha512;
+use ed25519_dalek::Digest as _;
+
 
 #[cfg(test)]
 #[path = "tests/core_tests.rs"]
@@ -137,6 +141,19 @@ impl Core {
     async fn store_header(&mut self, header: &Header) {
         let key = header.id.to_vec();
         let value = bincode::serialize(header).expect("Failed to serialize header");
+        self.store.write(key, value).await;
+    }
+
+    async fn store_cert(&mut self, cert: &Certificate) {
+        let header = cert.header.clone();
+        let mut hasher = Sha512::new();
+        hasher.update(&header.id); //== parent_header.id
+        hasher.update(&header.round().to_le_bytes());
+        hasher.update(&header.origin()); //parent_header.origin = child_header_origin
+        let cert_digest = crypto::Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
+
+        let key = cert_digest.to_vec();
+        let value = bincode::serialize(cert).expect("Failed to serialize cert");
         self.store.write(key, value).await;
     }
 
@@ -607,6 +624,7 @@ impl Core {
 
     //Call process_special_header upon receiving upcall from Dag layer.
     #[async_recursion]
+<<<<<<< HEAD
     async fn process_special_header(&mut self, header: Header) -> ConsensusResult<()> {
        
         if self.last_committed_view >= header.view {
@@ -621,6 +639,9 @@ impl Core {
             .insert(header.id.clone());
 
         
+=======
+    async fn process_header(&mut self, header: Header) -> ConsensusResult<()> {
+>>>>>>> b184f3ff3f5f6b2dbf5357f622830d0a7873c6a1
         //0) TODO: Check if Ticket valid. If we have not processed ticket yet. Do so.
 
         //FIXME: If no TC present, must check that QC is for the preceeding view
@@ -631,9 +652,9 @@ impl Core {
             ConsensusError::InvalidTicket
         );
         let ticket = header.ticket.clone().unwrap();
-        if ticket.qc.view > self.last_committed_view {
+        /*if ticket.qc.view > self.last_committed_view {
             self.handle_qc(&ticket.qc).await?;
-        }
+        }*/
 
         match ticket.tc.clone() {
             Some(tc) => {
@@ -647,7 +668,16 @@ impl Core {
                     self.handle_tc(&tc).await?;
                 }
             },
-            None => return Err(ConsensusError::InvalidTicket)
+            None => {
+                ensure!(
+                    header.view == ticket.qc.view + 1,
+                    ConsensusError::InvalidTicket
+                );
+
+                if ticket.qc.view > self.last_committed_view {
+                    self.handle_qc(&ticket.qc).await?;
+                }
+            }
         };
 
         /*match ticket.qc {
@@ -743,7 +773,7 @@ impl Core {
 
         // Loopback to RB, confirming that special block is valid.
         self.tx_validation
-            .send((header, special_valid, Some(ticket.qc), ticket.tc))
+            .send((header, special_valid, None, None))
             .await
             .expect("Failed to send payload");
 
@@ -823,8 +853,15 @@ impl Core {
         self.advance_view(header.view);
         self.increase_last_voted_view(header.view);
 
+<<<<<<< HEAD
         self.high_cert = certificate;
         self.stored_headers.insert(id.clone(), header.clone());
+=======
+        self.high_cert = certificate.clone();
+        self.stored_headers.insert(id, header.clone());
+        self.store_cert(&certificate).await;
+
+>>>>>>> b184f3ff3f5f6b2dbf5357f622830d0a7873c6a1
 
         //2) Set marker that process_cert is complete.
         self.ready_to_commit.insert(id.clone());

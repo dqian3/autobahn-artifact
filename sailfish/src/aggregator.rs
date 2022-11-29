@@ -26,7 +26,7 @@ impl Aggregator {
         }
     }
 
-    pub fn add_vote(&mut self, vote: Vote) -> ConsensusResult<Option<QC>> {
+    /*pub fn add_vote(&mut self, vote: Vote) -> ConsensusResult<Option<QC>> {
         // TODO [issue #7]: A bad node may make us run out of memory by sending many votes
         // with different view numbers or different digests.
 
@@ -37,7 +37,7 @@ impl Aggregator {
             .entry(vote.digest())
             .or_insert_with(|| Box::new(QCMaker::new()))
             .append(vote, &self.committee)
-    }
+    }*/
 
     pub fn add_accept_vote(&mut self, vote: AcceptVote) -> ConsensusResult<Option<QC>> {
         // TODO [issue #7]: A bad node may make us run out of memory by sending many votes

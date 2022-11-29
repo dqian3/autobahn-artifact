@@ -159,6 +159,40 @@ impl Header {
     pub fn origin(&self) -> PublicKey {
         self.author
     }
+
+    pub fn cert_lookup(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(&self.author);
+        hasher.update(self.round.to_le_bytes());
+        for (x, y) in &self.payload {
+            hasher.update(x);
+            hasher.update(y.to_le_bytes());
+        }
+        for x in &self.parents {
+            hasher.update(x);
+        }
+
+        let f: u8 = if self.is_special { 1u8 } else { 0u8 };
+        hasher.update(f.to_le_bytes());
+        hasher.update(&self.view.to_le_bytes());
+
+
+        match &self.special_parent {
+            Some(parent) => hasher.update(parent),
+            None => {},
+        }
+        hasher.update(&self.special_parent_round.to_le_bytes());
+
+        hasher.update(&self.prev_view_round.to_le_bytes());
+        match &self.prev_view_header {
+            Some(parent) => hasher.update(parent),
+            None => {},
+        }
+
+        hasher.update("cert".as_bytes());
+
+        Digest(hasher.finalize().as_slice()[..].try_into().unwrap())
+    }
 }
 
 impl Hash for Header {
@@ -657,6 +691,27 @@ impl AcceptVote {
     }
 }
 
+impl AcceptVote {
+    pub fn new_from_key(id: Digest, round: Round, author: PublicKey, secret: &SecretKey) -> Self {
+        let vote = AcceptVote {
+            hash: id.clone(),
+            view: round,
+            view_round: round,
+            author,
+            signature: Signature::default(),
+        };
+        let signature = Signature::new(&vote.digest(), &secret);
+        Self { signature, ..vote }
+    }
+}
+
+impl PartialEq for AcceptVote {
+    fn eq(&self, other: &Self) -> bool {
+        self.digest() == other.digest()
+    }
+}
+
+
 impl Hash for AcceptVote {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
@@ -705,7 +760,6 @@ impl QC {
             weight >= committee.quorum_threshold(),
             ConsensusError::QCRequiresQuorum
         );
-        println!("Made it to qc verify {}, {}", self.digest(), self.votes.len());
         // Check the signatures.
         Signature::verify_batch(&self.digest(), &self.votes).map_err(ConsensusError::from)
     }
@@ -715,9 +769,8 @@ impl Hash for QC {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
         hasher.update(&self.hash);
-        //hasher.update(self.view.to_le_bytes());
-        //hasher.update(self.prev_view_round.to_le_bytes());
         hasher.update(self.view.to_le_bytes());
+        hasher.update(self.view_round.to_le_bytes());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
