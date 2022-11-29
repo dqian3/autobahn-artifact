@@ -38,6 +38,22 @@ impl Ticket {
         };
         ticket
     }
+    pub fn genesis() -> Self {
+        Ticket {
+            qc: QC::genesis(), 
+            tc: None, 
+            view: 1,
+        }
+        
+    }
+}
+
+impl Hash for Ticket {
+    fn digest(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(&self.view.to_le_bytes());
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
 }
 
 impl fmt::Debug for Ticket {
@@ -73,10 +89,11 @@ pub struct Header {
     //edges within DAG
     pub special_parent: Option<Digest>, //Digest of the header of the special parent.
     pub special_parent_round: Round, //round of the parent we have special edge to (only used to re-construct parent cert digest in committer)
-    pub ticket: Option<Ticket>, 
+    
     //Consensus parent
+    pub ticket: Option<Ticket>, 
     pub prev_view_round: Round, //round that was proposed by the last view.
-    pub prev_view_header: Option<Digest>, //Digest of the certificate that was committed in the last view
+    pub consensus_parent: Option<Digest>, //Digest of the ticket that was committed in the last view
     
 
 }
@@ -96,7 +113,7 @@ impl Header {
         special_parent_round: Round,
         ticket: Option<Ticket>,
         prev_view_round: Round,
-        prev_view_header: Option<Digest>,
+        consensus_parent: Option<Digest>,
 
     ) -> Self {
         let header = Self {
@@ -112,7 +129,7 @@ impl Header {
             special_parent_round,
             ticket,
             prev_view_round,
-            prev_view_header,
+            consensus_parent,
         };
         let id = header.digest();
         let signature = signature_service.request_signature(id.clone()).await;
@@ -122,7 +139,7 @@ impl Header {
             ..header
         }
     }
-
+    
     pub fn genesis(committee: &Committee) -> Self {
         let (name, _) = committee.authorities.iter().next().unwrap();
         Header {
@@ -184,7 +201,7 @@ impl Header {
         hasher.update(&self.special_parent_round.to_le_bytes());
 
         hasher.update(&self.prev_view_round.to_le_bytes());
-        match &self.prev_view_header {
+        match &self.consensus_parent {
             Some(parent) => hasher.update(parent),
             None => {},
         }
@@ -220,7 +237,7 @@ impl Hash for Header {
         hasher.update(&self.special_parent_round.to_le_bytes());
 
         hasher.update(&self.prev_view_round.to_le_bytes());
-        match &self.prev_view_header {
+        match &self.consensus_parent {
             Some(parent) => hasher.update(parent),
             None => {},
         }
@@ -874,6 +891,7 @@ impl PartialEq for Timeout {
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct TC {
     //TODO: TC should contain hash of the header we vote to commit too. This can be an Option, I.e. there might be none for this view. ==> TODO: Need to include quorum of messages to endorse header 
+    pub hash: Digest,
     pub view: View,
     pub votes: Vec<(PublicKey, Signature, View)>,
 }

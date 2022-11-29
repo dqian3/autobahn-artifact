@@ -99,7 +99,7 @@ impl Synchronizer {
 
                     Some(cert) = rx_cert.recv() => {
                         if pending.insert(cert.digest()) {
-                            let parent_cert_digest = cert.header.prev_view_header.clone().unwrap();
+                            let parent_cert_digest = cert.header.consensus_parent.clone().unwrap();
                             let fut = Self::cert_waiter(store_copy.clone(), parent_cert_digest.clone(), cert.clone());
                             waiting_certs.push(fut);
 
@@ -217,7 +217,7 @@ impl Synchronizer {
 
     pub async fn get_parent_cert(&mut self, cert: &Certificate) -> ConsensusResult<Option<Certificate>> {
         
-        match self.store.read(cert.header.prev_view_header.as_ref().unwrap().to_vec()).await? {
+        match self.store.read(cert.header.consensus_parent.as_ref().unwrap().to_vec()).await? {
             Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
             None => {
                 Ok(None)
@@ -316,7 +316,7 @@ impl Synchronizer {
             return Ok(true);
         }
 
-        if self.store.read(cert.header.prev_view_header.as_ref().unwrap().to_vec()).await?.is_none(){
+        if self.store.read(cert.header.consensus_parent.as_ref().unwrap().to_vec()).await?.is_none(){
             if let Err(e) = self.inner_channel_cert.send(cert.clone()).await {
                 panic!("Failed to send request to synchronizer: {}", e);
            }
@@ -336,5 +336,20 @@ impl Synchronizer {
         }
 
         Ok(true)
+    }
+
+   
+
+    pub async fn get_commit_header(header_digest){
+        //read digest
+        //just send sync request
+    }
+
+    pub async fn deliver_parent_ticket(header, ticket_digest){
+        //if ticket == genesis, return true.
+
+        //read digest
+        //start a waiter that restarts header
+
     }
 }

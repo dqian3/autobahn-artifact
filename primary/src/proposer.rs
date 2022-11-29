@@ -52,7 +52,7 @@ pub struct Proposer {
     view: View,
     // The round proposed by the last view in consensus.
     prev_view_round: Round,
-    prev_view_header: Option<Digest>,
+    //prev_view_header: Option<Digest>,
 
     // Whether to propose special block
     propose_special: bool,
@@ -114,7 +114,7 @@ impl Proposer {
                 payload_size: 0,
                 view: 0,
                 prev_view_round: 1,
-                prev_view_header: None,
+                //prev_view_header: None,
                 propose_special: false,
                 last_has_parents: true,
                 use_special_parent: false,
@@ -131,8 +131,12 @@ impl Proposer {
 
         let mut ticket = None;
         mem::swap(&mut self.ticket, &mut ticket); //Reset self.ticket; and move ticket (this just avoids copying)
-        let mut prev_view_header = None;
-        mem::swap(&mut self.prev_view_header, &mut prev_view_header);  //TODO: Currently unused = just None. Need to pass a prev_view_header digest as part of ticket channel. (or include it inside ticket => preferred)
+        let mut ticket_digest = Digest::default();
+        if is_special && ticket.is_some() { 
+            ticket_digest = ticket.as_ref().unwrap().digest();
+        }
+        //let mut prev_view_header = None;
+        //mem::swap(&mut self.prev_view_header, &mut prev_view_header);  //TODO: Currently unused = just None. Need to pass a prev_view_header digest as part of ticket channel. (or include it inside ticket => preferred)
         // Make a new header.
         let header = Header::new(
                 self.name,
@@ -146,7 +150,7 @@ impl Proposer {
                 self.last_header_round,
                 ticket, 
                 self.prev_view_round,
-                prev_view_header,
+                if is_special {Some(ticket_digest)} else {None},//prev_view_header,
             ).await;
 
         debug!("Created {:?}", header);

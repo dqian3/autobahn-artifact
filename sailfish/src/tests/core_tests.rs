@@ -100,7 +100,7 @@ async fn handle_header() {
 
     let header = Header {author: public_key_1, round: 2, payload: BTreeMap::new(), parents: BTreeSet::new(),
                          id: Digest::default(), signature: Signature::default(), is_special: true, view: 1,
-                         prev_view_round: 1, special_parent: None, special_parent_round: 1, ticket: Some(ticket), prev_view_header: None};
+                         prev_view_round: 1, special_parent: None, special_parent_round: 1, ticket: Some(ticket), consensus_parent: None};
     let id = header.digest();
     let signature = Signature::new(&id, &secret_key_1);
 
@@ -197,7 +197,7 @@ async fn commit_header() {
 
     let header = Header {author: leader_keys(1).0, round: 2, payload: BTreeMap::new(), parents: BTreeSet::new(),
                          id: Digest::default(), signature: Signature::default(), is_special: true, view: 1,
-                         prev_view_round: 1, special_parent: None, special_parent_round: 0, prev_view_header: None, ticket: Some(ticket)};
+                         prev_view_round: 1, special_parent: None, special_parent_round: 0, consensus_parent: None, ticket: Some(ticket)};
     let id = header.digest();
     let signature = Signature::new(&id, &leader_keys(1).1);
 
