@@ -37,7 +37,7 @@ pub enum PrimaryMessage {
     Vote(Vote),
     Certificate(Certificate),
     CertificatesRequest(Vec<Digest>, /* requestor */ PublicKey),
-    HeaderRequest(Digest, /* requestor */ PublicKey),
+    HeadersRequest(Vec<Digest>, /* requestor */ PublicKey),
 }
 
 /// The messages sent by the primary to its workers.
@@ -74,6 +74,7 @@ impl Primary {
         rx_ticket: Receiver<(View, Round, Ticket)>,
         rx_validation: Receiver<(Header, u8, Option<QC>, Option<TC>)>,
         rx_pushdown_cert: Receiver<Certificate>,
+        rx_request_header_sync: Receiver<Digest>,
     ) {
         let (tx_others_digests, rx_others_digests) = channel(CHANNEL_CAPACITY);
         let (tx_our_digests, rx_our_digests) = channel(CHANNEL_CAPACITY);
@@ -162,6 +163,7 @@ impl Primary {
             rx_validation, 
             tx_sailfish, 
             rx_pushdown_cert,
+            rx_request_header_sync,
         );
 
         // Keeps track of the latest consensus round and allows other tasks to clean up their their internal state
@@ -235,7 +237,7 @@ impl Primary {
 struct PrimaryReceiverHandler {
     tx_primary_messages: Sender<PrimaryMessage>,
     tx_cert_requests: Sender<(Vec<Digest>, PublicKey)>,
-    tx_header_requests: Sender<(Digest, PublicKey)>,
+    tx_header_requests: Sender<(Vec<Digest>, PublicKey)>,
 }
 
 #[async_trait]
@@ -251,7 +253,7 @@ impl MessageHandler for PrimaryReceiverHandler {
                 .send((missing, requestor))
                 .await
                 .expect("Failed to send primary message"),
-            PrimaryMessage::HeaderRequest(missing, requestor) => self
+            PrimaryMessage::HeadersRequest(missing, requestor) => self
                 .tx_header_requests
                 .send((missing, requestor))
                 .await

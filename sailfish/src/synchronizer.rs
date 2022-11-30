@@ -1,8 +1,7 @@
 use crate::consensus::{ConsensusMessage, CHANNEL_CAPACITY};
-//use crate::error::ConsensusResult;
 use primary::Header;
 use primary::error::{ConsensusResult, ConsensusError};
-use primary::messages::{QC, Certificate};
+use primary::messages::{QC, Certificate, Ticket};
 use bytes::Bytes;
 use config::Committee;
 use crypto::Hash as _;
@@ -30,26 +29,63 @@ pub struct Synchronizer {
     store: Store,
     inner_channel: Sender<(Header, Digest)>,
     inner_channel_cert: Sender<Certificate>,
+    inner_channel_header: Sender<(Digest, Ticket)>,
+    inner_channel_ticket: Sender<(Header, Ticket)>,
+    //tx_dag_request_header_sync: Sender<Digest>,
+    tx_loopback_commit: Sender<(Header, Ticket)>,
 }
 
 impl Synchronizer {
+
+    async fn commit_header_waiter(mut store: Store, wait_on: Digest, ticket: Ticket) -> ConsensusResult<(Digest, Ticket)> {
+        let _ = store.notify_read(wait_on.to_vec()).await?;
+        Ok((wait_on, ticket))
+    }
+
+    async fn ticket_commit_waiter(mut store: Store, wait_on: Digest, header: Header, ticket: Ticket) -> ConsensusResult<(Header, Ticket)> {
+        let _ = store.notify_read(wait_on.to_vec()).await?;
+        Ok((header, ticket))
+    }
+
+    async fn header_waiter(mut store: Store, wait_on: Digest, deliver: Header) -> ConsensusResult<(Header, Digest)> {
+        let _ = store.notify_read(wait_on.to_vec()).await?;
+        Ok((deliver, wait_on))
+    }
+
+    async fn cert_waiter(mut store: Store, wait_on: Digest, deliver: Certificate) -> ConsensusResult<(Certificate, Digest)> {
+        let _ = store.notify_read(wait_on.to_vec()).await?;
+        Ok((deliver, wait_on))
+    }
+
+
+
     pub fn new(
         name: PublicKey,
         committee: Committee,
         store: Store,
         tx_loopback_header: Sender<Header>,
         tx_loopback_certs: Sender<Certificate>,
+
+        tx_request_header_sync: Sender<Digest>,
+        tx_loopback_process_commit: Sender<(Digest, Ticket)>,
+        tx_loopback_commit: Sender<(Header, Ticket)>,
+
         sync_retry_delay: u64,
     ) -> Self {
         let mut network = SimpleSender::new();
         let (tx_inner, mut rx_inner): (_, Receiver<(Header, Digest)>) = channel(CHANNEL_CAPACITY);
         let (tx_cert, mut rx_cert): (_, Receiver<Certificate>) = channel(CHANNEL_CAPACITY);
+        let (tx_header, mut rx_header): (_, Receiver<(Digest, Ticket)>) = channel(CHANNEL_CAPACITY);
+        let (tx_ticket, mut rx_ticket): (_, Receiver<(Header, Ticket)>) = channel(CHANNEL_CAPACITY);
 
+        let tx_loopback_commit_copy = tx_loopback_commit.clone();
         let store_copy = store.clone();
         tokio::spawn(async move {
 
             let mut waiting_headers = FuturesUnordered::new();
             let mut waiting_certs = FuturesUnordered::new();
+            let mut waiting_tickets = FuturesUnordered::new();
+            let mut waiting_commit_headers = FuturesUnordered::new();
 
             let mut pending = HashSet::new();
             let mut requests = HashMap::new();
@@ -59,6 +95,49 @@ impl Synchronizer {
             tokio::pin!(timer);
             loop {
                 tokio::select! {
+                    Some((header_digest, ticket)) = rx_header.recv() => {
+                        //TODO: add duplicate checks.
+                         //Create waiter for header to be stored. Upon trigger, call Commit_wrapper()
+                        let fut = Self::commit_header_waiter(store_copy.clone(), header_digest.clone(), ticket.clone());
+                        waiting_commit_headers.push(fut);
+                        
+                        //downcall to DAG, and let it synchronize.
+                        tx_request_header_sync.send(header_digest).await.expect("requesting header sync failed"); 
+                         //Altneratively: Send out a CommitHeader Request -> upon reception, call down to Dag to process_header. (ensures payload is there)
+
+                    },
+                    //header has been added to store => can re-trigger commit.
+                    Some(result) = waiting_commit_headers.next() => match result {
+                        Ok((header_digest, ticket)) => {
+                            if let Err(e) = tx_loopback_process_commit.send((header_digest, ticket)).await { // loopback to core. ==> receiver calls process_commit, which fetches header and calls commit
+                                panic!("Failed to send message through core commit_header channel: {}", e);
+                            }
+                        },
+                        Err(e) => error!("{}", e)
+                    },
+
+                   
+                    Some((header, ticket)) = rx_ticket.recv() => {
+                        let consensus_parent = header.consensus_parent.clone().unwrap();
+                        //start waiter.
+                        let fut = Self::ticket_commit_waiter(store_copy.clone(), consensus_parent, header.clone(), ticket.clone());
+                        waiting_tickets.push(fut);
+
+                    },
+                     //parent ticket has been added to store => re-trigger commit with buffered header/ticket
+                    Some(result) = waiting_tickets.next() => match result {
+                        Ok((header, ticket)) => {
+                            if let Err(e) = tx_loopback_commit.send((header, ticket)).await { //loopback to core. ==> receiver calls commit(header,ticket)
+                                panic!("Failed to send message through core commit_header channel: {}", e);
+                            }
+                        },
+                        Err(e) => error!("{}", e)
+                    },
+
+
+
+                    ////////////////////// UNUSED/DEPRECATED below
+
                     
                     Some((header, parent_dig)) = rx_inner.recv() => {
                         if pending.insert(header.digest()) {
@@ -131,6 +210,7 @@ impl Synchronizer {
                         },
                         Err(e) => error!("{}", e)
                     },
+                  
                     // Some(block) = rx_inner.recv() => {
                     //     if pending.insert(block.digest()) {
                     //         let parent = block.parent().clone();
@@ -186,19 +266,14 @@ impl Synchronizer {
             store,
             inner_channel: tx_inner,
             inner_channel_cert: tx_cert,
+            inner_channel_header: tx_header,
+            inner_channel_ticket: tx_ticket,
+            tx_loopback_commit: tx_loopback_commit_copy,
+            //tx_dag_request_header_sync: tx_request_header_sync,
         }
     }
 
-    async fn header_waiter(mut store: Store, wait_on: Digest, deliver: Header) -> ConsensusResult<(Header, Digest)> {
-        let _ = store.notify_read(wait_on.to_vec()).await?;
-        Ok((deliver, wait_on))
-    }
-
-    async fn cert_waiter(mut store: Store, wait_on: Digest, deliver: Certificate) -> ConsensusResult<(Certificate, Digest)> {
-        let _ = store.notify_read(wait_on.to_vec()).await?;
-        Ok((deliver, wait_on))
-    }
-
+    
     // pub async fn get_parent_block(&mut self, block: &Block) -> ConsensusResult<Option<Block>> {
     //     if block.qc == QC::genesis() {
     //         return Ok(Some(Block::genesis()));
@@ -215,6 +290,100 @@ impl Synchronizer {
     //     }
     // }
 
+   
+    pub async fn get_commit_header(&mut self, header_digest: Digest, new_ticket: &Ticket) -> ConsensusResult<Option<Header>>{
+        //read digest
+
+        match self.store.read(header_digest.to_vec()).await? {
+             //If we have header ==> reply
+            Some(bytes) => return Ok(Some(bincode::deserialize(&bytes)?)),
+            None => {
+                //Else: 
+            //Send to synchronizer loop via channel: 
+                if let Err(e) = self.inner_channel_header.send((header_digest.clone(), new_ticket.clone())).await {
+                    panic!("Failed to send header request to synchronizer: {}", e)
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    pub async fn deliver_parent_ticket(&mut self, header: &Header, new_ticket: &Ticket) -> ConsensusResult<bool>{
+       
+        let parent: Digest = header.consensus_parent.clone().unwrap();
+
+        //if ticket == genesis, return true.
+        if parent == Ticket::genesis().digest(){
+            return Ok(true);
+        }
+      
+        //read store for parent ticket digest
+        //If we have => return true
+        if self.store.read(parent.to_vec()).await?.is_some(){
+            return Ok(true);
+        }
+
+        //Else: return false =>
+        //AND
+        let parent_ticket: Ticket = header.ticket.clone().unwrap();
+        let parent_ticket_header_dig: Digest = parent_ticket.hash.clone();
+            //Send to synchronizer loop via channel: 
+            //start a waiter that restarts header and waits for ticket_digest
+        if let Err(e) = self.inner_channel_ticket.send((header.clone(), new_ticket.clone())).await {
+             panic!("Failed to send header request to synchronizer: {}", e)
+        }
+
+        //check if we have the ticket header stored. 
+
+        match self.get_commit_header(parent_ticket_header_dig, &parent_ticket).await? {
+            None => {}, //If no: get_commit_header will start sync, and eventually call process_commit(parent_ticket_header_dig, parent_ticket)
+
+            Some(parent_ticket_header) => {  //If yes: issue commit(parent_ticket_header, parent_ticket)
+               if let Err(e) = self.tx_loopback_commit.send((parent_ticket_header, parent_ticket)).await{
+                panic!("Failed to loopback commit to core");
+               }
+            }
+        }
+       
+        Ok(false)
+    }
+
+    //
+    pub async fn get_parent_header(&mut self, header: &Header) -> ConsensusResult<Option<Header>> {
+        
+        let parent: Digest = header.consensus_parent.clone().unwrap();
+
+         //if ticket == genesis, return true.
+        if parent == Ticket::genesis().digest(){
+            //return Ok(Header::genesis(&self.committee));
+            return Ok(None);
+        }
+
+        match self.store.read(parent.to_vec()).await? {
+            None => {
+                panic!{"Should have parent ticket by now"}
+                return Err(ConsensusError::UncommittedParentTicket);
+            }
+            Some(bytes) => {
+                let ticket:Ticket = bincode::deserialize(&bytes)?;
+
+                match self.store.read(ticket.digest().to_vec()).await? {
+                    None => {
+                        panic!{"Should have header of the parent ticket by now"}
+                        return Err(ConsensusError::MissingParentTicketHeader);
+                    }
+                    Some(bytes) => {
+                        Ok(Some(bincode::deserialize(&bytes)?))
+                    }
+                }
+
+            }
+        }
+    }
+
+
+    /////////////////////////////////// UNUSED/DEPRECATED BELOW
+
     pub async fn get_parent_cert(&mut self, cert: &Certificate) -> ConsensusResult<Option<Certificate>> {
         
         match self.store.read(cert.header.consensus_parent.as_ref().unwrap().to_vec()).await? {
@@ -225,33 +394,6 @@ impl Synchronizer {
         }
     }
 
-    //FIXME: 
-    pub async fn get_parent_header(&mut self, header: &Header) -> ConsensusResult<Option<Header>> {
-        //TODO: Replace all this with dedicated consensus parent edge (digest of header ordered before) -> that can be a header ordered by the preceding Qc or Tc
-        //use parent digest = Ticket Qc.hash
-        //TODO: Need to find a similar mechanism for TC tickets. //For now this hack suffices.
-        let ticket = header.ticket.clone().unwrap();
-        let parent: Digest = ticket.qc.clone().hash; //Header digest!
-
-        // If QC not in previous view then there must be a TC
-        if ticket.qc.clone().view + 1 != header.view && ticket.tc.is_none() {
-            return Err(ConsensusError::InvalidTicket);
-        }
-
-        if ticket.qc == QC::genesis() {
-            return Ok(None)
-        }
-            
-        match self.store.read(parent.to_vec()).await? {
-            Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
-            None => {
-                if let Err(e) = self.inner_channel.send((header.clone(), parent)).await {
-                    panic!("Failed to send request to synchronizer: {}", e);
-                }
-                Ok(None)
-            }
-        }
-    }
 
     pub async fn get_special_parent_header(&mut self, header: &Header) -> ConsensusResult<Option<Header>> {
         let parent = header.special_parent.clone();
@@ -338,18 +480,5 @@ impl Synchronizer {
         Ok(true)
     }
 
-   
 
-    pub async fn get_commit_header(header_digest){
-        //read digest
-        //just send sync request
-    }
-
-    pub async fn deliver_parent_ticket(header, ticket_digest){
-        //if ticket == genesis, return true.
-
-        //read digest
-        //start a waiter that restarts header
-
-    }
 }

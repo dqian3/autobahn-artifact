@@ -131,5 +131,11 @@ pub enum ConsensusError {
 
     #[error("Header proposer provided no ticket")]
     InvalidTicket,
+
+    #[error("Parent ticket not committed")]
+    UncommittedParentTicket,
+
+    #[error("Header of parent ticket not committed")]
+    MissingParentTicketHeader,
         
 }

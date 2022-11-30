@@ -28,6 +28,7 @@ pub enum WaiterMessage {
     SyncBatches(HashMap<Digest, WorkerId>, Header),
     SyncParents(Vec<Digest>, Header),
     SyncSpecialParent(Digest, Header),
+    SyncHeader(Digest),
 }
 
 /// Waits for missing parent certificates and batches' digests.
@@ -59,7 +60,7 @@ pub struct HeaderWaiter {
     /// along with a timestamp (`u128`) indicating when we sent the request.
     parent_requests: HashMap<Digest, (Round, u128)>,
     //same, but for special parents
-    special_parent_requests: HashMap<Digest, (Round, u128)>, 
+    header_requests: HashMap<Digest, (Round, u128)>, 
     /// Keeps the digests of the all tx batches for which we sent a sync request,
     /// similarly to `header_requests`.
     batch_requests: HashMap<Digest, Round>,
@@ -94,7 +95,7 @@ impl HeaderWaiter {
                 tx_core,
                 network: SimpleSender::new(),
                 parent_requests: HashMap::new(),
-                special_parent_requests: HashMap::new(),
+                header_requests: HashMap::new(),
                 batch_requests: HashMap::new(),
                 pending: HashMap::new(),
             }
@@ -178,6 +179,34 @@ impl HeaderWaiter {
                             }
                         }
 
+                        WaiterMessage::SyncHeader(missing) => {
+                            debug!("Syncing on header with digest {}", missing);
+                            
+                            let now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .expect("Failed to measure time")
+                            .as_millis();
+
+                            let mut requires_sync = Vec::new();
+                            self.header_requests.entry(missing.clone()).or_insert_with(|| {
+                                requires_sync.push(missing);
+                                (0, now)
+                            });
+                            
+                            if !requires_sync.is_empty() {
+                                let addresses = self.committee
+                                .others_primaries(&self.name)
+                                .iter()
+                                .map(|(_, x)| x.primary_to_primary)
+                                .collect();
+                            
+                                let message = PrimaryMessage::HeadersRequest(requires_sync, self.name);
+                                let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
+                                self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await; //after timeout, re-broadcast again (technically not necessary)
+                            }
+                        }
+
+
                         WaiterMessage::SyncParents(missing, header) => {
                             debug!("Synching the parents of {}", header);
                             let header_id = header.id.clone();
@@ -255,18 +284,18 @@ impl HeaderWaiter {
                                 .expect("Failed to measure time")
                                 .as_millis();
                            
-                            let mut requires_sync = false;
-                            self.parent_requests.entry(missing_parent.clone()).or_insert_with(|| {
-                                requires_sync = true;
+                            let mut requires_sync = Vec::new();
+                            self.header_requests.entry(missing_parent.clone()).or_insert_with(|| {
+                                requires_sync.push(missing_parent);
                                 (round, now)
                             });
                             
-                            if requires_sync {
+                            if !requires_sync.is_empty() {
                                 let address = self.committee
                                     .primary(&author)
                                     .expect("Author of valid header not in the committee")
                                     .primary_to_primary;
-                                let message = PrimaryMessage::HeaderRequest(missing_parent, self.name);
+                                let message = PrimaryMessage::HeadersRequest(requires_sync, self.name);
                                 let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
                                 self.network.send(address, Bytes::from(bytes)).await;
                             }
@@ -286,7 +315,7 @@ impl HeaderWaiter {
                         }
                         if header.special_parent.is_some() {
                             let head_ref = &header.special_parent.as_ref().unwrap();
-                            let _ = self.special_parent_requests.remove(head_ref);
+                            let _ = self.header_requests.remove(head_ref);
                         }
                         self.tx_core.send(header).await.expect("Failed to send header"); 
                     },
@@ -308,6 +337,20 @@ impl HeaderWaiter {
                         .expect("Failed to measure time")
                         .as_millis();
 
+                    //Retry HeaderRequests
+                    let mut retry = Vec::new();
+                    for (digest, (_, timestamp)) in &self.header_requests {
+                        if timestamp + (self.sync_retry_delay as u128) < now {
+                            debug!("Requesting sync for certificate {} (retry)", digest);
+                            retry.push(digest.clone());
+                        }
+                    }
+                    let addresses = self.committee.others_primaries(&self.name).iter().map(|(_, x)| x.primary_to_primary).collect();
+                    let message = PrimaryMessage::HeadersRequest(retry, self.name);
+                    let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
+                    self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;   
+
+                    //Retry CertificateRequests
                     let mut retry = Vec::new();
                     for (digest, (_, timestamp)) in &self.parent_requests {
                         if timestamp + (self.sync_retry_delay as u128) < now {
@@ -315,12 +358,7 @@ impl HeaderWaiter {
                             retry.push(digest.clone());
                         }
                     }
-
-                    let addresses = self.committee
-                        .others_primaries(&self.name)
-                        .iter()
-                        .map(|(_, x)| x.primary_to_primary)
-                        .collect();
+                    let addresses = self.committee.others_primaries(&self.name).iter().map(|(_, x)| x.primary_to_primary).collect();
                     let message = PrimaryMessage::CertificatesRequest(retry, self.name);
                     let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
                     self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;
@@ -343,7 +381,7 @@ impl HeaderWaiter {
                 self.pending.retain(|_, (r, _)| r > &mut gc_round);
                 self.batch_requests.retain(|_, r| r > &mut gc_round);
                 self.parent_requests.retain(|_, (r, _)| r > &mut gc_round);
-                self.special_parent_requests.retain(|_, (r, _)| r > &mut gc_round);
+                self.header_requests.retain(|_, (r, _)| r > &mut gc_round);
             }
         }
     }

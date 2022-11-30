@@ -170,6 +170,7 @@ impl TCMaker {
         if self.weight >= committee.quorum_threshold() {
             self.weight = 0; // Ensures TC is only created once.
             return Ok(Some(TC {
+                hash: Digest::default(), //TODO: FIXME: Replace this with our new TC rule: I.e. whatever logic picks a header to propose
                 view: timeout.view,
                 votes: self.votes.clone(),
             }));

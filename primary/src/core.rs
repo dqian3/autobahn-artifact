@@ -60,6 +60,8 @@ pub struct Core {
     tx_special: Sender<Header>,
 
     rx_pushdown_cert: Receiver<Certificate>,
+    // Receive sync requests for headers required at the consensus layer
+    rx_request_header_sync: Receiver<Digest>, 
 
     /// The last garbage collected round.
     gc_round: Round,
@@ -99,6 +101,7 @@ impl Core {
         rx_validation: Receiver<(Header, u8, Option<QC>, Option<TC>)>,
         tx_special: Sender<Header>,
         rx_pushdown_cert: Receiver<Certificate>,
+        rx_request_header_sync: Receiver<Digest>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -119,6 +122,7 @@ impl Core {
                 rx_validation,
                 tx_special,
                 rx_pushdown_cert,
+                rx_request_header_sync,
                 gc_round: 0,
                 last_voted: HashMap::with_capacity(2 * gc_depth as usize),
                 processing: HashMap::with_capacity(2 * gc_depth as usize),
@@ -565,10 +569,20 @@ impl Core {
                     }
                 },
 
+                // We also receive here our new headers created by the `Proposer`.
+                Some(header) = self.rx_proposer.recv() => self.process_own_header(header).await,
+
                 // We receive here loopback headers from the `HeaderWaiter`. Those are headers for which we interrupted
                 // execution (we were missing some of their dependencies) and we are now ready to resume processing.
                 Some(header) = self.rx_header_waiter.recv() => self.process_header(header).await,
 
+                //Loopback for special headers that were validated by consensus layer.
+                Some((header, special_valid, qc, tc)) = self.rx_validation.recv() => self.create_vote(header, special_valid, qc, tc).await,               
+                //i.e. core requests validation from consensus (check if ticket valid; wait to receive ticket if we don't have it yet -- should arrive: using all to all or forwarding)
+
+                Some(header_digest) = self.rx_request_header_sync.recv() => self.synchronizer.fetch_header(header_digest).await,
+                
+                
                 // We receive here loopback certificates from the `CertificateWaiter`. Those are certificates for which
                 // we interrupted execution (we were missing some of their ancestors) and we are now ready to resume
                 // processing.
@@ -576,13 +590,9 @@ impl Core {
                 // Loopback certificates from Consensus layer. Those are certificates of consensus parents. //TODO: This might be redundant sync with the Dag layers sync.
                 Some(certificate) = self.rx_pushdown_cert.recv() => self.process_certificate(certificate).await,
 
-                // We also receive here our new headers created by the `Proposer`.
-                Some(header) = self.rx_proposer.recv() => self.process_own_header(header).await,
+            
                 
 
-               //Loopback for special headers that were validated by consensus layer.
-                Some((header, special_valid, qc, tc)) = self.rx_validation.recv() => self.create_vote(header, special_valid, qc, tc).await,               
-                //i.e. core requests validation from consensus (check if ticket valid; wait to receive ticket if we don't have it yet -- should arrive: using all to all or forwarding)
 
             };
             match result {

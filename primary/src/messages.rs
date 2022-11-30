@@ -21,6 +21,8 @@ use std::fmt;
 pub struct Ticket {
     pub qc: QC,
     pub tc: Option<TC>,
+    //The Header that is endorsed by the QC/TC
+    pub hash: Digest, 
     pub view: View,
 }
 
@@ -28,11 +30,13 @@ impl Ticket {
     pub async fn new(
         qc: QC,
         tc: Option<TC>,
+        hash: Digest, 
         view: View,
     ) -> Self {
         let ticket = Self {
             qc,
             tc,
+            hash,
             view,
         
         };
@@ -42,6 +46,7 @@ impl Ticket {
         Ticket {
             qc: QC::genesis(), 
             tc: None, 
+            hash: Digest::default(),
             view: 1,
         }
         
@@ -51,7 +56,8 @@ impl Ticket {
 impl Hash for Ticket {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
-        hasher.update(&self.view.to_le_bytes());
+         hasher.update(&self.hash);
+         hasher.update(&self.view.to_le_bytes());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }

@@ -50,6 +50,9 @@ pub struct Core {
     tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>,
     tx_ticket: Sender<(View, Round, Ticket)>,
     rx_special: Receiver<Header>,
+    rx_loopback_process_commit: Receiver<(Digest, Ticket)>,
+    rx_loopback_commit: Receiver<(Header, Ticket)>,
+
     view: View,
     last_voted_view: View,
     last_committed_view: View,
@@ -65,8 +68,8 @@ pub struct Core {
 
     processing_headers: HashMap<View, HashSet<Digest>>,
     processing_certs: HashMap<View, HashSet<Digest>>,
-    ready_to_commit: HashSet<Digest>, //Digest of the Header ready to commit -- all consensus parents are available
-    waiting_to_commit:  HashSet<Digest>, // Digest of the Header thats eligible to commit (has QC), but not ready because cert has not been processed
+    // process_commit: HashSet<Digest>, //Digest of the Header ready to commit -- all consensus parents are available
+    // waiting_to_commit:  HashSet<Digest>, // Digest of the Header thats eligible to commit (has QC), but not ready because cert has not been processed
 }
 
 impl Core {
@@ -90,6 +93,8 @@ impl Core {
         tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>, // Loopback Special Headers to DAG
         tx_ticket: Sender<(View, Round, Ticket)>,
         rx_special: Receiver<Header>,
+        rx_loopback_process_commit: Receiver<(Digest, Ticket)>,
+        rx_loopback_commit: Receiver<(Header, Ticket)>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -110,6 +115,9 @@ impl Core {
                 tx_validation,
                 tx_ticket,
                 rx_special,
+                rx_loopback_process_commit,
+                rx_loopback_commit,
+
                 view: 1,
                 last_voted_view: 0,
                 last_committed_view: 0,
@@ -124,8 +132,8 @@ impl Core {
                 round: 1,
                 processing_headers: HashMap::new(),
                 processing_certs: HashMap::new(),
-                ready_to_commit: HashSet::new(),
-                waiting_to_commit: HashSet::new(),
+                // process_commit: HashSet::new(),
+                // waiting_to_commit: HashSet::new(),
             }
             .run()
             .await
@@ -163,7 +171,6 @@ impl Core {
         self.last_voted_view = max(self.last_voted_view, target);
     }
 
-
     // async fn make_vote(&mut self, block: &Block) -> Option<Vote> {
     //     // Check if we can vote for this block.
     //     let safety_rule_1 = block.view > self.last_voted_view;
@@ -183,37 +190,29 @@ impl Core {
     //     Some(Vote::new(&block, self.name, self.signature_service.clone()).await)
     // }
     
-    //TODO: Also commit TC's in the ticket chain. 
-    // Note: currently the parent pointer points to a digest of a cert. process_cert recursively guarantees that all parent certs are stored.
-    // Problem: a TC ticket does not necessarily have a cert (e.g. it may just commit a header that has only been prepared by some replicas)
-    // To solve this, handle_tc should create and store a dummy cert
-    // ==> To ensure handle_tc is called, must ensure that process_special_header is called
-    // Conclusion: commit should call process_cert; process_cert should call process_special_header (if not already done)
-    // I.e. example workflow: S1 (TC) <- S2 (QC)
-    // S2 commit is called. -> S2 process_cert is called. -> S2 process_special_header is called. -> validates & processes ticket, e.g. calls handle_tc(S1.TC)
-    // -> generates and stores cert(S1) -> S2 process_cert resumes. checks that parent cert is present. -> S2 process_cert concludes --> S2 commit should wake up
-
-    // Problem: What wakes S2 commit? S2 commit should wake when its own cert is in store. But that is true, because Dag process_cert adds it, not Consensus process_cert
-    // either: add some data structure that wakes commit (e.g set "commit_waiting", and if true while calling process_cert, call commit)
-    //or: in Dag layer, don't add to store before parent is there
-
-    async fn process_commit(&mut self, header_digest: Digest, qc: Option<QC>, tc: Option<TC>) -> ConsensusResult<()> {
+   
+    async fn generate_ticket_and_commit(&mut self, header_digest: Digest, qc: Option<QC>, tc: Option<TC>) -> ConsensusResult<Ticket> {
       
         //generate header
-        let ticket = Ticket::new(qc.unwrap(), tc, self.view).await;
+        let new_ticket = Ticket::new(qc.unwrap(), tc, header_digest.clone(), self.view).await;
            // let ticket = match tc {
         //     Some(timeout_cert) => Ticket::new(self.high_qc.clone(), Some(timeout_cert), self.view).await,
         //     None => Ticket::new(self.high_qc.clone(), None, self.view).await,
         // };
 
-        //Sync:
-        match self.synchronizer.get_commit_header(&header_digest).await? { 
-             // If have header, call commit
-            Some(header) => self.commit(header, ticket ).await?,
-             // If don't have header, start sync. On reply call commit.  (Same reply as the ticket sync reply!!) ==> both use same sync function.
-            None => {}
-        }
-        Ok(ticket)
+        self.process_commit(header_digest, new_ticket.clone()); //Asynchronous
+        Ok(new_ticket)
+    }
+
+    async fn process_commit(&mut self, header_digest: Digest, new_ticket: Ticket) -> ConsensusResult<()> {
+        //Fetch header. If not available, sync first.
+        match self.synchronizer.get_commit_header(header_digest, &new_ticket).await? { 
+            // If have header, call commit
+           Some(header) => self.commit(header, new_ticket).await?,
+            // If don't have header, start sync. On reply call commit.  (Same reply as the ticket sync reply!!) ==> both use same sync function.
+           None => {}
+       }
+       Ok(())
     }
 
     async fn commit(&mut self, header: Header, new_ticket: Ticket) -> ConsensusResult<()> {
@@ -223,58 +222,46 @@ impl Core {
             return Ok(());
         }
 
-        //create dummy cert and pass it do Dag to trigger sync on Dag parents (We will wait at Certificate waiter.)
-        let cert = Certificate {
-            header: header.clone(),
-            ..Certificate::default()
-        };
-        self.process_sync_cert(cert).await;
-         
         // deliver_parent_ticket.  confirm that ticket is in store. Else create waiter to re-trigger commit. //sync on ticket header (and directly call commit on it once received)
-        if !self.synchronizer.deliver_parent_ticket(header.consensus_parent) {
+        if !self.synchronizer.deliver_parent_ticket(&header, &new_ticket).await? {
             return Ok(());
         }
 
         if new_ticket.tc.is_some() { //don't commit it, just store it.
-        // store the ticket.
-         let bytes = bincode::serialize(&new_ticket).expect("Failed to serialize ticket");
-         self.store.write(new_ticket.digest().to_vec(), bytes).await;
-         return Ok(());
+            // store the ticket.
+            let bytes = bincode::serialize(&new_ticket).expect("Failed to serialize ticket");
+            self.store.write(new_ticket.digest().to_vec(), bytes).await;
+            return Ok(());
         }
     
-        let mut to_commit = VecDeque::new();
-
-
-        let mut parent_cert = Certificate {
-            header: header.clone(),
-            ..Certificate::default()
-        };
-        to_commit.push_back(parent_cert.clone());
-
-       
-        while self.last_committed_view + 1 < parent_cert.header.view {
-            let ancestor_cert = self
-                .synchronizer
-                .get_parent_cert(&parent_cert)
-                .await?
-                .expect("We should have all the consensus ancestor certificates by now");
-            to_commit.push_back(ancestor_cert.clone());
-            parent_cert = ancestor_cert;
-        }
-
-        self.last_committed_view = header.view;
+        self.last_committed_view = header.view.clone();
         
         self.processing_headers.retain(|k, _| k >= &header.view); //garbage collect
         self.processing_certs.retain(|k, _| k >= &header.view); //garbage collect
 
+        let mut to_commit = VecDeque::new();
+        let mut parent = header;
+        to_commit.push_back(parent.clone());
+
+       //Commits parents too. This will only happen in case of View Changes, i.e. if the parent ticket is a TC. 
+        while self.last_committed_view + 1 < parent.view {
+            let ancestor:Header = self
+                .synchronizer
+                .get_parent_header(&parent) //TODO: Create. Lookup consensus parent ticket (should be there), and then the header from that.
+                .await?
+                .expect("Should have ancestor by now");
+            to_commit.push_back(ancestor.clone());
+            parent= ancestor;
+        }
+
+        
+
         let mut certs = Vec::new();
          // Send all the newly committed blocks to the node's application layer.
-         while let Some(cert) = to_commit.pop_back() {
-            debug!("Committed {:?}", cert.header);
-            self.ready_to_commit.remove(&cert.header.id);
-            self.waiting_to_commit.remove(&cert.header.id);
-
+         while let Some(header) = to_commit.pop_back() {
+            debug!("Committed {:?}", header);
             
+            let cert = Certificate { header, special_valids: Vec::new(), votes: Vec::new() };
             certs.push(cert.clone());
             self.tx_commit   //Note: This is sent to the commiter->CertificateWaiter. It waits for all Dag parent certs to arrive. However, this is already guaranteed by our implicit requirement that the committing cert is processed.
                 .send(cert)
@@ -291,144 +278,6 @@ impl Core {
         self.store.write(new_ticket.digest().to_vec(), bytes).await;
         Ok(())
     }
-
-
-    
-    async fn commit(&mut self, header: Header) -> ConsensusResult<()> {
-        //TODO: Need to handle duplicate calls?
-
-        if self.last_committed_view >= header.view {
-            return Ok(());
-        }
-         
-        // check process_cert for own cert has been called ==> I.e. this guarantees Invariant: All consensus parent certs are there. If not, resume processing later
-        // if not, stop processing; set a marker that commit is waiting.
-        self.waiting_to_commit.insert(header.id.clone());
-        if !self.ready_to_commit.contains(&header.id)
-        {
-            let dummy_cert = Certificate {
-                header,
-                ..Certificate::default()
-            };
-            self.process_special_certificate(dummy_cert).await?;
-            return Ok(()); //will resume later.
-        }
-
-        
-        let mut to_commit = VecDeque::new();
-
-
-        let mut parent_cert = Certificate {
-            header: header.clone(),
-            ..Certificate::default()
-        };
-        to_commit.push_back(parent_cert.clone());
-
-       
-        while self.last_committed_view + 1 < parent_cert.header.view {
-            let ancestor_cert = self
-                .synchronizer
-                .get_parent_cert(&parent_cert)
-                .await?
-                .expect("We should have all the consensus ancestor certificates by now");
-            to_commit.push_back(ancestor_cert.clone());
-            parent_cert = ancestor_cert;
-        }
-
-        self.last_committed_view = header.view;
-        
-        self.processing_headers.retain(|k, _| k >= &header.view); //garbage collect
-        self.processing_certs.retain(|k, _| k >= &header.view); //garbage collect
-
-        let mut certs = Vec::new();
-         // Send all the newly committed blocks to the node's application layer.
-         while let Some(cert) = to_commit.pop_back() {
-            debug!("Committed {:?}", cert.header);
-            self.ready_to_commit.remove(&cert.header.id);
-            self.waiting_to_commit.remove(&cert.header.id);
-
-            
-            certs.push(cert.clone());
-            self.tx_commit   //Note: This is sent to the commiter->CertificateWaiter. It waits for all Dag parent certs to arrive. However, this is already guaranteed by our implicit requirement that the committing cert is processed.
-                .send(cert)
-                .await
-                .expect("Failed to send commit cert to committer");
-            
-            // Cleanup the mempool.
-            
-        }
-        self.mempool_driver.cleanup(certs).await;
-        Ok(())
-    }
-
-////////////////////////// Old:
-
-    //     let mut to_commit = VecDeque::new();
-    //     to_commit.push_back(header.clone());
-    //     // Ensure we commit the entire chain in order. This is needed after view-change, or if the replica
-    //     // receives qc's out of order (e.g. it was lagging for a while, or some channels are slower/async).
-    //     let mut parent = header.clone();
-      
-    //     while self.last_committed_view + 1 < parent.view {
-          
-    //         let ancestor = self
-    //             .synchronizer
-    //             .get_parent_header(&parent)  //TODO: Define this function. It should make sure that all previous views are committed. Must retrieve all QC/TC for prior views. TODO: FIXME: Header must reference either the ticket (QC/TC)
-    //             .await?
-    //             .expect("We should have all the ancestors by now");
-    //         to_commit.push_back(ancestor.clone());
-    //         parent = ancestor;
-    //     }
-    //     //TODO: Is it guaranteed that for each of these headers, all parent edges have already been added to committer?
-    //     // ==> if a header is a parent there must have been a QC for it => n-f replicas called process_special_header at consensus level
-    //     // => each must have been a cert for it
-    //     // but this current replica may or may not have seen that cert yet. //TODO: Ensure that primary/core/process_cert is called...
-    //     // (may need synchronizer)
-
-    //     // Save the last committed block.
-    //     self.last_committed_view = header.view;
-        
-    //     self.processing_headers.retain(|k, _| k >= &header.view); //garbage collect
-    //     self.processing_certs.retain(|k, _| k >= &header.view); //garbage collect
-
-    //     // Send all the newly committed blocks to the node's application layer.
-    //     while let Some(header) = to_commit.pop_back() {
-    //         debug!("Committed {:?}", header);
-    //         self.ready_to_commit.remove(&header.id);
-    //         self.waiting_to_commit.remove(&header.id);
-
-    //         // // Output the Header to the top-level application. //FIXME: This should be after flattening.
-    //         // if let Err(e) = self.tx_output.send(block.clone()).await {
-    //         //     warn!("Failed to send block through the output channel: {}", e);
-    //         // }
-
-    //         let mut certs = Vec::new();
-    //         // Send the payload to the committer.
-
-    //         let certificate = self
-    //             .synchronizer
-    //             .get_cert(&header)
-    //             .await?
-    //             .expect("we should have certificate by now");
-
-    //         // FIXME: change special_valids to be a valid not None ?
-    //         //FIXME: The cert for the header is not enough => need to ensure that all edges of this header have certs in the committer
-    //         //TODO: Need to sync on all edges if not already stored ==> this needs to be able to call back into the DAG layer to call process_cert (might need to sync to get that real cert first.)
-    //         //let certificate = Certificate { header, special_valids: Vec::new(), votes: qc.clone().votes }; //TODO: I don't think these votes are ever used. Just create empty vec.
-    //         certs.push(certificate.clone());
-
-    //         self.tx_commit   //Note: This is sent to the commiter/CertificateWaiter
-    //             .send(certificate)
-    //             .await
-    //             .expect("Failed to send payload");
-            
-
-    //         // Cleanup the mempool.
-    //         self.mempool_driver.cleanup(certs).await;
-    //     }
-    //     Ok(())
-    // }
-
 
     // async fn commit(&mut self, block: Block, qc: QC) -> ConsensusResult<()> {
     //     if self.last_committed_view >= block.view {
@@ -580,11 +429,10 @@ impl Core {
                  .broadcast(addresses, Bytes::from(message))
                  .await;
 
-            let ticket = self.process_commit(qc.hash.clone(), Some(qc.clone()), None).await?;
+            let ticket = self.generate_ticket_and_commit(qc.hash.clone(), Some(qc.clone()), None).await?;
             // Make a new special header if we are the next leader.
             if self.name == self.leader_elector.get_leader(self.view) {
                 self.generate_proposal(ticket).await;
-                  //TODO: Pass down ticket
             }
         }
         Ok(())
@@ -604,13 +452,11 @@ impl Core {
         //TODO: Should only commit QC's in order. Must wait / request all intermediary QC's
         //upcall to app layer: Order dag, and execute.
 
-        let ticket = self.process_commit(qc.hash.clone(), Some(qc.clone()), None).await?;
-       
-
+        let ticket = self.generate_ticket_and_commit(qc.hash.clone(), Some(qc.clone()), None).await?;
+    
          // Make a new special header if we are the next leader.
          if self.name == self.leader_elector.get_leader(self.view) {
             self.generate_proposal(ticket).await;
-              //TODO: Pass down ticket
         }
 
         Ok(())
@@ -649,9 +495,10 @@ impl Core {
                 .broadcast(addresses, Bytes::from(message))
                 .await;
 
+            let ticket = self.generate_ticket_and_commit(tc.hash.clone(), None, Some(tc)).await?;
             // Make a new block if we are the next leader.
             if self.name == self.leader_elector.get_leader(self.view) {
-                self.generate_proposal(Some(tc)).await;
+                self.generate_proposal(ticket).await;
             }
         }
         Ok(())
@@ -676,34 +523,19 @@ impl Core {
     #[async_recursion]
     async fn generate_proposal(&mut self, ticket: Ticket) {
 
+        //Start new proposal: Pass down to proposer: 1) current view, 2) current Dag round, 3) latest ticket  
 
-        //TODO: Pass down as part of ticket or header the digest of the previously committed header. 
-        //(Either store it as part of QC/TC -> then its implicit and it does not need to be passed)
-        //(Or store locally self.ticket_header as last)  --> Note: We cannot just use last committed, because a TC may propose a header that only gets committed upon next QC (yet the TC proposal should count as ticket)
-
-         
-         //pass down Qc or TC for ticket
+         //generate ticket to include Qc or TC 
         // let ticket = match tc {
         //     Some(timeout_cert) => Ticket::new(self.high_qc.clone(), Some(timeout_cert), self.view).await,
         //     None => Ticket::new(self.high_qc.clone(), None, self.view).await,
         // };
 
-        // /*if self.high_qc.view + 1 == self.view {
-        //     ticket = Ticket::new(Some(self.high_qc.clone()), None, self.view).await;
-        // }
-        // else if tc.is_some() && tc.as_ref().unwrap().view +1 == self.view {  //tc.is_some_and(|&tc| (tc.view +1 == self.view)) {
-        //     ticket = Ticket::new(None, tc, self.view).await; 
-        // }
-        // else {
-        //     return
-        // }*/
-       
          self.tx_ticket
              .send((self.view, self.round, ticket))
              .await
              .expect("Failed to send view");
-
-             
+      
         // self.tx_proposer
         //     .send(ProposerMessage(self.view, self.high_qc.clone(), tc))
         //     .await
@@ -720,6 +552,8 @@ impl Core {
     //Call process_special_header upon receiving upcall from Dag layer.
     #[async_recursion]
     async fn process_special_header(&mut self, header: Header) -> ConsensusResult<()> {
+
+         //TODO: FIXME: Important: Process_header should still complete (i.e. not throw errors), since validation needs to be asynchronous --> It should always call back down (with val=0 in this case)
        
         if self.last_committed_view >= header.view {
             self.tx_validation.send((header, 0, None, None)).await.expect("Failed to send payload");
@@ -733,11 +567,7 @@ impl Core {
             .insert(header.id.clone());
 
         
-        //0) TODO: Check if Ticket valid. If we have not processed ticket yet. Do so.
-
-        //FIXME: If no TC present, must check that QC is for the preceeding view
-        //FIXME: Currently always checks if TC present, and returns Error if not => shouldn't do this.
-
+        //0)Check if Ticket valid. If we have not processed qc/tc in ticket yet then process it.
         ensure!(
             header.ticket.is_some(),
             ConsensusError::InvalidTicket
@@ -755,8 +585,8 @@ impl Core {
                     ConsensusError::InvalidTicket
                 );
                 // check if we need to process qc.
-                if tc.view > self.last_committed_view {
-                    self.handle_tc(&tc).await?;
+                if tc.view > self.last_committed_view { // Since we update last_committed_view only upon commit it is implied that last_committed_view <= view
+                    self.handle_tc(&tc).await?; //TODO: don't do this redundantly/check for duplicates 
                 }
             },
             None => {
@@ -766,45 +596,14 @@ impl Core {
                 );
 
                 if ticket.qc.view > self.last_committed_view {
-                    self.handle_qc(&ticket.qc).await?;
+                    self.handle_qc(&ticket.qc).await?; //TODO: don't do this redundantly/check for duplicates 
                 }
             }
         };
-
-        /*match ticket.qc {
-            Some(qc) => {
-               // check if qc for prev view.
-               ensure!(
-                    header.view == qc.view + 1,
-                    ConsensusError::InvalidTicket
-                );
-               // check if we need to process qc.
-               if qc.view > self.last_committed_view { // //TODO:  Update last_committed_view only upon commit. //implies that last_committed_view <= view
-                self.handle_qc(&qc).await?; //TODO: don't do this redundantly/check for duplicates --> + TODO: HandleQC directly, but defer Commit upcall until until parent qc has been handled. 
-                                                    //TODO: Important: Process_header should still complete, since validation needs to be asynchronous --> it suffices to check that the ticket QC is correct.
-               }
-                
-            },
-            None => {
-                match ticket.tc {
-                    Some(tc) => {
-                        // check if tc for prev view.
-                        ensure!(
-                            header.view == tc.view + 1,
-                            ConsensusError::InvalidTicket
-                        );
-                        // check if we need to process qc.
-                        if tc.view > self.last_committed_view {
-                            self.handle_tc(&tc).await?;
-                        }
-                    },
-                    None => return Err(ConsensusError::InvalidTicket)
-                }
-            }
-        }*/
-
-        // I.e. whether have QC/TC for view v-1 
-        //If don't have QC/TC. Start a waiter. If waiter triggers, call this function again (or directly call down validation complete)
+      
+        //IGNORE Comment (only true if we use Ticket as proof for validation result.)
+            // // I.e. whether have QC/TC for view v-1 
+            // // If don't have QC/TC. Start a waiter. If waiter triggers, call this function again (or directly call down validation complete)
 
         //1) view > last voted view
         ensure!(
@@ -951,7 +750,7 @@ impl Core {
 
 
         // //2) Set marker that process_cert is complete.
-        // self.ready_to_commit.insert(id.clone());
+        // self.process_commit.insert(id.clone());
 
         // // check marker whether commit is ready. If yes, call commit. If no, send vote.
         // if self.waiting_to_commit.contains(&id) {
@@ -1081,8 +880,7 @@ impl Core {
         debug!("Processing {:?}", tc);
         self.advance_view(tc.view).await;
 
-        let ticket = self.process_commit(tc.hash.clone(), None, Some(tc.clone())).await?;
-        //TODO: pass ticket to generate proposal
+        let ticket = self.generate_ticket_and_commit(tc.hash.clone(), None, Some(tc.clone())).await?;
         
         if self.name == self.leader_elector.get_leader(self.view) {
             self.generate_proposal(ticket).await;
@@ -1129,6 +927,9 @@ impl Core {
 
                 Some(header) = self.rx_loopback_header.recv() => self.process_special_header(header).await,  //Processing Header that we resume via Synchronizer upcall
                 Some(cert) = self.rx_loopback_cert.recv() => self.process_special_certificate(cert).await,  //Processing Header that we resume via Synchronizer upcall
+
+                Some((header_dig, ticket)) = self.rx_loopback_process_commit.recv() => self.process_commit(header_dig, ticket).await,
+                Some((header, ticket)) = self.rx_loopback_commit.recv() => self.commit(header, ticket).await,
                 
                 //NO LONGER NEEDED: Some(block) = self.rx_loopback_header.recv() => self.process_block(&block).await,  //Processing Block that we propose ourselves. (or that we resume via Synchronizer upcall)
                 () = &mut self.timer => self.local_timeout_view().await,

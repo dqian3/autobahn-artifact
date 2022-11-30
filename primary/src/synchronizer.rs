@@ -87,6 +87,14 @@ impl Synchronizer {
         Ok(true)
     }
 
+    pub async fn fetch_header(&mut self, header_digest: Digest) -> DagResult<()> {
+        self.tx_header_waiter
+        .send(WaiterMessage::SyncHeader(header_digest)) 
+        .await
+        .expect("Failed to send sync special parent request");
+        Ok(())
+    }
+
     pub async fn get_special_parent(&mut self, header: &Header, sync: bool) -> DagResult<(Option<Header>, bool)> {
 
         let digest = header.special_parent.as_ref().unwrap();//header.parents.iter().next().unwrap().clone();
@@ -110,7 +118,7 @@ impl Synchronizer {
         //TODO: Start a waiter for it. FIXME: currently SyncParents requests certs. But we just want to request a header.
 
         self.tx_header_waiter
-            .send(WaiterMessage::SyncSpecialParent(digest.clone(), header.clone()))  //TODO: send message to header.author to request previous header digest.
+            .send(WaiterMessage::SyncSpecialParent(digest.clone(), header.clone()))  //sends message to header.author to request previous header digest.
             .await
             .expect("Failed to send sync special parent request");
         Ok((None, false))

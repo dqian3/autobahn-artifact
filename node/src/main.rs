@@ -115,7 +115,8 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
             let (tx_feedback, rx_feedback) = channel(CHANNEL_CAPACITY);
             let (tx_committer, rx_committer) = channel(CHANNEL_CAPACITY);
             let (tx_pushdown_cert, rx_pushdown_cert) = channel(CHANNEL_CAPACITY);
-            
+            let(tx_request_header_sync, rx_request_header_sync) = channel(CHANNEL_CAPACITY);
+
             Primary::spawn(
                 name,
                 committee.clone(),
@@ -129,6 +130,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 rx_ticket,
                 rx_validation,
                 rx_pushdown_cert,
+                rx_request_header_sync,
             );
             Consensus::spawn(
                 name,
@@ -144,6 +146,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 tx_validation,
                 rx_sailfish,
                 tx_pushdown_cert,
+                tx_request_header_sync,
             );
         }
 

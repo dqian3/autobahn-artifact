@@ -44,6 +44,9 @@ pub enum ConsensusMessage {
     SyncRequestCert(Digest, PublicKey),
     Header(Header),
     Certificate(Certificate),
+    CommitHeader(Header), //reception of this header should call commit with a dummy ticket. (It does not need to be processed since it's transitively validated -- 
+                            // if we wanted to, we'd have to start a waiter that waits for the header to be stored; and pass the received header to Dag process header)
+                            // We DO need to do this, because we want to call the missing_payload synchronizer...
 }
 
 pub struct Consensus;
@@ -64,6 +67,7 @@ impl Consensus {
         tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>,
         rx_sailfish: Receiver<Header>,
         tx_pushdown_cert: Sender<Certificate>,
+        tx_request_header_sync: Sender<Digest>,
     ) {
         // NOTE: This log entry is used to compute performance.
         parameters.log();
@@ -79,6 +83,9 @@ impl Consensus {
         let (tx_loop_header, rx_loop_header) = channel(CHANNEL_CAPACITY);
         let (tx_loop_cert, rx_loop_cert) = channel(CHANNEL_CAPACITY);
         let (tx_special, rx_special) = channel(CHANNEL_CAPACITY);
+
+        let (tx_loopback_process_commit, rx_loopback_process_commit) = channel(CHANNEL_CAPACITY);
+        let (tx_loopback_commit, rx_loopback_commit) = channel(CHANNEL_CAPACITY);
 
         //let (tx_sailfish, rx_sailfish) = channel(CHANNEL_CAPACITY);
         //let (tx_dag, rx_dag) = channel(CHANNEL_CAPACITY);
@@ -116,6 +123,9 @@ impl Consensus {
             store.clone(),
             tx_loop_header.clone(),
             tx_loop_cert,
+            tx_request_header_sync,
+            tx_loopback_process_commit,
+            tx_loopback_commit,
             parameters.sync_retry_delay,
         );
 
@@ -139,6 +149,8 @@ impl Consensus {
             tx_validation,
             tx_ticket,
             /*rx_special */ rx_special,
+            rx_loopback_process_commit,
+            rx_loopback_commit,
         );
 
         // Commits the mempool certificates and their sub-dag.

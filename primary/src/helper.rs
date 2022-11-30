@@ -18,7 +18,7 @@ pub struct Helper {
     rx_primaries_certs: Receiver<(Vec<Digest>, PublicKey)>,
 
     /// Input channel to receive certificates requests.
-    rx_primaries_headers: Receiver<(Digest, PublicKey)>,
+    rx_primaries_headers: Receiver<(Vec<Digest>, PublicKey)>,
     /// A network sender to reply to the sync requests.
     network: SimpleSender,
 }
@@ -28,7 +28,7 @@ impl Helper {
         committee: Committee,
         store: Store,
         rx_primaries_certs: Receiver<(Vec<Digest>, PublicKey)>,
-        rx_primaries_headers: Receiver<(Digest, PublicKey)>,
+        rx_primaries_headers: Receiver<(Vec<Digest>, PublicKey)>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -74,7 +74,7 @@ impl Helper {
                         }
                     }
                 },
-                Some((digest, origin)) = self.rx_primaries_headers.recv() => {
+                Some((digests, origin)) = self.rx_primaries_headers.recv() => {
                     // TODO [issue #195]: Do some accounting to prevent bad nodes from monopolizing our resources.
         
                     // get the requestors address.
@@ -87,19 +87,20 @@ impl Helper {
                     };
         
                     // Reply to the request (the best we can).
-                   
-                    match self.store.read(digest.to_vec()).await {
-                            Ok(Some(data)) => {
-                                //TODO: Remove this deserialization-serialization in the critical path.
-                                let header = bincode::deserialize(&data)
-                                    .expect("Failed to deserialize our own certificate");
-                                let bytes = bincode::serialize(&PrimaryMessage::Header(header))
-                                    .expect("Failed to serialize our own certificate");
-                                self.network.send(address, Bytes::from(bytes)).await;
-                            }
-                            Ok(None) => (),
-                            Err(e) => error!("{}", e),
+                    for digest in digests {
+                        match self.store.read(digest.to_vec()).await {
+                                Ok(Some(data)) => {
+                                    //TODO: Remove this deserialization-serialization in the critical path.
+                                    let header = bincode::deserialize(&data)
+                                        .expect("Failed to deserialize our own certificate");
+                                    let bytes = bincode::serialize(&PrimaryMessage::Header(header))
+                                        .expect("Failed to serialize our own certificate");
+                                    self.network.send(address, Bytes::from(bytes)).await;
+                                }
+                                Ok(None) => (),
+                                Err(e) => error!("{}", e),
                         }
+                    }
                     
                 },
             };
