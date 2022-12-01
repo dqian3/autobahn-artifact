@@ -812,8 +812,11 @@ impl PartialEq for QC {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Timeout {
-    //TODO: Add: high_prepare, high_cert
-    pub high_qc: QC,
+    pub high_prepare: Option<Header>,  //Send full header, or just digest?   //If f+1 vouch for this header, then TC can include just digest; if just 1, and there are no conflicts, then send Header
+    pub high_cert: Option<Certificate>, //If sending Cert, don't need to send high_prepare.  // this does not need to be signed
+    //MUST sync on at least high_cert. Otherwise it could be possible that a commit_QC exists.
+
+    pub high_qc: QC,  //TODO: make an option too.
     pub view: View,
     pub author: PublicKey,
     pub signature: Signature,
@@ -827,6 +830,8 @@ impl Timeout {
         mut signature_service: SignatureService,
     ) -> Self {
         let timeout = Self {
+            high_prepare: None,
+            high_cert: None, 
             high_qc,
             view,
             author,
@@ -875,6 +880,8 @@ impl fmt::Debug for Timeout {
 impl Timeout {
     pub fn new_from_key(high_qc: QC, round: Round, author: PublicKey, secret: &SecretKey) -> Self {
         let timeout = Timeout {
+            high_prepare: None,
+            high_cert: None, 
             high_qc,
             view: round,
             author,
@@ -897,7 +904,13 @@ impl PartialEq for Timeout {
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct TC {
+    //TODO: declare aggregator:
+        //1. rules
+        //2. include messages in TC
+        //3. edit verification to account for different message signatures
     //TODO: TC should contain hash of the header we vote to commit too. This can be an Option, I.e. there might be none for this view. ==> TODO: Need to include quorum of messages to endorse header 
+
+
     pub hash: Digest,
     pub view: View,
     pub votes: Vec<(PublicKey, Signature, View)>,

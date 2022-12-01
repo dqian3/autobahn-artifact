@@ -261,7 +261,7 @@ impl Proposer {
                     if round > self.round { //catch up to last special block round --> to ensure special headers are monotonic in rounds
                         self.round = round+1; 
                     }
-                    else if self.last_header_round == self.round { //if last special block round is smaller, increment round normally. Only increment if we have not already (e.g. edges have been received)
+                    else if self.last_header_round == self.round { //if last special block round is smaller then our current round, increment round normally. Only increment if we have not done so already (e.g. edges have been received)
                         self.round = self.round +1;
                     }
                     //else round > last_header_round. Don't increase again.

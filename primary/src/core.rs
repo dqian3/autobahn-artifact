@@ -189,7 +189,7 @@ impl Core {
                   //TODO: FIXME: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
                    
                   ensure!( //check that special parent round matches claimed round
-                        special_parent_header.round == header.special_parent_round && header.special_parent_round + 1 == header.round, 
+                        special_parent_header.round == header.special_parent_round && header.special_parent_round + 1 == header.round,  //FIXME: this is not true -> we might have skipped rounds
                         DagError::MalformedHeader(header.id.clone())
                     );
             
