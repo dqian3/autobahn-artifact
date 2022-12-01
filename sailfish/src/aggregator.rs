@@ -1,7 +1,7 @@
 use crate::consensus::View;
 //use crate::error::{ConsensusError, ConsensusResult};
-use primary::messages::{Timeout, Vote, QC, TC, AcceptVote};
-use primary::error::{ConsensusError, ConsensusResult};
+use primary::messages::{Timeout, QC, TC, AcceptVote};
+use primary::{ensure, error::{ConsensusError, ConsensusResult}};
 use config::{Committee, Stake};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, Signature};
@@ -84,6 +84,7 @@ impl QCMaker {
         }
     }
 
+    /* 
     /// Try to append a signature to a (partial) quorum.
     pub fn append(&mut self, vote: Vote, committee: &Committee) -> ConsensusResult<Option<QC>> {
         let author = vote.author;
@@ -108,6 +109,7 @@ impl QCMaker {
         }
         Ok(None)
     }
+    */
 
     /// Try to append a signature to a (partial) quorum.
     pub fn append_accept_vote(&mut self, vote: AcceptVote, committee: &Committee) -> ConsensusResult<Option<QC>> {

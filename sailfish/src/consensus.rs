@@ -1,6 +1,7 @@
 use crate::committer::Committer;
 use crate::core::Core;
-use crate::error::ConsensusError;
+//use crate::error::ConsensusError;
+use primary::error::{ConsensusError};
 use crate::helper::Helper;
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
@@ -72,7 +73,7 @@ impl Consensus {
         parameters.log();
 
         let (tx_message, rx_message) = channel(CHANNEL_CAPACITY);    //This is the messaging channel for consensus messages
-        let (tx_proposer, _rx_proposer) = channel(CHANNEL_CAPACITY);   //TODO: Remove, no longer used
+        //let (tx_proposer, _rx_proposer) = channel(CHANNEL_CAPACITY);   //TODO: Remove, no longer used
         let (tx_helper_header, rx_helper_header) = channel(CHANNEL_CAPACITY);
         let (tx_helper_cert, rx_helper_cert) = channel(CHANNEL_CAPACITY);
         let (tx_commit, rx_commit) = channel(CHANNEL_CAPACITY);
@@ -142,7 +143,7 @@ impl Consensus {
             rx_loop_header,
             rx_loop_cert,
             tx_pushdown_cert,
-            tx_proposer,
+            //tx_proposer,
             tx_commit,
             tx_validation,
             tx_ticket,

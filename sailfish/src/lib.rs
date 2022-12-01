@@ -1,5 +1,5 @@
 #[macro_use]
-mod error;
+//mod error;
 mod aggregator;
 mod committer;
 mod consensus;
@@ -8,8 +8,8 @@ mod core;
 mod helper;
 mod leader;
 mod mempool;
-mod messages;
-mod proposer;
+//mod messages;
+//mod proposer;
 mod synchronizer;
 mod timer;
 
@@ -18,4 +18,4 @@ mod timer;
 mod common;
 
 pub use crate::consensus::Consensus;
-pub use crate::messages::{Block, QC, TC};
+//pub use crate::messages::{Block, QC, TC};

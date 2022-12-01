@@ -5,7 +5,7 @@ use crate::consensus::{ConsensusMessage, View, Round};
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
 //use crate::messages::{Header, Certificate, Block, Timeout, Vote, AcceptVote, QC, TC};
-use crate::proposer::ProposerMessage;
+//use crate::proposer::ProposerMessage;
 use crate::synchronizer::Synchronizer;
 use crate::timer::Timer;
 use async_recursion::async_recursion;
@@ -16,7 +16,7 @@ use crypto::{PublicKey, SignatureService, Digest};
 use log::{debug, error, warn};
 use network::SimpleSender;
 use primary::messages::{Header, Certificate, Timeout, AcceptVote, QC, TC, Ticket};
-use primary::error::{ConsensusError, ConsensusResult};
+use primary::{ensure, error::{ConsensusError, ConsensusResult}};
 //use primary::messages::AcceptVote;
 use std::cmp::max;
 use std::collections::{VecDeque, HashSet};
@@ -45,7 +45,7 @@ pub struct Core {
     rx_loopback_header: Receiver<Header>,
     rx_loopback_cert: Receiver<Certificate>,
     tx_pushdown_cert: Sender<Certificate>,
-    tx_proposer: Sender<ProposerMessage>,
+    //tx_proposer: Sender<ProposerMessage>,
     tx_commit: Sender<Certificate>,
     tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>,
     tx_ticket: Sender<(View, Round, Ticket)>,
@@ -60,7 +60,7 @@ pub struct Core {
     high_prepare: Header,
     high_cert: Certificate,  //this is a DAG QC
     high_qc: QC,             //this is a CommitQC
-    high_tc: TC,             //last TC --> just in case we need to reply with a proof.
+    high_tc: TC,             //last TC --> just in case we need to reply with a proof. ::Note: This is not necessary if we are not proving invalidations. (For Timeout messages high_prepare suffices)
     timer: Timer,
     aggregator: Aggregator,
     network: SimpleSender,
@@ -88,7 +88,7 @@ impl Core {
         rx_loopback_header: Receiver<Header>,
         rx_loopback_cert: Receiver<Certificate>,
         tx_pushdown_cert: Sender<Certificate>,
-        tx_proposer: Sender<ProposerMessage>,
+        //tx_proposer: Sender<ProposerMessage>,
         tx_commit: Sender<Certificate>,
         tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>, // Loopback Special Headers to DAG
         tx_ticket: Sender<(View, Round, Ticket)>,
@@ -110,7 +110,7 @@ impl Core {
                 rx_loopback_header,
                 rx_loopback_cert,
                 tx_pushdown_cert,
-                tx_proposer,
+                //tx_proposer,
                 tx_commit,
                 tx_validation,
                 tx_ticket,
@@ -200,7 +200,7 @@ impl Core {
         //     None => Ticket::new(self.high_qc.clone(), None, self.view).await,
         // };
 
-        self.process_commit(header_digest, new_ticket.clone()); //Asynchronous
+        let _fut = self.process_commit(header_digest, new_ticket.clone()); //Exec Asynchronously
         Ok(new_ticket)
     }
 
@@ -480,12 +480,10 @@ impl Core {
         self.process_qc(&timeout.high_qc).await;
 
         // Add the new vote to our aggregator and see if we have a quorum.
-        if let Some(tc) = self.aggregator.add_timeout(timeout.clone())? {
+        if let Some(tc) = self.aggregator.add_timeout(timeout.clone())? {  //TODO: FIXME: Re-factor this TC to include a proposal and a proof of the proposal
             debug!("Assembled {:?}", tc);
 
-            // Try to advance the view.
-            self.advance_view(tc.view).await;
-
+            self.process_tc(&tc).await?;
 
             //The TC will be forwarded as part of the next proposals ticket. If we are pessimistic/we want it faster, we can also broadcast
             let pessimistic_qc_exchange = true; //TODO: Turn this into a flag.
@@ -506,11 +504,6 @@ impl Core {
                     .await;
             }
 
-            let ticket = self.generate_ticket_and_commit(tc.hash.clone(), None, Some(tc)).await?;
-            // Make a new block if we are the next leader.
-            if self.name == self.leader_elector.get_leader(self.view) {
-                self.generate_proposal(ticket).await;
-            }
         }
         Ok(())
     }
@@ -883,11 +876,20 @@ impl Core {
     async fn handle_tc(&mut self, tc: &TC) -> ConsensusResult<()> {
         tc.verify(&self.committee)?; //FIXME: Added this because I didnt' see any TC validation elsewhere. If there is already, remove this.
 
+        self.process_tc(tc).await
+    }
+
+    async fn process_tc(&mut self, tc: &TC) -> ConsensusResult<()> {
+        
+        //TODO: FIXME:
+        //Set high_prepare/high_cert/high_qc to the content of the TC
+
         debug!("Processing {:?}", tc);
         self.advance_view(tc.view).await;
 
         let ticket = self.generate_ticket_and_commit(tc.hash.clone(), None, Some(tc.clone())).await?;
         
+        // Make a new special header if we are the next leader.
         if self.name == self.leader_elector.get_leader(self.view) {
             self.generate_proposal(ticket).await;
         }

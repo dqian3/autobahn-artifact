@@ -812,6 +812,7 @@ impl PartialEq for QC {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Timeout {
+    //TODO: Add: high_prepare, high_cert
     pub high_qc: QC,
     pub view: View,
     pub author: PublicKey,

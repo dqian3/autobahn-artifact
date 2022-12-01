@@ -1,5 +1,7 @@
-use crate::error::ConsensusResult;
-use crate::messages::Block;
+//use crate::error::ConsensusResult;
+use primary::error::{ConsensusResult};
+//use crate::messages::Block;
+use primary::messages::{Block};
 use config::Committee;
 use primary::Certificate;
 use tokio::sync::mpsc::Sender;

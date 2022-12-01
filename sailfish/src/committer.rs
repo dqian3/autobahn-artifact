@@ -1,5 +1,6 @@
 use crate::consensus::{Round, CHANNEL_CAPACITY};
-use crate::error::{ConsensusError, ConsensusResult};
+//use crate::error::{ConsensusError, ConsensusResult};
+use primary::error::{ConsensusError, ConsensusResult};
 use config::Committee;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey};

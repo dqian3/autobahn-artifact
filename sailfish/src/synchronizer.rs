@@ -5,18 +5,20 @@ use bytes::Bytes;
 use config::Committee;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
-use ed25519_dalek::Digest as _;
-use ed25519_dalek::Sha512;
+
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::stream::StreamExt as _;
 use log::{debug, error};
 use network::SimpleSender;
 use std::collections::{HashMap, HashSet};
-use std::convert::TryInto;
 use std::time::{SystemTime, UNIX_EPOCH};
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::time::{sleep, Duration, Instant};
+
+// use ed25519_dalek::Digest as _;
+// use ed25519_dalek::Sha512;
+// use std::convert::TryInto;
 
 #[cfg(test)]
 #[path = "tests/synchronizer_tests.rs"]
@@ -28,6 +30,7 @@ pub struct Synchronizer {
     store: Store,
     inner_channel: Sender<(Header, Digest)>,
     inner_channel_cert: Sender<Certificate>,
+
     inner_channel_header: Sender<(Digest, Ticket)>,
     inner_channel_ticket: Sender<(Header, Ticket)>,
     //tx_dag_request_header_sync: Sender<Digest>,
@@ -136,7 +139,7 @@ impl Synchronizer {
 
 
                     ////////////////////// UNUSED/DEPRECATED below
-
+                    /* */
                     
                     Some((header, parent_dig)) = rx_inner.recv() => {
                         if pending.insert(header.digest()) {
@@ -339,7 +342,7 @@ impl Synchronizer {
 
             Some(parent_ticket_header) => {  //If yes: issue commit(parent_ticket_header, parent_ticket)
                if let Err(e) = self.tx_loopback_commit.send((parent_ticket_header, parent_ticket)).await{
-                panic!("Failed to loopback commit to core");
+                panic!("Failed to loopback commit to core {}", e);
                }
             }
         }
@@ -382,6 +385,7 @@ impl Synchronizer {
 
 
     /////////////////////////////////// UNUSED/DEPRECATED BELOW
+    /*
 
     pub async fn get_parent_cert(&mut self, cert: &Certificate) -> ConsensusResult<Option<Certificate>> {
         
@@ -479,5 +483,5 @@ impl Synchronizer {
         Ok(true)
     }
 
-
+    */
 }
