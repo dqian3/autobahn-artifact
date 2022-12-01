@@ -415,19 +415,24 @@ impl Core {
             // Process the QC.  Adopts view, high qc, and resets timer. //Adopt prev_view_round if higher.
             self.process_qc(&qc).await;
              
-             // Broadcast the QC. //TODO: alternatively: pass it down as ticket.
-             debug!("Broadcasting {:?}", qc);
-             let addresses = self
-                 .committee
-                 .others_consensus(&self.name)
-                 .into_iter()
-                 .map(|(_, x)| x.consensus_to_consensus)
-                 .collect();
-             let message = bincode::serialize(&ConsensusMessage::QC(qc.clone()))
-                 .expect("Failed to serialize quorum (commit) certificate");
-             self.network
-                 .broadcast(addresses, Bytes::from(message))
-                 .await;
+            //The QC will be forwarded as part of the next proposals ticket. If we are pessimistic/we want it faster, we can also broadcast
+            let pessimistic_qc_exchange = true; //TODO: Turn this into a flag.
+             // Broadcast the QC. //alternatively: pass it down as ticket.
+             if pessimistic_qc_exchange {
+                debug!("Broadcasting {:?}", qc);
+                let addresses = self
+                    .committee
+                    .others_consensus(&self.name)
+                    .into_iter()
+                    .map(|(_, x)| x.consensus_to_consensus)
+                    .collect();
+                let message = bincode::serialize(&ConsensusMessage::QC(qc.clone()))
+                    .expect("Failed to serialize quorum (commit) certificate");
+                self.network
+                    .broadcast(addresses, Bytes::from(message))
+                    .await;
+             }
+            
 
             let ticket = self.generate_ticket_and_commit(qc.hash.clone(), Some(qc.clone()), None).await?;
             // Make a new special header if we are the next leader.
@@ -481,19 +486,25 @@ impl Core {
             // Try to advance the view.
             self.advance_view(tc.view).await;
 
-            // Broadcast the TC.
-            debug!("Broadcasting {:?}", tc);
-            let addresses = self
-                .committee
-                .others_consensus(&self.name)
-                .into_iter()
-                .map(|(_, x)| x.consensus_to_consensus)
-                .collect();
-            let message = bincode::serialize(&ConsensusMessage::TC(tc.clone()))
-                .expect("Failed to serialize timeout certificate");
-            self.network
-                .broadcast(addresses, Bytes::from(message))
-                .await;
+
+            //The TC will be forwarded as part of the next proposals ticket. If we are pessimistic/we want it faster, we can also broadcast
+            let pessimistic_qc_exchange = true; //TODO: Turn this into a flag.
+              // Broadcast the QC. //alternatively: pass it down as ticket.
+            if pessimistic_qc_exchange {
+                // Broadcast the TC.
+                debug!("Broadcasting {:?}", tc);
+                let addresses = self
+                    .committee
+                    .others_consensus(&self.name)
+                    .into_iter()
+                    .map(|(_, x)| x.consensus_to_consensus)
+                    .collect();
+                let message = bincode::serialize(&ConsensusMessage::TC(tc.clone()))
+                    .expect("Failed to serialize timeout certificate");
+                self.network
+                    .broadcast(addresses, Bytes::from(message))
+                    .await;
+            }
 
             let ticket = self.generate_ticket_and_commit(tc.hash.clone(), None, Some(tc)).await?;
             // Make a new block if we are the next leader.
@@ -577,6 +588,7 @@ impl Core {
             self.handle_qc(&ticket.qc).await?;
         }*/
 
+        //Process ticket qc/tc (i.e. commit last proposal)
         match ticket.tc.clone() {
             Some(tc) => {
                 // check if tc for prev view.
@@ -671,11 +683,12 @@ impl Core {
         Ok(())
     }
 
+    //NOTE: Deprecated, not used.
     #[async_recursion]
     async fn process_sync_cert(&mut self, certificate: Certificate) -> ConsensusResult<()> {
         //call down to Dag layer.
         self.tx_pushdown_cert.send(certificate).await.expect("Failed to pushdown certificate to Dag layer");
-        //TODO: or should sync itself call down to Dag layer, and let consensus only registers a waiter. --> this would avoid redundantly syncing on the same cert twice.
+        //TODO: or should sync itself call down to Dag layer, and let consensus only registers a waiter. --> this would avoid redundantly syncing on the same cert twice. ==> Note: This is what we do now, but we sync on headers.
         //For now don't optimize -- this only affects consensus parents
         // Flow: 
         //       1. Register waiter but send no SyncRequest
@@ -695,42 +708,35 @@ impl Core {
             return Ok(());
         }
 
-         //Indicate that we are processing this header. --> doing this after invariant is true.
-         self.processing_certs
-         .entry(certificate.header.round)
-         .or_insert_with(HashSet::new)
-         .insert(certificate.header.id.clone());
+         //Indicate that we are processing this header. (TODO: can probably remove again)
+         self.processing_certs .entry(certificate.header.round).or_insert_with(HashSet::new).insert(certificate.header.id.clone());
 
-        if !self
-        .processing_headers
-        .get(&certificate.header.round)
-        .map_or_else(|| false, |x| x.contains(&certificate.header.id))
-        {
-            // This function may still throw an error if the storage fails.
+        //process_header if we have not already -> this will process the ticket (TODO: can probably remove again)
+        if !self  .processing_headers.get(&certificate.header.round).map_or_else(|| false, |x| x.contains(&certificate.header.id))
+        { // This function may still throw an error if the storage fails.
             self.process_special_header(certificate.header.clone()).await?;
         }
 
-         //TODO: Make it so process_cert also waits for ones own cert in store.
 
-         //Ensure our certificate was logged, i.e. it passed Dag process_certificate, and thus the invariant for Dag parents availability is fulfilled. 
-         //If not, synchronizer will fetch it and trigger re-processing of the current cert
-        if !self.synchronizer.deliver_self(&certificate).await? {
-            debug!(
-                "Processing of {:?} suspended: missing consensus ancestors",
-                 certificate
-            );
-            self.process_sync_cert(certificate.clone());
-            //return Ok(());
-        }
+        //  //Ensure our certificate was logged, i.e. it passed Dag process_certificate, and thus the invariant for Dag parents availability is fulfilled. 
+        //  //If not, synchronizer will fetch it and trigger re-processing of the current cert
+        // if !self.synchronizer.deliver_self(&certificate).await? {
+        //     debug!(
+        //         "Processing of {:?} suspended: missing consensus ancestors",
+        //          certificate
+        //     );
+        //     self.process_sync_cert(certificate.clone());
+        //     //return Ok(());
+        // }
 
-        //Ensure we have the consensus parent of this certificate. If not, the synchronizer will fetch it and trigger re-processing of the current cert.
-        if !self.synchronizer.deliver_consensus_ancestor(&certificate).await? {
-            debug!(
-                "Processing of {:?} suspended: missing consensus ancestors",
-                 certificate
-            );
-            return Ok(());
-        }
+        // //Ensure we have the consensus parent of this certificate. If not, the synchronizer will fetch it and trigger re-processing of the current cert.
+        // if !self.synchronizer.deliver_consensus_ancestor(&certificate).await? {
+        //     debug!(
+        //         "Processing of {:?} suspended: missing consensus ancestors",
+        //          certificate
+        //     );
+        //     return Ok(());
+        // }
 
 
         let header = certificate.clone().header;
