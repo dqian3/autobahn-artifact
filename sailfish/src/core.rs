@@ -630,6 +630,8 @@ impl Core {
                 }
             }
         };
+
+        
       
         //IGNORE Comment (only true if we use Ticket as proof for validation result.)
             // // I.e. whether have QC/TC for view v-1 
@@ -653,6 +655,14 @@ impl Core {
             header.round > self.round,
             ConsensusError::NonMonotonicRounds(header.round, self.round)
         );
+
+        //TODO: Ensure that proposed round isnt reaching too far ahead
+        // Check that header.prev_view_round is satisfied by ticket. 
+        //FIXME: Technically want to do this in the DAG layer already; to avoid the DAG joining a high round that is invalid/too far ahead.
+        //NOTE: DAG doesn't "join round", it just keeps track. If it receives a high round, but there is no quorum, it doesnt matter.
+            //honest proposer should fall into the trap of proposing something too high ===> can guard this by ensuring ticket vouches for round
+            // ===> transitively, ticket only exist if enough replicas checked during process_special_header that round does not exceed parents by 2
+            // i.e. check that round = max(parents+2, last_consensus_round+1);
 
 
         //3) Header signature correct
@@ -923,7 +933,7 @@ impl Core {
         // Also, schedule a timer in case we don't hear from the leader.
         self.timer.reset();
         if self.name == self.leader_elector.get_leader(self.view) {
-            self.generate_proposal(Ticket::genesis()).await;
+            self.generate_proposal(Ticket::genesis()).await; //Starts a new proposal for view = 1, with genesis ticket from view = 0; prev_round = 0
         }
 
         // This is the main loop: it processes incoming blocks and votes,

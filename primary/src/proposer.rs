@@ -259,9 +259,16 @@ impl Proposer {
                         continue; //Proposal for view already exists.
                     }
                     if round > self.round { //catch up to last special block round --> to ensure special headers are monotonic in rounds
-                        self.round = round+1; //should be round+1?
+                        self.round = round+1; 
                     }
+                    else if self.last_header_round == self.round { //if last special block round is smaller, increment round normally. Only increment if we have not already (e.g. edges have been received)
+                        self.round = self.round +1;
+                    }
+                    //else round > last_header_round. Don't increase again.
+                    
                     //TODO: Note: Need a defense mechanism to ensure Byz proposer cannot arbitrarily exhaust round space. Maybe reject voting on headers that are too far ahead (avoid forming ticket)
+                    // ==> This is implicitly solved by requiring normal blocks to have n-f parents. Byz proposer cannot issue ticket for high round without n-f total replicas being in that round.
+                    //TODO: Ticket must include view_round ==> QC already does. (TC must be edited) ==> just 
 
                     self.view = view;
                     self.prev_view_round = round;
@@ -277,6 +284,7 @@ impl Proposer {
                         if round < self.last_header_round { // i.e. these are parents for a round that we already issued.
                             continue;
                         }
+                        //else, still accept parents (even though they are not from round >= self.round )
                         self.last_parents = parents;
                         if round >= self.round {
                             self.round = round + 1; // ==> special round must be bigger than parent round
