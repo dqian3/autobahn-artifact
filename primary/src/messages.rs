@@ -28,16 +28,16 @@ pub struct Ticket {
 
 impl Ticket {
     pub async fn new(
-        qc: QC,
-        tc: Option<TC>,
         hash: Digest, 
         view: View,
+        qc: QC,
+        tc: Option<TC>,
     ) -> Self {
         let ticket = Self {
-            qc,
-            tc,
             hash,
             view,
+            qc,
+            tc,
         
         };
         ticket
@@ -47,7 +47,7 @@ impl Ticket {
             qc: QC::genesis(), 
             tc: None, 
             hash: Digest::default(),
-            view: 1,
+            view: 0,
         }
         
     }

@@ -129,7 +129,7 @@ impl Core {
                 timer: Timer::new(timeout_delay),
                 aggregator: Aggregator::new(committee),
                 network: SimpleSender::new(),
-                round: 1,
+                round: 0,
                 processing_headers: HashMap::new(),
                 processing_certs: HashMap::new(),
                 // process_commit: HashSet::new(),
@@ -194,11 +194,19 @@ impl Core {
     async fn generate_ticket_and_commit(&mut self, header_digest: Digest, qc: Option<QC>, tc: Option<TC>) -> ConsensusResult<Ticket> {
       
         //generate header
-        let new_ticket = Ticket::new(qc.unwrap(), tc, header_digest.clone(), self.view).await;
-           // let ticket = match tc {
-        //     Some(timeout_cert) => Ticket::new(self.high_qc.clone(), Some(timeout_cert), self.view).await,
-        //     None => Ticket::new(self.high_qc.clone(), None, self.view).await,
-        // };
+        //let new_ticket = Ticket::new(qc.unwrap(), tc, header_digest.clone(), self.view).await;
+        
+        //Create new ticket, using the associated Qc/Tc and it's view  (Important: Don't use latest view)
+        let new_ticket = match tc {
+            Some(timeout_cert) => Ticket::new(header_digest.clone(), timeout_cert.view.clone(), self.high_qc.clone(), Some(timeout_cert)).await,
+            None => {
+                match qc {
+                    Some(quorum_cert) => Ticket::new(header_digest.clone(), quorum_cert.view.clone(), quorum_cert.clone(), None).await,
+                    None => return Err(ConsensusError::InvalidTicket),
+                }
+            }
+           
+        };
 
         let _fut = self.process_commit(header_digest, new_ticket.clone()); //Exec Asynchronously
         Ok(new_ticket)
@@ -447,6 +455,12 @@ impl Core {
 
     #[async_recursion]
     async fn handle_qc(&mut self, qc: &QC) -> ConsensusResult<()> {
+
+        //Accept QC if genesis (e.g. first Ticket contains genesis QC)
+        if *qc == QC::genesis() {
+            return Ok(());
+        }
+
         //verify qc
         // Ensure the vote is well formed.
         qc.verify(&self.committee)?;
@@ -454,9 +468,6 @@ impl Core {
         // Process the QC.  Adopts view, high qc, and resets timer. //Adopt prev_view_round if higher.
         self.process_qc(qc).await;
         
-        //TODO: Should only commit QC's in order. Must wait / request all intermediary QC's
-        //upcall to app layer: Order dag, and execute.
-
         let ticket = self.generate_ticket_and_commit(qc.hash.clone(), Some(qc.clone()), None).await?;
     
          // Make a new special header if we are the next leader.
@@ -535,10 +546,15 @@ impl Core {
         //     None => Ticket::new(self.high_qc.clone(), None, self.view).await,
         // };
 
-         self.tx_ticket
-             .send((self.view, self.round, ticket))
-             .await
-             .expect("Failed to send view");
+        //Don't generate proposals for old views.
+        if ticket.view == self.view - 1 {  //Note: view -1 since pur next proposal should be for self.view, and thus the associate ticket is from view-1
+            self.tx_ticket
+            .send((self.view, self.round, ticket))  //Note: self.round >= ticket.header.round
+            .await
+            .expect("Failed to send view");
+        }
+
+       
       
         // self.tx_proposer
         //     .send(ProposerMessage(self.view, self.high_qc.clone(), tc))
@@ -559,6 +575,15 @@ impl Core {
 
          //TODO: FIXME: Important: Process_header should still complete (i.e. not throw errors), since validation needs to be asynchronous --> It should always call back down (with val=0 in this case)
        
+      
+
+         //1) Check if we have already voted in this view > last voted view
+        ensure!(
+            header.view > self.last_voted_view,
+            ConsensusError::TooOld(header.id, header.view)  //TODO: Still want to reply invalid in DAG. ==> Corner-case: Have already moved views, but Dag still requires cert.
+        );
+        
+         //If we have not voted, but have already committed higher view, vote invalid --> TODO: Should suffice to not reply
         if self.last_committed_view >= header.view {
             self.tx_validation.send((header, 0, None, None)).await.expect("Failed to send payload");
             return Ok(()); //TODO: change to invalid = 0 and reply.
@@ -610,11 +635,7 @@ impl Core {
             // // I.e. whether have QC/TC for view v-1 
             // // If don't have QC/TC. Start a waiter. If waiter triggers, call this function again (or directly call down validation complete)
 
-        //1) view > last voted view
-        ensure!(
-            header.view > self.last_voted_view,
-            ConsensusError::TooOld(header.id, header.view)
-        );
+    
 
         // TODO: If we have already voted for this view; or we have already voted in a previoius view for this vote round or
         // bigger ==> then don't vote at all. The proposer must be byz.
