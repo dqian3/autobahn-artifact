@@ -4,9 +4,8 @@ use crate::error::ConsensusError;
 use crate::helper::Helper;
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
-//use crate::messages::{Block, Timeout, Vote, TC};
 use primary::messages::{Header, Block, Certificate, Timeout, AcceptVote, QC, TC, Ticket, Vote};
-use crate::proposer::Proposer;
+//use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -59,8 +58,8 @@ impl Consensus {
         parameters: Parameters,
         signature_service: SignatureService,
         store: Store,
-        rx_mempool: Receiver<Certificate>,
-        rx_committer: Receiver<Certificate>,
+        rx_consensus: Receiver<Certificate>,    // This is the channel used to upcall special certs from the DAG
+        rx_committer: Receiver<Certificate>,  // This is the channel used to send all certs to committer (previously this was called mempool -- maybe rename for clarity)
         tx_mempool: Sender<Certificate>,
         tx_output: Sender<Header>,
         tx_ticket: Sender<(View, Round, Ticket)>,
@@ -72,17 +71,16 @@ impl Consensus {
         // NOTE: This log entry is used to compute performance.
         parameters.log();
 
-        let (tx_consensus, rx_consensus) = channel(CHANNEL_CAPACITY);
-        let (tx_proposer, rx_proposer) = channel(CHANNEL_CAPACITY);
+        let (tx_message, rx_message) = channel(CHANNEL_CAPACITY);    //This is the messaging channel for consensus messages
+        let (tx_proposer, _rx_proposer) = channel(CHANNEL_CAPACITY);   //TODO: Remove, no longer used
         let (tx_helper_header, rx_helper_header) = channel(CHANNEL_CAPACITY);
         let (tx_helper_cert, rx_helper_cert) = channel(CHANNEL_CAPACITY);
         let (tx_commit, rx_commit) = channel(CHANNEL_CAPACITY);
         //let (tx_mempool_copy, rx_mempool_copy) = channel(CHANNEL_CAPACITY);
-        let (tx_message, rx_message) = channel(CHANNEL_CAPACITY);
-        let (tx_consensus_header, rx_consensus_header) = channel(CHANNEL_CAPACITY);
+        
+
         let (tx_loop_header, rx_loop_header) = channel(CHANNEL_CAPACITY);
         let (tx_loop_cert, rx_loop_cert) = channel(CHANNEL_CAPACITY);
-        let (tx_special, rx_special) = channel(CHANNEL_CAPACITY);
 
         let (tx_loopback_process_commit, rx_loopback_process_commit) = channel(CHANNEL_CAPACITY);
         let (tx_loopback_commit, rx_loopback_commit) = channel(CHANNEL_CAPACITY);
@@ -100,7 +98,7 @@ impl Consensus {
             address,
             /* handler */
             ConsensusReceiverHandler {
-                tx_consensus,
+                tx_message,
                 tx_helper_header,
                 tx_helper_cert
             },
@@ -139,8 +137,8 @@ impl Consensus {
             mempool_driver,
             synchronizer,
             parameters.timeout_delay,
-            rx_message,
-            rx_consensus_header,
+            /* rx_message */ rx_message,
+            /* rx_consensus */ rx_consensus,
             rx_loop_header,
             rx_loop_cert,
             tx_pushdown_cert,
@@ -148,7 +146,7 @@ impl Consensus {
             tx_commit,
             tx_validation,
             tx_ticket,
-            /*rx_special */ rx_special,
+            /*rx_special */ rx_sailfish,
             rx_loopback_process_commit,
             rx_loopback_commit,
         );
@@ -183,7 +181,7 @@ impl Consensus {
 /// Defines how the network receiver handles incoming primary messages.
 #[derive(Clone)]
 struct ConsensusReceiverHandler {
-    tx_consensus: Sender<ConsensusMessage>,
+    tx_message: Sender<ConsensusMessage>,
     tx_helper_header: Sender<(Digest, PublicKey)>,
     tx_helper_cert: Sender<(Digest, PublicKey)>,
 }
@@ -208,13 +206,13 @@ impl MessageHandler for ConsensusReceiverHandler {
                 let _ = writer.send(Bytes::from("Ack")).await;
 
                 // Pass the message to the consensus core.
-                self.tx_consensus
+                self.tx_message
                     .send(message)
                     .await
                     .expect("Failed to consensus message")
             }
             message => self
-                .tx_consensus
+                .tx_message
                 .send(message)
                 .await
                 .expect("Failed to consensus message"),

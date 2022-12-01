@@ -7,7 +7,7 @@ use network::SimpleSender;
 use primary::{Header, Certificate};
 use store::Store;
 use tokio::sync::mpsc::Receiver;
-use std::any::{self, Any};
+//use std::any::{self, Any};
 
 #[cfg(test)]
 #[path = "tests/helper_tests.rs"]
@@ -63,7 +63,7 @@ impl Helper {
                             .await
                             .expect("Failed to read from storage")
                         {
-                            let header=
+                            let header: Header=
                                 bincode::deserialize(&bytes).expect("Failed to deserialize our own header");
                             let message = bincode::serialize(&ConsensusMessage::Header(header)) //TODO: Change this message.
                                 .expect("Failed to serialize block");
@@ -89,7 +89,7 @@ impl Helper {
                         .await
                         .expect("Failed to read from storage")
                     {
-                        let cert=
+                        let cert: Certificate=
                             bincode::deserialize(&bytes).expect("Failed to deserialize our own header");
                         let message = bincode::serialize(&ConsensusMessage::Certificate(cert)) //TODO: Change this message.
                             .expect("Failed to serialize block");

@@ -161,7 +161,7 @@ impl Primary {
             tx_committer,
             /* tx_proposer */ tx_parents,
             rx_validation, 
-            tx_sailfish, 
+            /* tx_special */ tx_sailfish, 
             rx_pushdown_cert,
             rx_request_header_sync,
         );

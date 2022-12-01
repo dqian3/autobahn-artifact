@@ -711,7 +711,7 @@ impl Core {
          //Indicate that we are processing this header. (TODO: can probably remove again)
          self.processing_certs .entry(certificate.header.round).or_insert_with(HashSet::new).insert(certificate.header.id.clone());
 
-        //process_header if we have not already -> this will process the ticket (TODO: can probably remove again)
+        //process_header if we have not already -> this will process the ticket (Note: This is not strictly necessary, but it's useful to call early to avoid having to sync on consensus_parent_ticket later)
         if !self  .processing_headers.get(&certificate.header.round).map_or_else(|| false, |x| x.contains(&certificate.header.id))
         { // This function may still throw an error if the storage fails.
             self.process_special_header(certificate.header.clone()).await?;
