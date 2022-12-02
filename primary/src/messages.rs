@@ -1,3 +1,4 @@
+//use crate::common::committee;
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::{DagError, DagResult, ConsensusError, ConsensusResult};
 //use sailfish::error::{DagError, DagResult, ConsensusError, ConsensusResult};
@@ -24,30 +25,35 @@ pub struct Ticket {
     //The Header that is endorsed by the QC/TC
     pub hash: Digest, 
     pub view: View,
+    pub round: Round, 
 }
 
 impl Ticket {
     pub async fn new(
         hash: Digest, 
         view: View,
+        round: Round, 
         qc: QC,
         tc: Option<TC>,
     ) -> Self {
         let ticket = Self {
             hash,
             view,
+            round, 
             qc,
             tc,
         
         };
         ticket
     }
-    pub fn genesis() -> Self {
+    pub fn genesis(committee: &Committee) -> Self {
+        let genesis_qc = QC::genesis(committee);
         Ticket {
-            qc: QC::genesis(), 
+            qc: genesis_qc.clone(), 
             tc: None, 
-            hash: Digest::default(),
-            view: 0,
+            hash: genesis_qc.hash,
+            view: genesis_qc.view,
+            round: genesis_qc.view_round,
         }
         
     }
@@ -58,6 +64,7 @@ impl Hash for Ticket {
         let mut hasher = Sha512::new();
          hasher.update(&self.hash);
          hasher.update(&self.view.to_le_bytes());
+         hasher.update(&self.round.to_le_bytes());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
@@ -150,6 +157,7 @@ impl Header {
         let (name, _) = committee.authorities.iter().next().unwrap();
         Header {
             author: *name,
+            //parents: Certificate::genesis(committee).iter().map(|x| x.digest()).collect(), //Note: Can't use these parents, because both parents and current header would be in round 0 => malformed
             ..Self::default()
         }
     }
@@ -249,6 +257,12 @@ impl Hash for Header {
         }
         
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+}
+
+impl PartialEq for Header {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
     }
 }
 
@@ -600,7 +614,7 @@ impl Block {
         self.signature.verify(&self.digest(), &self.author)?;
 
         // Check the embedded QC.
-        if self.qc != QC::genesis() {
+        if self.qc != QC::genesis(committee) {
             self.qc.verify(committee)?;
         }
 
@@ -760,9 +774,17 @@ pub struct QC {
 }
 
 impl QC {
-    pub fn genesis() -> Self {
-        QC::default()
+    pub fn genesis(committee: &Committee) -> Self {
+        //QC::default()
+        let genesis_header = Header::genesis(committee);
+        QC {
+            hash: genesis_header.digest(),
+            view: genesis_header.view,
+            view_round: genesis_header.round,
+            ..QC::default()
+        }
     }
+    
 
     pub fn timeout(&self) -> bool {
         self.hash == Digest::default() && self.view != 0
@@ -855,7 +877,7 @@ impl Timeout {
         self.signature.verify(&self.digest(), &self.author)?;
 
         // Check the embedded QC.
-        if self.high_qc != QC::genesis() {
+        if self.high_qc != QC::genesis(committee) {
             self.high_qc.verify(committee)?;
         }
         Ok(())
@@ -878,12 +900,12 @@ impl fmt::Debug for Timeout {
 }
 
 impl Timeout {
-    pub fn new_from_key(high_qc: QC, round: Round, author: PublicKey, secret: &SecretKey) -> Self {
+    pub fn new_from_key(high_qc: QC, view: View, author: PublicKey, secret: &SecretKey) -> Self {
         let timeout = Timeout {
             high_prepare: None,
             high_cert: None, 
             high_qc,
-            view: round,
+            view,
             author,
             signature: Signature::default(),
         };
@@ -913,6 +935,7 @@ pub struct TC {
 
     pub hash: Digest,
     pub view: View,
+    pub view_round: Round, 
     pub votes: Vec<(PublicKey, Signature, View)>,
 }
 
@@ -937,6 +960,7 @@ impl TC {
         for (author, signature, high_qc_view) in &self.votes {
             let mut hasher = Sha512::new();
             hasher.update(self.view.to_le_bytes());
+            hasher.update(self.view_round.to_le_bytes());
             hasher.update(high_qc_view.to_le_bytes());
             let digest = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
             signature.verify(&digest, &author)?;

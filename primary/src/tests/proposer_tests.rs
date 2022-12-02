@@ -1,6 +1,6 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use super::*;
-use crate::common::{committee, keys};
+use crate::{common::{committee, keys}, messages::QC};
 use tokio::sync::mpsc::channel;
 
 #[tokio::test]
@@ -74,6 +74,8 @@ async fn propose_payload() {
 }
 
 
+// Special header tests
+
 #[tokio::test]
 async fn propose_special_ticket_first() {
     let (name, secret) = keys().pop().unwrap();
@@ -98,10 +100,16 @@ async fn propose_special_ticket_first() {
     );
 
     //Send ticket to form a special header
-    let view = 1;
-    let round = 5;
+    let gen_header = Header::genesis(&committee());
+    let gen_qc = QC::genesis(&committee());
+
+    let view = 0; //gen_header.view = 0
+    let round = 5; //gen_header.round = 0 ==> this is not a valid round, but we just use it to test
+    let ticket: Ticket = Ticket::new(gen_header.digest(), view, round, gen_qc, None).await;
+    let ticket_dig = ticket.digest();
+
     tx_ticket
-        .send((view, round))
+        .send(ticket)
         .await
         .unwrap();
 
@@ -121,13 +129,19 @@ async fn propose_special_ticket_first() {
     assert_eq!(header.is_special, true);
     assert_eq!(header.view, 1);
     assert_eq!(header.prev_view_round, 5);
-    //TODO: special_parent round
-    println!("num parents {:?}", header.parents.len());
+    assert_eq!(header.consensus_parent.is_some(), true);
+    assert_eq!(*header.consensus_parent.as_ref().unwrap(), ticket_dig);
+    
+    
+    assert_eq!(header.parents.len(), 4);
+    assert_eq!(header.special_parent.is_none(), true);    
 
     assert_eq!(header.round, 6);
     assert_eq!(header.payload.get(&digest), Some(&worker_id));
     assert!(header.verify(&committee()).is_ok());
 }
+
+
 
 
 #[tokio::test]
@@ -170,11 +184,17 @@ async fn propose_special_ticket_after() {
      let last_header_id = header.id;
      let last_header_round = header.round;
 
-    //Send ticket to form a special header
-    let view = 1;
-    let round = 5;
+
+     //Send ticket to form a special header
+    let gen_header = Header::genesis(&committee());
+    let gen_qc = QC::genesis(&committee());
+
+    let view = 0; //gen_header.view = 0
+    let round = 5; //gen_header.round = 0 ==> this is not a valid round, but we just use it to test
+    let ticket: Ticket = Ticket::new(gen_header.digest(), view, round, gen_qc, None).await;
+
     tx_ticket
-        .send((view, round))
+        .send(ticket)
         .await
         .unwrap();
 
@@ -196,10 +216,11 @@ async fn propose_special_ticket_after() {
     assert_eq!(header.view, 1);
     assert_eq!(header.prev_view_round, 5);
     //TODO: special_parent round
-    assert_eq!(header.parents.len(), 1);
+    assert_eq!(header.parents.len(), 0);
+    assert_eq!(header.special_parent.is_some(), true);
     assert_eq!(header.special_parent_round, last_header_round);
-    let special_parent: Digest = header.parents.iter().cloned().next().unwrap();
-    assert_eq!(special_parent, last_header_id);
+    let special_parent: &Digest = header.special_parent.as_ref().unwrap();    //parents.iter().cloned().next().unwrap();
+    assert_eq!(*special_parent, last_header_id);
 
 
     assert_eq!(header.round, 6);
@@ -250,10 +271,18 @@ async fn propose_special_ticket_after_requiring_parents() {
      let last_header_round = header.round;
 
     //Send ticket to form a special header
-    let view = 1;
-    let last_round = 5; //skipping ahead
+  
+
+     //Send ticket to form a special header
+     let gen_header = Header::genesis(&committee());
+     let gen_qc = QC::genesis(&committee());
+ 
+     let view = 0; //gen_header.view = 0
+     let round = 5; //gen_header.round = 0 ==> this is not a valid round, but we just use it to test
+     let ticket: Ticket = Ticket::new(gen_header.digest(), view, round, gen_qc, None).await;
+
     tx_ticket
-        .send((view, last_round))
+        .send(ticket)
         .await
         .unwrap();
 
@@ -275,10 +304,11 @@ async fn propose_special_ticket_after_requiring_parents() {
     assert_eq!(header.view, 1);
     assert_eq!(header.prev_view_round, 5);
     //TODO: special_parent round
-    assert_eq!(header.parents.len(), 1);
+    assert_eq!(header.parents.len(), 0);
+    assert_eq!(header.special_parent.is_some(), true);
     assert_eq!(header.special_parent_round, last_header_round);
-    let special_parent: Digest = header.parents.iter().cloned().next().unwrap();
-    assert_eq!(special_parent, last_header_id);
+    let special_parent: &Digest = header.special_parent.as_ref().unwrap(); 
+    assert_eq!(*special_parent, last_header_id);
 
     assert_eq!(header.round, 6);
     assert_eq!(header.payload.get(&digest), Some(&worker_id));
@@ -287,10 +317,15 @@ async fn propose_special_ticket_after_requiring_parents() {
     //Send another ticket. But this time it won't be able to form a special edge. Must wait for parents.
 
     //Send ticket to form a special header
-    let view = 2;
-    let last_round = 6;
+    let gen_header = Header::genesis(&committee());
+    let gen_qc = QC::genesis(&committee());
+
+    let view = 1; //gen_header.view = 0 ==> this is not a valid view for the ticket, but we use it to test
+    let last_round = 6; //gen_header.round = 0 ==> this is not a valid round for the ticket, but we just use it to test
+    let ticket: Ticket = Ticket::new(gen_header.digest(), view, last_round, gen_qc, None).await;
+    
     tx_ticket
-        .send((view, last_round))
+        .send(ticket)
         .await
         .unwrap();
 
@@ -335,3 +370,4 @@ async fn propose_special_ticket_after_requiring_parents() {
     assert!(header.verify(&committee()).is_ok());
 
 }
+

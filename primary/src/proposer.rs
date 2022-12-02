@@ -32,7 +32,7 @@ pub struct Proposer {
     /// Receives the batches' digests from our workers.
     rx_workers: Receiver<(Digest, WorkerId)>,
     // Receives new view from the Consensus engine
-    rx_ticket: Receiver<(View, Round, Ticket)>,
+    rx_ticket: Receiver<Ticket>, //Receiver<(View, Round, Ticket)>,
     /// Sends newly created headers to the `Core`.
     tx_core: Sender<Header>,
    
@@ -74,7 +74,7 @@ impl Proposer {
         max_header_delay: u64,
         rx_core: Receiver<(Vec<Digest>, Round)>,
         rx_workers: Receiver<(Digest, WorkerId)>,
-        rx_ticket: Receiver<(View, Round, Ticket)>,
+        rx_ticket: Receiver<Ticket>,//Receiver<(View, Round, Ticket)>,
         tx_core: Sender<Header>,
     ) {
         let genesis: Vec<Digest> = Certificate::genesis(committee)
@@ -90,11 +90,13 @@ impl Proposer {
         //         ..Certificate::default()
         //     }.digest();
 
-        let genesis_parent: Digest = Header {
-                author: name,
-                ..Header::default()
-            }.digest();
+        // let genesis_parent: Digest = Header {
+        //         author: name,
+        //         ..Header::default()
+        //     }.digest();
       
+        let genesis_parent: Digest = Header::genesis(committee).digest();  //Note: This should never be necessary to use. 
+                                                                        // Two cases: A) first header is special => it will use genesis_parents. B) special is not first header =>last_header_id references a previous proposal
 
         tokio::spawn(async move {
             Self {
@@ -109,11 +111,11 @@ impl Proposer {
                 round: 1,
                 last_parents: genesis,
                 last_header_id: genesis_parent, //Digest::default(),
-                last_header_round: 1,
+                last_header_round: 0,
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
                 view: 0,
-                prev_view_round: 1,
+                prev_view_round: 0,
                 //prev_view_header: None,
                 propose_special: false,
                 last_has_parents: true,
@@ -253,13 +255,13 @@ impl Proposer {
             tokio::select! {
     
                  //Passing Ticket view AND round, i.e. round that the special Header in view belonged to. Skip to that round if lagging behind (to guarantee special headers are monotonically growing)
-                Some((view, round, ticket)) = self.rx_ticket.recv() => {
-                    debug!("   received ticket with view {:?}, and last round {:?}", view, round);
-                    if view <= self.view {
+                Some(ticket) = self.rx_ticket.recv() => { //TODO: Remove view and round and pass just ticket ==> view = ticket.view+1. round = ticket.round
+                    debug!("   received ticket with view {:?}, and last round {:?}", ticket.view, ticket.round);
+                    if ticket.view < self.view {
                         continue; //Proposal for view already exists.
                     }
-                    if round > self.round { //catch up to last special block round --> to ensure special headers are monotonic in rounds
-                        self.round = round+1; 
+                    if ticket.round > self.round { //catch up to last special block round --> to ensure special headers are monotonic in rounds
+                        self.round = ticket.round+1; 
                     }
                     else if self.last_header_round == self.round { //if last special block round is smaller then our current round, increment round normally. Only increment if we have not done so already (e.g. edges have been received)
                         self.round = self.round +1;
@@ -270,8 +272,8 @@ impl Proposer {
                     // ==> This is implicitly solved by requiring normal blocks to have n-f parents. Byz proposer cannot issue ticket for high round without n-f total replicas being in that round.
                     //TODO: Ticket must include view_round ==> QC already does. (TC must be edited) ==> just 
 
-                    self.view = view;
-                    self.prev_view_round = round;
+                    self.view = ticket.view+1;
+                    self.prev_view_round = ticket.round;
                     self.propose_special = true;
                     self.ticket = Some(ticket);
                     debug!("Dag moved to round {}, and view {}. propose_special {}", self.round, self.view, self.propose_special);

@@ -63,7 +63,7 @@ impl Consensus {
         rx_committer: Receiver<Certificate>,  // This is the channel used to send all certs to committer (previously this was called mempool -- maybe rename for clarity)
         tx_mempool: Sender<Certificate>,
         tx_output: Sender<Header>,
-        tx_ticket: Sender<(View, Round, Ticket)>,
+        tx_ticket: Sender<Ticket>,//Sender<(View, Round, Ticket)>,
         tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>,
         rx_sailfish: Receiver<Header>,
         tx_pushdown_cert: Sender<Certificate>,

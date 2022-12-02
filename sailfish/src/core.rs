@@ -48,7 +48,7 @@ pub struct Core {
     //tx_proposer: Sender<ProposerMessage>,
     tx_commit: Sender<Certificate>,
     tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>,
-    tx_ticket: Sender<(View, Round, Ticket)>,
+    tx_ticket: Sender<Ticket>, //Sender<(View, Round, Ticket)>,
     rx_special: Receiver<Header>,
     rx_loopback_process_commit: Receiver<(Digest, Ticket)>,
     rx_loopback_commit: Receiver<(Header, Ticket)>,
@@ -91,7 +91,7 @@ impl Core {
         //tx_proposer: Sender<ProposerMessage>,
         tx_commit: Sender<Certificate>,
         tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>, // Loopback Special Headers to DAG
-        tx_ticket: Sender<(View, Round, Ticket)>,
+        tx_ticket: Sender<Ticket>, //Sender<(View, Round, Ticket)>,
         rx_special: Receiver<Header>,
         rx_loopback_process_commit: Receiver<(Digest, Ticket)>,
         rx_loopback_commit: Receiver<(Header, Ticket)>,
@@ -124,7 +124,7 @@ impl Core {
                 high_prepare: Header::default(),
                 stored_headers: HashMap::default(),
                 high_cert: Certificate::default(),
-                high_qc: QC::genesis(),
+                high_qc: QC::genesis(&committee),
                 high_tc: TC::default(),
                 timer: Timer::new(timeout_delay),
                 aggregator: Aggregator::new(committee),
@@ -198,10 +198,10 @@ impl Core {
         
         //Create new ticket, using the associated Qc/Tc and it's view  (Important: Don't use latest view)
         let new_ticket = match tc {
-            Some(timeout_cert) => Ticket::new(header_digest.clone(), timeout_cert.view.clone(), self.high_qc.clone(), Some(timeout_cert)).await,
+            Some(timeout_cert) => Ticket::new(header_digest.clone(), timeout_cert.view.clone(), timeout_cert.view_round.clone(), self.high_qc.clone(), Some(timeout_cert)).await,
             None => {
                 match qc {
-                    Some(quorum_cert) => Ticket::new(header_digest.clone(), quorum_cert.view.clone(), quorum_cert.clone(), None).await,
+                    Some(quorum_cert) => Ticket::new(header_digest.clone(), quorum_cert.view.clone(), quorum_cert.view_round.clone(), quorum_cert.clone(), None).await,
                     None => return Err(ConsensusError::InvalidTicket),
                 }
             }
@@ -457,7 +457,7 @@ impl Core {
     async fn handle_qc(&mut self, qc: &QC) -> ConsensusResult<()> {
 
         //Accept QC if genesis (e.g. first Ticket contains genesis QC)
-        if *qc == QC::genesis() {
+        if *qc == QC::genesis(&self.committee) {
             return Ok(());
         }
 
@@ -549,7 +549,8 @@ impl Core {
         //Don't generate proposals for old views.
         if ticket.view == self.view - 1 {  //Note: view -1 since pur next proposal should be for self.view, and thus the associate ticket is from view-1
             self.tx_ticket
-            .send((self.view, self.round, ticket))  //Note: self.round >= ticket.header.round
+            //.send((self.view, ticket.round, ticket)) 
+            .send(ticket) 
             .await
             .expect("Failed to send view");
         }
@@ -933,7 +934,7 @@ impl Core {
         // Also, schedule a timer in case we don't hear from the leader.
         self.timer.reset();
         if self.name == self.leader_elector.get_leader(self.view) {
-            self.generate_proposal(Ticket::genesis()).await; //Starts a new proposal for view = 1, with genesis ticket from view = 0; prev_round = 0
+            self.generate_proposal(Ticket::genesis(&self.committee)).await; //Starts a new proposal for view = 1, with genesis ticket from view = 0; prev_round = 0
         }
 
         // This is the main loop: it processes incoming blocks and votes,

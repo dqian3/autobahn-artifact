@@ -28,6 +28,8 @@ async fn process_header() {
     let(tx_committer, _rx_committer) = channel(1);
     let(_tx_validation, rx_validation) = channel(1);
     let(tx_sailfish, _rx_special) = channel(1);
+    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
+    let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
 
     // Create a new test store.
     let path = ".db_test_process_header";
@@ -70,7 +72,9 @@ async fn process_header() {
         tx_committer,
         /* tx_proposer */ tx_parents,
         rx_validation,
-        tx_sailfish
+        /* special */ tx_sailfish,
+        rx_pushdown_cert,
+        rx_request_header_sync
     );
 
     // Send a header to the core.
@@ -112,6 +116,8 @@ async fn process_header_missing_parent() {
     let(tx_committer, _rx_committer) = channel(1);
     let(_tx_validation, rx_validation) = channel(1);
     let(tx_sailfish, _rx_special) = channel(1);
+    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
+    let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
 
     // Create a new test store.
     let path = ".db_test_process_header_missing_parent";
@@ -144,7 +150,9 @@ async fn process_header_missing_parent() {
         tx_committer,
         /* tx_proposer */ tx_parents,
         rx_validation,
-        tx_sailfish
+        tx_sailfish,
+        rx_pushdown_cert,
+        rx_request_header_sync
     );
 
     // Send a header to the core.
@@ -179,6 +187,8 @@ async fn process_header_missing_payload() {
     let(tx_committer, _rx_committer) = channel(1);
     let(_tx_validation, rx_validation) = channel(1);
     let(tx_sailfish, _rx_special) = channel(1);
+    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
+    let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
 
     // Create a new test store.
     let path = ".db_test_process_header_missing_payload";
@@ -211,7 +221,9 @@ async fn process_header_missing_payload() {
         tx_committer,
         /* tx_proposer */ tx_parents,
         rx_validation,
-        tx_sailfish
+        tx_sailfish,
+        rx_pushdown_cert,
+        rx_request_header_sync
     );
 
     // Send a header to the core.
@@ -248,6 +260,8 @@ async fn process_votes() {
     let(tx_committer, _rx_committer) = channel(1);
     let(_tx_validation, rx_validation) = channel(1);
     let(tx_sailfish, _rx_special) = channel(1);
+    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
+    let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
 
     // Create a new test store.
     let path = ".db_test_process_vote";
@@ -280,11 +294,20 @@ async fn process_votes() {
         tx_committer,
         /* tx_proposer */ tx_parents,
         rx_validation,
-        tx_sailfish
+        tx_sailfish,
+        rx_pushdown_cert,
+        rx_request_header_sync
     );
 
+    //TODO: instead of unit test hack: pass header() which includes edges
+
+  
+    assert_eq!(Header::default(), Header::genesis(&committee)); //Why are these equal even though author is different? Because genesis uses the default sig = empty
+    //consequently, we can here pass Header::default, even though the synchronizer uses genesis
+    //Note: core uses Header::default
+
     // Make the certificate we expect to receive.
-    let expected = certificate(&Header::default());
+    let expected = certificate(&Header::genesis(&committee));
 
     // Spawn all listeners to receive our newly formed certificate.
     let handles: Vec<_> = committee
@@ -294,7 +317,7 @@ async fn process_votes() {
         .collect();
 
     // Send a votes to the core.
-    for vote in votes(&Header::default()) {
+    for vote in votes(&Header::genesis(&committee)) {
         tx_primary_messages
             .send(PrimaryMessage::Vote(vote))
             .await
@@ -327,6 +350,8 @@ async fn process_certificates() {
     let(tx_committer, mut rx_committer) = channel(3);
     let(_tx_validation, rx_validation) = channel(1);
     let(tx_sailfish, _rx_special) = channel(3);
+    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
+    let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
 
     // Create a new test store.
     let path = ".db_test_process_certificates";
@@ -359,7 +384,9 @@ async fn process_certificates() {
         tx_committer,
         /* tx_proposer */ tx_parents,
         rx_validation,
-        tx_sailfish
+        tx_sailfish,
+        rx_pushdown_cert,
+        rx_request_header_sync
     );
 
     // Send enough certificates to the core.
@@ -417,6 +444,8 @@ async fn process_special_header() {
     let(tx_committer, _rx_committer) = channel(1);
     let(tx_validation, rx_validation) = channel(1);
     let(tx_sailfish, mut rx_special) = channel(1);
+    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
+    let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
 
     // Create a new test store.
     let path = ".db_test_process_header";
@@ -461,7 +490,9 @@ async fn process_special_header() {
         tx_committer,
         /* tx_proposer */ tx_parents,
         rx_validation,
-        tx_sailfish
+        tx_sailfish,
+        rx_pushdown_cert,
+        rx_request_header_sync
     );
 
 //  // Send a normal header to the core. 
@@ -546,6 +577,8 @@ async fn process_special_votes() {
     let(tx_committer, _rx_committer) = channel(1);
     let(tx_validation, rx_validation) = channel(1);
     let(tx_sailfish, mut rx_special) = channel(1);
+    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
+    let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
 
     // Create a new test store.
     let path = ".db_test_process_vote";
@@ -578,7 +611,9 @@ async fn process_special_votes() {
         tx_committer,
         /* tx_proposer */ tx_parents,
         rx_validation,
-        tx_sailfish
+        tx_sailfish,
+        rx_pushdown_cert,
+        rx_request_header_sync
     );
 
     // Spawn all listeners to receive our newly formed certificate.
@@ -671,6 +706,8 @@ async fn process_special_certificate() {
     let(tx_committer, mut rx_committer) = channel(2);
     let(_tx_validation, rx_validation) = channel(1);
     let(tx_sailfish, _rx_special) = channel(3);
+    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
+    let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
 
     // Create a new test store.
     let path = ".db_test_process_certificates";
@@ -703,7 +740,9 @@ async fn process_special_certificate() {
         tx_committer,
         /* tx_proposer */ tx_parents,
         rx_validation,
-        tx_sailfish
+        tx_sailfish,
+        rx_pushdown_cert,
+        rx_request_header_sync
     );
 
     //Send one special cert to core

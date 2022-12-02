@@ -174,6 +174,7 @@ impl TCMaker {
             return Ok(Some(TC {
                 hash: Digest::default(), //TODO: FIXME: Replace this with our new TC rule: I.e. whatever logic picks a header to propose
                 view: timeout.view,
+                view_round: 0, //TODO: FIXME: Replace this with new TC rule (round of the header we propose)
                 votes: self.votes.clone(),
             }));
         }

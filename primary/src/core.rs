@@ -106,6 +106,7 @@ impl Core {
         tokio::spawn(async move {
             Self {
                 name,
+                current_header: Header::genesis(&committee),
                 committee,
                 store,
                 synchronizer,
@@ -126,7 +127,7 @@ impl Core {
                 gc_round: 0,
                 last_voted: HashMap::with_capacity(2 * gc_depth as usize),
                 processing: HashMap::with_capacity(2 * gc_depth as usize),
-                current_header: Header::default(),
+                //current_header: Header::default(),
                 votes_aggregator: VotesAggregator::new(),
                 certificates_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 network: ReliableSender::new(),
@@ -176,7 +177,7 @@ impl Core {
         // reschedule processing of this header.
 
         //TODO: Modify so we don't have to wait for parent cert if the block is special -- but need to wait for parent.
-        
+
         if header.is_special && header.special_parent.is_some() {
             //TODO: Check that parent header has been received. // IF so, then when a cert for this special block forms, also form a dummy cert of the parent.
             //1) Read from store to confirm parent exists.
@@ -219,13 +220,14 @@ impl Core {
                 );
                 stake += self.committee.stake(&x.origin());
             }
+            
             ensure!(
                 stake >= self.committee.quorum_threshold() || (header.is_special && header.special_parent.is_some()), 
                 DagError::HeaderRequiresQuorum(header.id.clone())
             );
         }
+      
             
-        
     
 
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
@@ -304,7 +306,6 @@ impl Core {
     #[async_recursion]
     async fn process_vote(&mut self, vote: Vote) -> DagResult<()> {
         debug!("Processing {:?}", vote);
-
     
         // Add it to the votes' aggregator and try to make a new certificate.
         if let Some(certificate) =
@@ -346,6 +347,7 @@ impl Core {
     async fn process_certificate(&mut self, certificate: Certificate) -> DagResult<()> {
         debug!("Processing {:?}", certificate);
 
+        println!("received cert");
         // Process the header embedded in the certificate if we haven't already voted for it (if we already
         // voted, it means we already processed it). Since this header got certified, we are sure that all
         // the data it refers to (ie. its payload and its parents) are available. We can thus continue the
@@ -358,7 +360,7 @@ impl Core {
             // This function may still throw an error if the storage fails.
             self.process_header(certificate.header.clone()).await?;
         }
-
+        
         // Ensure we have all the DAG ancestors of this certificate yet. If we don't, the synchronizer will gather
         // them and trigger re-processing of this certificate.
         if !self.synchronizer.deliver_certificate(&certificate).await? {
@@ -473,10 +475,13 @@ impl Core {
 
     fn sanitize_vote(&mut self, vote: &Vote) -> DagResult<()> {  //TODO: If we want to be able to wait for additional votes for consensus, this must be changed to receive older round votes too.
         
+        
         ensure!(
             self.current_header.round <= vote.round,
             DagError::VoteTooOld(vote.digest(), vote.round)
         );
+
+       
         // Ensure we receive a vote on the expected header.
         ensure!(
             vote.id == self.current_header.id
@@ -519,8 +524,7 @@ impl Core {
                 }, 
             }
         } 
-        //
-
+       
         // Verify the vote.
         vote.verify(&self.committee).map_err(DagError::from)
     }
@@ -530,7 +534,7 @@ impl Core {
             self.gc_round <= certificate.round(),
             DagError::CertificateTooOld(certificate.digest(), certificate.round())
         );
-
+        
         // Verify the certificate (and the embedded header).
         certificate.verify(&self.committee).map_err(DagError::from)
     }

@@ -71,7 +71,7 @@ impl Primary {
         tx_committer: Sender<Certificate>,
         rx_consensus: Receiver<Certificate>,
         tx_sailfish: Sender<Header>,
-        rx_ticket: Receiver<(View, Round, Ticket)>,
+        rx_ticket: Receiver<Ticket>,//Receiver<(View, Round, Ticket)>,
         rx_validation: Receiver<(Header, u8, Option<QC>, Option<TC>)>,
         rx_pushdown_cert: Receiver<Certificate>,
         rx_request_header_sync: Receiver<Digest>,

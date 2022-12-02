@@ -28,6 +28,7 @@ const TIMER_ACCURACY: u64 = 5_000;
 
 pub struct Synchronizer {
     store: Store,
+    committee: Committee,
     inner_channel: Sender<(Header, Digest)>,
     inner_channel_cert: Sender<Certificate>,
 
@@ -82,6 +83,7 @@ impl Synchronizer {
 
         let tx_loopback_commit_copy = tx_loopback_commit.clone();
         let store_copy = store.clone();
+        let committee_copy = committee.clone();
         tokio::spawn(async move {
 
             let mut waiting_headers = FuturesUnordered::new();
@@ -266,6 +268,7 @@ impl Synchronizer {
         });
         Self {
             store,
+            committee: committee_copy,
             inner_channel: tx_inner,
             inner_channel_cert: tx_cert,
             inner_channel_header: tx_header,
@@ -315,7 +318,7 @@ impl Synchronizer {
         let parent: Digest = header.consensus_parent.clone().unwrap();
 
         //if ticket == genesis, return true.
-        if parent == Ticket::genesis().digest(){
+        if parent == Ticket::genesis(&self.committee).digest(){
             return Ok(true);
         }
       
@@ -356,7 +359,7 @@ impl Synchronizer {
         let parent: Digest = header.consensus_parent.clone().unwrap();
 
          //if ticket == genesis, return true.
-        if parent == Ticket::genesis().digest(){
+        if parent == Ticket::genesis(&self.committee).digest(){
             //return Ok(Header::genesis(&self.committee));
             return Ok(None);
         }
