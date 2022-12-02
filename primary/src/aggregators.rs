@@ -73,6 +73,11 @@ impl CertificatesAggregator {
     ) -> DagResult<Option<Vec<Digest>>> {
         let origin = certificate.origin();
 
+        // Ensure we don't count dummy certs towards parent quorum
+        if certificate.votes.is_empty() {
+            return Ok(None);
+        }
+
         // Ensure it is the first time this authority votes.
         if !self.used.insert(origin) {
             return Ok(None);
