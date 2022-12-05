@@ -317,7 +317,7 @@ impl Synchronizer {
        
         let parent: Digest = header.consensus_parent.clone().unwrap();
 
-        //if ticket == genesis, return true.
+        //if ticket == genesis, return true. ==> Already have genesis, don't need to commit it
         if parent == Ticket::genesis(&self.committee).digest(){
             return Ok(true);
         }
@@ -358,7 +358,7 @@ impl Synchronizer {
         
         let parent: Digest = header.consensus_parent.clone().unwrap();
 
-         //if ticket == genesis, return true.
+         //if ticket == genesis, return empty ==> Don't need to commit genesis
         if parent == Ticket::genesis(&self.committee).digest(){
             //return Ok(Header::genesis(&self.committee));
             return Ok(None);
