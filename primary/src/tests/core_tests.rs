@@ -396,6 +396,19 @@ async fn process_certificates() {
         .map(|header| certificate(header))
         .collect();
 
+        //Digest/Sig debug
+    // for header in headers(){
+    //     println!("header digest: {:?}", header.digest());
+    //     let votes = votes(&header); //Votes for the first header ==> these are the votes that were used for the first certificate
+    //     for vote in votes {
+    //         println!("vote digest: {:?}", vote.digest());
+    //         println!("vote signature: {:?}", vote.signature);
+    //         println!("vote author: {:?}", vote.author);
+    //     }
+    //     println!("             ");
+    // }
+   
+   
     for x in certificates.clone() {
         tx_primary_messages
             .send(PrimaryMessage::Certificate(x))
@@ -644,7 +657,7 @@ async fn process_special_votes() {
         }
     }
     println!("received all votes");
-    // // Send a votes to the core. ==> Sending only 2 votes. Supplementing quorum with own vote.
+    // // Send a votes to the core. ==> Sending only 2 votes. Supplementing quorum with own vote (called as result of process_header).
     let mut count = 0;
     for vote in special_votes(&special_header()) {
         if vote.author == name {continue;}
@@ -701,7 +714,7 @@ async fn process_special_certificate() {
     let (_tx_certificates_loopback, rx_certificates_loopback) = channel(1);
     let (_tx_headers, rx_headers) = channel(1);
     let (tx_consensus, mut _rx_consensus) = channel(3);
-    let (tx_parents, mut rx_parents) = channel(1);
+    let (tx_parents, mut _rx_parents) = channel(1);
 
     let(tx_committer, mut rx_committer) = channel(2);
     let(_tx_validation, rx_validation) = channel(1);

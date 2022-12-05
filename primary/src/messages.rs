@@ -355,16 +355,13 @@ impl Vote {
 
 impl Hash for Vote {
     fn digest(&self) -> Digest {
-        // TODO: This digest function must match the QC digest in order for QCMaker/aggregator to work
-        // FIXME: Solve this issue so that there does not need to be a dependency
         let mut hasher = Sha512::new();
+        // hasher.update(&self.id);
+        // hasher.update(self.view.to_le_bytes());
         hasher.update(&self.id);
-        hasher.update(self.view.to_le_bytes());
-        //hasher.update(&self.id);
-        //hasher.update(self.round.to_le_bytes());
-        //hasher.update(&self.origin);
-        //hasher.update(self.is_special);
-        //hasher.update(self.special_valid.to_le_bytes());
+        hasher.update(self.round.to_le_bytes());
+        hasher.update(&self.origin);
+        hasher.update(self.special_valid.to_le_bytes());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
@@ -434,7 +431,6 @@ impl Certificate {
         if Self::genesis(committee).contains(self) {
             return Ok(());
         }
-
         // Check the embedded header.
         self.header.verify(committee)?;
 
@@ -457,6 +453,12 @@ impl Certificate {
 
         //If all votes were special_valid or invalid ==> compute single vote digest and verify it (since it is the same for all)
         if matching_valids(&self.special_valids) {
+            //DEBUG
+            // println!("verifiable digest: {:?}", &self.verifiable_digest());
+            // for (key, sig) in &self.votes {
+            //     println!("vote signature: {:?}", sig);
+            //     println!("vote author: {:?}", key);
+            // }
             Signature::verify_batch(&self.verifiable_digest(), &self.votes).map_err(DagError::from)
         }
         else{ //compute all the individual vote digests and verify them  (TODO: Since there are only 2 possible types, 0 and 1 ==> Could compute 2 digests, and then insert them in the correct order)
@@ -500,6 +502,7 @@ impl Certificate {
             Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
         }
         else{
+            panic!("This verfiable digest branch should never be used");
             let mut hasher = Sha512::new();
             hasher.update(&self.header.id);
             hasher.update(self.round().to_le_bytes());

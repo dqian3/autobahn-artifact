@@ -1,5 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::messages::{Certificate, Header, Vote};
+use crate::messages::{Certificate, Header, Vote, Ticket};
 use bytes::Bytes;
 use config::{Authority, Committee, ConsensusAddresses, PrimaryAddresses, WorkerAddresses};
 use crypto::Hash as _;
@@ -120,9 +120,15 @@ pub fn special_header() -> Header {
 
         is_special: true,
         view: 1,
-        prev_view_round: 0,
-        special_parent: Some(Header::default().id),
+        //special parent
+        special_parent: Some(Header::genesis(&committee()).id),
         special_parent_round: 0,
+        //consensus parent
+        ticket: Some(Ticket::genesis(&committee())),
+        prev_view_round: 0,
+        consensus_parent: Some(Header::genesis(&committee()).id),
+
+        //defaults: payload, parent, 
         ..Header::default()
     };
     Header {
