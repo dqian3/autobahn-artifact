@@ -95,7 +95,7 @@ impl Proposer {
         //         ..Header::default()
         //     }.digest();
       
-        let genesis_parent: Digest = Header::genesis(committee).digest();  //Note: This should never be necessary to use. 
+        let genesis_parent: Digest = Header::genesis(committee).id;  //Note: This should never be necessary to use. 
                                                                         // Two cases: A) first header is special => it will use genesis_parents. B) special is not first header =>last_header_id references a previous proposal
 
         tokio::spawn(async move {

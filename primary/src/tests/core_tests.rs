@@ -302,9 +302,9 @@ async fn process_votes() {
     //TODO: instead of unit test hack: pass header() which includes edges
 
   
-    assert_eq!(Header::default(), Header::genesis(&committee)); //Why are these equal even though author is different? Because genesis uses the default sig = empty
-    //consequently, we can here pass Header::default, even though the synchronizer uses genesis
-    //Note: core uses Header::default
+    assert_eq!(Header::default(), Header::genesis(&committee)); //Why are these equal even though author is different? Because genesis still uses the default ID.
+    //Can currently use them interchangeably
+    //Note: core uses Header::genesis instead of Header::default now
 
     // Make the certificate we expect to receive.
     let expected = certificate(&Header::genesis(&committee));

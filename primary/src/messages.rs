@@ -153,6 +153,9 @@ impl Header {
         }
     }
     
+    //Note: This is essentially equivalent to Header::default() but with an author name. ==> Currently no difference in functionality; can use them interchangeably
+            //genesis.digest() == default.digest() because we currently don't compute the digest based off the author (we just use ..Self::default)
+    //Purpose: The construct provides easier compatibility for modifications. I.e. if one wants to change genesis Header, genesis QC etc. will adapt automatically
     pub fn genesis(committee: &Committee) -> Self {
         let (name, _) = committee.authorities.iter().next().unwrap();
         Header {
@@ -270,11 +273,12 @@ impl fmt::Debug for Header {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "{}: B{}({}, {})",
+            "{}: B{}({}, {}, special: {})",
             self.id,
             self.round,
             self.author,
             self.payload.keys().map(|x| x.size()).sum::<usize>(),
+            self.is_special,
         )
     }
 }
@@ -419,11 +423,19 @@ impl Certificate {
             .map(|name| Self {
                 header: Header {
                     author: *name,
-                    ..Header::default()
+                    ..Header::genesis(committee)
+                    //..Header::default()
                 },
                 ..Self::default()
             })
             .collect()
+    }
+
+    pub fn genesis_cert(committee: &Committee) -> Self {
+         Self {
+                header : Header::genesis(committee),
+                ..Self::default()
+        }
     }
 
     pub fn verify(&self, committee: &Committee) -> DagResult<()> {
@@ -606,6 +618,7 @@ impl Block {
     }
 
     pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
+
         // Ensure the authority has voting rights.
         let voting_rights = committee.stake(&self.author);
         ensure!(
@@ -781,7 +794,7 @@ impl QC {
         //QC::default()
         let genesis_header = Header::genesis(committee);
         QC {
-            hash: genesis_header.digest(),
+            hash: genesis_header.id,
             view: genesis_header.view,
             view_round: genesis_header.round,
             ..QC::default()
@@ -794,6 +807,12 @@ impl QC {
     }
 
     pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
+
+        //genesis QC always valid
+        if Self::genesis(committee) == *self {
+            return Ok(());
+        }
+
         // Ensure the QC has a quorum.
         let mut weight = 0;
         let mut used = HashSet::new();
@@ -942,8 +961,31 @@ pub struct TC {
     pub votes: Vec<(PublicKey, Signature, View)>,
 }
 
+impl PartialEq for TC {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash && self.view == other.view
+    }
+}
+
 impl TC {
+    pub fn genesis(committee: &Committee) -> Self {
+        //QC::default()
+        let genesis_header = Header::genesis(committee);
+        TC {
+            hash: genesis_header.id,
+            view: genesis_header.view,
+            view_round: genesis_header.round,
+            ..TC::default()
+        }
+    }
+
     pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
+
+        //genesis TC always valid
+        if Self::genesis(committee) == *self {
+            return Ok(());
+        }
+
         // Ensure the QC has a quorum.
         let mut weight = 0;
         let mut used = HashSet::new();

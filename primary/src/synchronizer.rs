@@ -192,6 +192,8 @@ impl Synchronizer {
 
         if digest == &self.genesis_header.id {  //Note: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
             //parents.push(self.genesis_header.clone());
+            //let dummy_parent_genesis_cert = Certificate::genesis_cert(&self.committee);
+            //TODO: alternativey: pick first cert from genesis == genesis_cert
             let dummy_parent_cert = Certificate {
                 header: self.genesis_header.clone(),
                 ..Certificate::default()

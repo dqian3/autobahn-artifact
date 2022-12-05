@@ -121,11 +121,11 @@ impl Core {
                 view: 1,
                 last_voted_view: 0,
                 last_committed_view: 0,
-                high_prepare: Header::default(),
-                stored_headers: HashMap::default(),
-                high_cert: Certificate::default(),
+                stored_headers: HashMap::default(),         //TODO: Can remove?
+                high_prepare: Header::genesis(&committee),
+                high_cert: Certificate::genesis_cert(&committee), //== first cert of Cert::genesis
                 high_qc: QC::genesis(&committee),
-                high_tc: TC::default(),
+                high_tc: TC::genesis(&committee),
                 timer: Timer::new(timeout_delay),
                 aggregator: Aggregator::new(committee),
                 network: SimpleSender::new(),
