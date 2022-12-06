@@ -195,6 +195,71 @@ async fn process_special_cert() {
 }
 
 #[tokio::test]
+async fn handle_accept_votes() {
+    let committee = committee_with_base_port(16_000);
+
+     // Make a header, cert and the accept_vote we expect to receive.
+     let (public_key, secret_key) = keys().pop().unwrap();
+     let (public_key_1, secret_key_1) = leader_keys(1);
+     
+     let ticket = Ticket::genesis(&committee);
+ 
+     let header = Header {author: public_key_1, round: 2, payload: BTreeMap::new(), parents: BTreeSet::new(),
+                          id: Digest::default(), signature: Signature::default(), is_special: true, view: 1,
+                          prev_view_round: 0, special_parent: None, special_parent_round: 0, consensus_parent: Some(ticket.digest()), ticket: Some(ticket)};
+     let id = header.digest();
+     let signature = Signature::new(&id, &secret_key_1);
+     let head = Header {id: id.clone(), signature, ..header};
+
+     // Run a core instance.
+     let store_path = ".db_test_handle_proposal";
+     let (tx_core, _rx_commit, mut rx_validation, _, _, mut rx_commit, tx_consensus, mut store) =
+         core(public_key, secret_key, committee.clone(), store_path);
+
+     //Write header to store so it can be committed.
+     let bytes = bincode::serialize(&head).expect("Failed to serialize header");
+     store.write(head.id.to_vec(), bytes).await;
+ 
+
+    //TODO: Send a set of votes to core
+    let votes: Vec<_> = keys()
+        .iter()
+        .map(|(public_key, secret_key)| {
+            AcceptVote::new_from_key(id.clone(), 1, 1, *public_key, &secret_key)
+        })
+        .collect();
+    
+    for vote in votes.clone() {
+        let message = ConsensusMessage::AcceptVote(vote);
+        tx_core.send(message).await.unwrap();
+    }
+    
+    let b = rx_commit.recv().await.unwrap();
+
+    //TODO: Expect to form a QC
+    let high_qc = QC {
+        hash: id,
+        view: 1,
+        view_round: 1,
+        votes: votes
+            .iter()
+            .cloned()
+            .map(|x| (x.author, x.signature))
+            .collect(),
+    };
+    let expected = bincode::serialize(&ConsensusMessage::QC(high_qc)).unwrap();
+
+    //TODO: Expect to receive that QC at listener
+     // Ensure the node broadcasts a timeout vote.
+     let handles: Vec<_> = committee
+     .broadcast_addresses(&public_key)
+     .into_iter()
+     .map(|(_, address)| listener(address, Some(Bytes::from(expected.clone()))))
+     .collect();
+      assert!(try_join_all(handles).await.is_ok());
+}
+
+#[tokio::test]
 async fn generate_proposal() {
     // Get the keys of the leaders of this round and the next.
     let (leader, leader_key) = leader_keys(1);
