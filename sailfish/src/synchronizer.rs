@@ -131,6 +131,7 @@ impl Synchronizer {
                      //parent ticket has been added to store => re-trigger commit with buffered header/ticket
                     Some(result) = waiting_tickets.next() => match result {
                         Ok((header, ticket)) => {
+                            debug!("parent ticket has committed. Waking up!");
                             if let Err(e) = tx_loopback_commit.send((header, ticket)).await { //loopback to core. ==> receiver calls commit(header,ticket)
                                 panic!("Failed to send message through core commit_header channel: {}", e);
                             }
@@ -298,11 +299,12 @@ impl Synchronizer {
    
     pub async fn get_commit_header(&mut self, header_digest: Digest, new_ticket: &Ticket) -> ConsensusResult<Option<Header>>{
         //read digest
-
+        debug!("getting header");
         match self.store.read(header_digest.to_vec()).await? {
              //If we have header ==> reply
             Some(bytes) => return Ok(Some(bincode::deserialize(&bytes)?)),
             None => {
+                debug!("don't have header");
                 //Else: 
             //Send to synchronizer loop via channel: 
                 if let Err(e) = self.inner_channel_header.send((header_digest.clone(), new_ticket.clone())).await {
@@ -328,6 +330,7 @@ impl Synchronizer {
             return Ok(true);
         }
 
+        debug!("parent ticket not in store");
         //Else: return false =>
         //AND
         let parent_ticket: Ticket = header.ticket.clone().unwrap();
@@ -344,6 +347,7 @@ impl Synchronizer {
             None => {}, //If no: get_commit_header will start sync, and eventually call process_commit(parent_ticket_header_dig, parent_ticket)
 
             Some(parent_ticket_header) => {  //If yes: issue commit(parent_ticket_header, parent_ticket)
+                debug!("parent ticket header in store! starting commit for parent");
                if let Err(e) = self.tx_loopback_commit.send((parent_ticket_header, parent_ticket)).await{
                 panic!("Failed to loopback commit to core {}", e);
                }

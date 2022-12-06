@@ -13,6 +13,7 @@ use bytes::Bytes;
 use config::Committee;
 use crypto::Hash as _;
 use crypto::{PublicKey, SignatureService, Digest};
+use futures::FutureExt;
 use log::{debug, error, warn};
 use network::SimpleSender;
 use primary::messages::{Header, Certificate, Timeout, AcceptVote, QC, TC, Ticket};
@@ -207,8 +208,7 @@ impl Core {
             }
            
         };
-
-        let _fut = self.process_commit(header_digest, new_ticket.clone()); //Exec Asynchronously
+        self.process_commit(header_digest, new_ticket.clone()).await?; //TODO: Can execute this asynchronously? 
         Ok(new_ticket)
     }
 
@@ -218,14 +218,13 @@ impl Core {
             // If have header, call commit
            Some(header) => self.commit(header, new_ticket).await?,
             // If don't have header, start sync. On reply call commit.  (Same reply as the ticket sync reply!!) ==> both use same sync function.
-           None => {}
+           None => {debug!("don't have header");}
        }
        Ok(())
     }
 
     async fn commit(&mut self, header: Header, new_ticket: Ticket) -> ConsensusResult<()> {
         //TODO: Need to handle duplicate calls?
-
         if self.last_committed_view >= header.view {
             return Ok(());
         }
