@@ -282,7 +282,9 @@ impl Proposer {
 
                 Some((parents, round)) = self.rx_core.recv() => {
                     debug!("   received parents from round {:?}", round);
-                    if self.propose_special && !self.last_has_parents {   // If we are trying to propose a special block, but cannot because not enough parents are ready, and we've already exhausted last_parent_header rule
+                    if self.propose_special { //&& !self.last_has_parents {   // If we are trying to propose a special block, but cannot because not enough parents are ready, and we've already exhausted last_parent_header rule
+                        //Also use the parents if we are proposing a special parent but are currently waiting for digests.
+
                         if round < self.last_header_round { // i.e. these are parents for a round that we already issued.
                             continue;
                         }
