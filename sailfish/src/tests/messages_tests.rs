@@ -1,17 +1,20 @@
 use primary::error::ConsensusError;
-//use super::*;
+use super::*;
 use crate::common::{committee, qc};
 use crypto::generate_keypair;
 use rand::rngs::StdRng;
 use rand::SeedableRng as _;
+use tokio::sync;
 
-#[test]
-fn verify_valid_qc() {
+
+
+#[tokio::test]
+async fn verify_valid_qc() {
     assert!(qc().verify(&committee()).is_ok());
 }
 
-#[test]
-fn verify_qc_authority_reuse() {
+#[tokio::test]
+async fn verify_qc_authority_reuse() {
     // Modify QC to reuse one authority.
     let mut qc = qc();
     let _ = qc.votes.pop();
@@ -25,8 +28,8 @@ fn verify_qc_authority_reuse() {
     }
 }
 
-#[test]
-fn verify_qc_unknown_authority() {
+#[tokio::test]
+async fn verify_qc_unknown_authority() {
     let mut qc = qc();
 
     // Modify QC to add one unknown authority.
@@ -42,8 +45,8 @@ fn verify_qc_unknown_authority() {
     }
 }
 
-#[test]
-fn verify_qc_insufficient_stake() {
+#[tokio::test]
+async fn verify_qc_insufficient_stake() {
     // Modify QC to remove one authority.
     let mut qc = qc();
     let _ = qc.votes.pop();

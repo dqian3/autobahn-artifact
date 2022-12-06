@@ -34,6 +34,9 @@ fn spawn_nodes(
             let (tx_validation, rx_validation) = channel(1);
             let (tx_sailfish, rx_sailfish) = channel(1);
 
+            let(tx_pushdown_cert, _rx_pushdown_cert) = channel(1);
+            let(tx_request_header_sync, _rx_request_header_sync) = channel(1);
+
 
             // Sink the mempool channel.
             tokio::spawn(async move {
@@ -58,6 +61,8 @@ fn spawn_nodes(
                     tx_ticket,
                     tx_validation,
                     rx_sailfish,
+                    tx_pushdown_cert,
+                    tx_request_header_sync,
                 );
 
                 rx_commit.recv().await.unwrap()
@@ -67,6 +72,8 @@ fn spawn_nodes(
 }
 
 // TODO: This test is not applicable since primary module aids in consensus
+//TODO: Write an end to end test that involves primary:
+    // send ticket to primary proposer, and link all channels correctls -> should commit
 
 /*#[tokio::test]
 async fn end_to_end() {

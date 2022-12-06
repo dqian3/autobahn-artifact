@@ -227,6 +227,24 @@ impl Header {
 
         Digest(hasher.finalize().as_slice()[..].try_into().unwrap())
     }
+
+    pub fn new_from_key(
+        author: PublicKey,
+        view: View,
+        round: Round,
+        secret: &SecretKey,
+    ) -> Header {
+        let header = Header {
+            author,
+            round,
+            signature: Signature::default(),
+            is_special: true,
+            view,
+           ..Header::default()
+        };
+        let signature = Signature::new(&header.digest(), secret);
+        Self { signature, ..header }
+    }
 }
 
 impl Hash for Header {
@@ -745,10 +763,10 @@ impl AcceptVote {
 }
 
 impl AcceptVote {
-    pub fn new_from_key(id: Digest, round: Round, author: PublicKey, secret: &SecretKey) -> Self {
+    pub fn new_from_key(id: Digest, view: View, round: Round, author: PublicKey, secret: &SecretKey) -> Self {
         let vote = AcceptVote {
             hash: id.clone(),
-            view: round,
+            view: view,
             view_round: round,
             author,
             signature: Signature::default(),

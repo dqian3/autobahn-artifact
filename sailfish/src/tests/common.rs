@@ -1,5 +1,7 @@
 use super::*;
 use config::Committee;
+use primary::error::{ConsensusError};
+use crate::consensus::ConsensusMessage;
 //use primary::config::Committee;
 use crate::consensus::Round;
 use crate::consensus::View;
@@ -127,13 +129,13 @@ impl PartialEq for Timeout {
 // Fixture.
 pub fn block() -> Block {
     let (public_key, secret_key) = keys().pop().unwrap();
-    Block::new_from_key(QC::genesis(), public_key, 1, Vec::new(), &secret_key)
+    Block::new_from_key(QC::genesis(&committee()), public_key, 1, Vec::new(), &secret_key)
 }
 
 // Fixture.
 pub fn vote() -> AcceptVote {
     let (public_key, secret_key) = keys().pop().unwrap();
-    AcceptVote::new_from_key(block().digest(), 1, public_key, &secret_key)
+    AcceptVote::new_from_key(block().digest(), 1, 1, public_key, &secret_key)
 }
 
 // Fixture.
@@ -157,7 +159,7 @@ pub fn qc() -> QC {
 
 // Fixture.
 pub fn chain(keys: Vec<(PublicKey, SecretKey)>) -> Vec<Block> {
-    let mut latest_qc = QC::genesis();
+    let mut latest_qc = QC::genesis(&committee());
     keys.iter()
         .enumerate()
         .map(|(i, key)| {
@@ -202,6 +204,10 @@ pub fn listener(address: SocketAddr, expected: Option<Bytes>) -> JoinHandle<()> 
             Some(Ok(received)) => {
                 writer.send(Bytes::from("Ack")).await.unwrap();
                 if let Some(expected) = expected {
+                    println!("received message");
+                    println!("expected: {:?}", expected);
+                   
+                    println!("received: {:?}", received);
                     assert_eq!(received.freeze(), expected);
                 }
             }

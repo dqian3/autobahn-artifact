@@ -19,6 +19,8 @@ fn leader_keys(round: Round) -> (PublicKey, SecretKey) {
 }
 
 
+//NOTE: THESE ARE DEPRECATED/NOT USED. We currently sync for headers through the DAG layer.
+
 #[tokio::test]
 async fn sync_reply() {
     let (tx_request, rx_request) = channel(1);
@@ -32,7 +34,7 @@ async fn sync_reply() {
     let _ = fs::remove_dir_all(path);
     let mut store = Store::new(path).unwrap();
 
-    let ticket = Ticket { qc: QC::genesis(), tc: None, view: 1 };
+    let ticket = Ticket {hash: Header::genesis(&committee).id, qc: QC::genesis(&committee), tc: None, view: 0 , round: 0};
 
     let header = Header {author: leader_keys(1).0, round: 2, payload: BTreeMap::new(), parents: BTreeSet::new(),
                          id: Digest::default(), signature: Signature::default(), is_special: true, view: 1,

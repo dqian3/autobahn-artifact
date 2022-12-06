@@ -15,26 +15,27 @@ fn make_qc() {
     let mut keys = keys();
     let qc = qc();
     let hash = qc.digest();
-    let round = qc.view;
+    let view = qc.view;
+    let round = qc.view_round;
 
     // Add 2f+1 votes to the aggregator and ensure it returns the cryptographic
     // material to make a valid QC.
     let (public_key, secret_key) = keys.pop().unwrap();
-    let vote = AcceptVote::new_from_key(hash.clone(), round, public_key, &secret_key);
+    let vote = AcceptVote::new_from_key(hash.clone(), view, round, public_key, &secret_key);
     let result = aggregator.add_accept_vote(vote.clone());
 
     assert!(result.is_ok());
     assert!(result.unwrap().is_none());
 
     let (public_key, secret_key) = keys.pop().unwrap();
-    let vote = AcceptVote::new_from_key(hash.clone(), round, public_key, &secret_key);
+    let vote = AcceptVote::new_from_key(hash.clone(), view, round, public_key, &secret_key);
     let result = aggregator.add_accept_vote(vote.clone());
 
     assert!(result.is_ok());
     assert!(result.unwrap().is_none());
 
     let (public_key, secret_key) = keys.pop().unwrap();
-    let vote = AcceptVote::new_from_key(hash.clone(), round, public_key, &secret_key);
+    let vote = AcceptVote::new_from_key(hash.clone(), view, round, public_key, &secret_key);
 
     match aggregator.add_accept_vote(vote) {
         Ok(Some(qc)) => assert!(qc.verify(&committee()).is_ok()),
