@@ -210,13 +210,13 @@ impl MessageHandler for ConsensusReceiverHandler {
                 self.tx_message
                     .send(message)
                     .await
-                    .expect("Failed to consensus message")
+                    .expect("Failed to send consensus message")
             }
             message => self
                 .tx_message
                 .send(message)
                 .await
-                .expect("Failed to consensus message"),
+                .expect("Failed to send consensus message"),
         }
         Ok(())
     }
