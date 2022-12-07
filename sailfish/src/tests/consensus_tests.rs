@@ -404,22 +404,27 @@ fn spawn_nodes_with_dag(
                 //Create some supply of digests. Simualate Worker Batches
                 //println!("generating workload batches");
                 //Note: Should Work without digest supply too: Will just time out
-                let worker_id: u32 = 0;
-                let digest: Digest = Digest::default(); //TODO: Fill this.
 
-                 //store, and send to self
-                let key = [digest.as_ref(), &worker_id.to_le_bytes()].concat();
-                store_copy.write(key.to_vec(), Vec::default()).await;
-
-                let msg = bincode::serialize(&WorkerPrimaryMessage::OurBatch(digest.clone(), worker_id)).expect("failed to serialize batch");
-                let address = committee_copy.primary(&name_copy).expect("Our public key or worker id is not in the committee").worker_to_primary;
-                network.send(address, Bytes::from(msg)).await;
-                
-
-                //send to others
-                let msg = bincode::serialize(&WorkerPrimaryMessage::OthersBatch(digest, worker_id)).expect("failed to serialize batch");
-                let addresses : Vec<SocketAddr>= committee_copy.others_primaries(&name_copy).into_iter().map(|(_, x)| x.worker_to_primary).collect();
-                network.broadcast(addresses, Bytes::from(msg)).await;
+                //TODO: Hack so that digests are automatically written to all replicas? (Avoid any synchronizer)
+                // loop {
+                //     let worker_id: u32 = 0;
+                //     let digest: Digest = Digest::default(); //TODO: Fill this.
+    
+                //      //store, and send to self
+                //     let key = [digest.as_ref(), &worker_id.to_le_bytes()].concat();
+                //     store_copy.write(key.to_vec(), Vec::default()).await;
+    
+                //     let msg = bincode::serialize(&WorkerPrimaryMessage::OurBatch(digest.clone(), worker_id)).expect("failed to serialize batch");
+                //     let address = committee_copy.primary(&name_copy).expect("Our public key or worker id is not in the committee").worker_to_primary;
+                //     network.send(address, Bytes::from(msg)).await;
+                    
+    
+                //     //send to others
+                //     let msg = bincode::serialize(&WorkerPrimaryMessage::OthersBatch(digest, worker_id)).expect("failed to serialize batch");
+                //     let addresses : Vec<SocketAddr>= committee_copy.others_primaries(&name_copy).into_iter().map(|(_, x)| x.worker_to_primary).collect();
+                //     network.broadcast(addresses, Bytes::from(msg)).await;
+                // }
+               
 
             });
             

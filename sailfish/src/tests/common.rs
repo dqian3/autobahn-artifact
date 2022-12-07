@@ -43,16 +43,43 @@ pub fn committee() -> Committee {
 }
 
 // Fixture.
+// pub fn committee_with_base_port(base_port: u16) -> Committee {
+//     let mut committee = committee();
+//     for authority in committee.authorities.values_mut() {
+//         //let port = authority.address.port();
+//         let port = authority.consensus.consensus_to_consensus.port();
+//         //authority.address.set_port(base_port + port);
+//         authority.consensus.consensus_to_consensus.set_port(base_port + port);
+//     }
+//     committee
+// }
+
+// Fixture.
 pub fn committee_with_base_port(base_port: u16) -> Committee {
     let mut committee = committee();
     for authority in committee.authorities.values_mut() {
-        //let port = authority.address.port();
-        let port = authority.consensus.consensus_to_consensus.port();
-        //authority.address.set_port(base_port + port);
-        authority.consensus.consensus_to_consensus.set_port(base_port + port);
+        let primary = &mut authority.primary;
+
+        let port = primary.primary_to_primary.port();
+        primary.primary_to_primary.set_port(base_port + port);
+
+        let port = primary.worker_to_primary.port();
+        primary.worker_to_primary.set_port(base_port + port);
+
+        for worker in authority.workers.values_mut() {
+            let port = worker.primary_to_worker.port();
+            worker.primary_to_worker.set_port(base_port + port);
+
+            let port = worker.transactions.port();
+            worker.transactions.set_port(base_port + port);
+
+            let port = worker.worker_to_worker.port();
+            worker.worker_to_worker.set_port(base_port + port);
+        }
     }
     committee
 }
+
 
 /*impl Block {
     pub fn new_from_key_block(
