@@ -3,8 +3,8 @@ use crate::common::{chain, committee, committee_with_base_port, keys, listener};
 use crypto::{SecretKey, Signature};
 use primary::messages::{Header, QC, TC, Vote, Block};
 use futures::future::try_join_all;
-use std::{fs, collections::BTreeMap, collections::BTreeSet};
-use tokio::sync::mpsc::channel;
+use std::{fs, collections::BTreeMap, collections::BTreeSet, time::Duration};
+use tokio::{sync::mpsc::channel, time::sleep};
 
 fn core(
     name: PublicKey,
@@ -29,7 +29,7 @@ fn core(
     let (tx_mempool, mut rx_mempool) = channel(1);
     let (tx_commit, rx_commit) = channel(2);
     let (tx_consensus, rx_consensus) = channel(1);
-    let (tx_validation, mut rx_validation) = channel(1);
+    let (tx_validation, mut rx_validation) = channel(10);
     let (tx_ticket, rx_ticket) = channel(1);
     let (tx_special, rx_special) = channel(1);
     let (tx_block, rx_block) = channel(1);
@@ -170,27 +170,30 @@ async fn process_special_cert() {
     let vote: AcceptVote = AcceptVote::new_from_key(head.id, head.view, head.round, public_key.clone(), &secret_key);
     //let msg = ConsensusMessage::AcceptVote(vote);
     let expected = bincode::serialize(&ConsensusMessage::AcceptVote(vote)).unwrap();
-    println!("accept_vote expected: {:?}", expected.clone());
-    println!("accept vote bytes expected: {:?}", Bytes::from(expected.clone()));
+    // println!("accept_vote expected: {:?}", expected.clone());
+    // println!("accept vote bytes expected: {:?}", Bytes::from(expected.clone()));
 
     // Run a core instance.
     let store_path = ".db_test_handle_proposal";
     let (_, _rx_commit, mut rx_validation, _, _, _, tx_consensus, _) =
         core(public_key, secret_key, committee.clone(), store_path);
+    
+
+    // Ensure the next leader gets the vote.
+    let (next_leader, _) = leader_keys(2);
+    let address = committee.address(&next_leader).unwrap();
+    //println!("listening for message on address: {:?}", address.clone());
+    let handle = listener(address, Some(Bytes::from(expected.clone())));   
 
     // Send a certificate to the core.
     tx_consensus.send(certificate).await.unwrap();
 
     //process_special_cert should also call process_special_header
-   
     let received = rx_validation.recv().await.unwrap();
+    //println!("Received validation: {:?}", received);
     assert_eq!(received.1, validate.1);
     assert_eq!(received.2, validate.2);
 
-    // Ensure the next leader gets the vote.
-    let (next_leader, _) = leader_keys(2);
-    let address = committee.address(&next_leader).unwrap();
-    let handle = listener(address, Some(Bytes::from(expected)));   //FIXME: Somehow the listener does not receive the right message. But I've manually verified that Sent message and expect are the same...
     assert!(handle.await.is_ok());
 }
 
@@ -219,24 +222,17 @@ async fn handle_accept_votes() {
      //Write header to store so it can be committed.
      let bytes = bincode::serialize(&head).expect("Failed to serialize header");
      store.write(head.id.to_vec(), bytes).await;
- 
 
-    //TODO: Send a set of votes to core
+    //Create a set of votes to send to core
     let votes: Vec<_> = keys()
         .iter()
+        .take(3)
         .map(|(public_key, secret_key)| {
             AcceptVote::new_from_key(id.clone(), 1, 1, *public_key, &secret_key)
         })
         .collect();
-    
-    for vote in votes.clone() {
-        let message = ConsensusMessage::AcceptVote(vote);
-        tx_core.send(message).await.unwrap();
-    }
-    
-    let b = rx_commit.recv().await.unwrap();
 
-    //TODO: Expect to form a QC
+    //Create the QC we are expected to receive
     let high_qc = QC {
         hash: id,
         view: 1,
@@ -248,15 +244,24 @@ async fn handle_accept_votes() {
             .collect(),
     };
     let expected = bincode::serialize(&ConsensusMessage::QC(high_qc)).unwrap();
+    
+    //create listeners to wait for QC
+    let handles: Vec<_> = committee
+    .broadcast_addresses(&public_key)
+    .into_iter()
+    .map(|(_, address)| listener(address, Some(Bytes::from(expected.clone()))))
+    .collect();
 
-    //TODO: Expect to receive that QC at listener
-     // Ensure the node broadcasts a timeout vote.
-     let handles: Vec<_> = committee
-     .broadcast_addresses(&public_key)
-     .into_iter()
-     .map(|(_, address)| listener(address, Some(Bytes::from(expected.clone()))))
-     .collect();
-      assert!(try_join_all(handles).await.is_ok());
+    //Send votes to core
+    for vote in votes.clone() {
+        let message = ConsensusMessage::AcceptVote(vote);
+        tx_core.send(message).await.unwrap();
+    }
+    //Receive Commit
+    let b = rx_commit.recv().await.unwrap();
+
+    //Ensure all listeners receive the QC
+    assert!(try_join_all(handles).await.is_ok());
 }
 
 #[tokio::test]
@@ -390,8 +395,9 @@ async fn commit_header() {
     }*/
 }
 
+//NOTE: This code also tests the synchronizer code
 #[tokio::test]
-async fn commit_header_chain() {
+async fn commit_header_chain() {  
     // Get enough distinct leaders to form a quorum.
     let leaders = vec![leader_keys(1), leader_keys(2), leader_keys(3)];
     //let chain = chain(leaders);
@@ -416,7 +422,7 @@ async fn commit_header_chain() {
     let signature = Signature::new(&id, &priv_key_1);
     let head = Header {id: id.clone(), signature, ..header};
 
-    //Don't write first header yet.
+    //Don't write first header to store yet.
     let head_1 = head.clone();
 
     //process_special_header //TODO: CAN REMOVE
@@ -440,8 +446,8 @@ async fn commit_header_chain() {
             .collect(),
     };
 
-    //TODO: CAN REMOVE
     let committed_1 = Certificate { header: head.clone(), special_valids: Vec::new(), votes: high_qc.votes.clone() };
+    // Note: don't need to process special cert first anymore
     //process special_cert  
     //tx_consensus.send(committed.clone()).await.unwrap();
 

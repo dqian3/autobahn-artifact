@@ -1,10 +1,10 @@
 use super::*;
-use crate::common::{committee, keys, qc, vote};
+use crate::common::{committee, keys, qc, accept_vote};
 
 #[test]
 fn add_vote() {
     let mut aggregator = Aggregator::new(committee());
-    let result = aggregator.add_accept_vote(vote());
+    let result = aggregator.add_accept_vote(accept_vote());
     assert!(result.is_ok());
     assert!(result.unwrap().is_none());
 }
@@ -48,7 +48,7 @@ fn cleanup() {
     let mut aggregator = Aggregator::new(committee());
 
     // Add a vote and ensure it is in the aggregator memory.
-    let result = aggregator.add_accept_vote(vote());
+    let result = aggregator.add_accept_vote(accept_vote());
     assert!(result.is_ok());
     assert_eq!(aggregator.votes_aggregators.len(), 1);
     assert!(aggregator.timeouts_aggregators.is_empty());

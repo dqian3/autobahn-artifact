@@ -1,6 +1,7 @@
 use super::*;
 use config::Committee;
 use primary::error::{ConsensusError};
+use primary::messages::Ticket;
 use crate::consensus::ConsensusMessage;
 //use primary::config::Committee;
 use crate::consensus::Round;
@@ -126,22 +127,53 @@ impl PartialEq for Timeout {
     }
 }*/
 
-// Fixture.
-pub fn block() -> Block {
-    let (public_key, secret_key) = keys().pop().unwrap();
-    Block::new_from_key(QC::genesis(&committee()), public_key, 1, Vec::new(), &secret_key)
+// // Fixture.
+// pub fn block() -> Block {
+//     let (public_key, secret_key) = keys().pop().unwrap();
+//     Block::new_from_key(QC::genesis(&committee()), public_key, 1, Vec::new(), &secret_key)
+// }
+
+
+// Fixture
+pub fn special_header() -> Header {
+    let (author, secret) = keys().pop().unwrap();
+    //let par = vec![header().id];
+    //let par = vec![Header::default().id];
+    let header = Header {
+        author,
+        round: 1,
+        //parents: par.iter().cloned().collect(),
+
+        is_special: true,
+        view: 1,
+        //special parent
+        special_parent: Some(Header::genesis(&committee()).id),
+        special_parent_round: 0,
+        //consensus parent
+        ticket: Some(Ticket::genesis(&committee())),
+        prev_view_round: 0,
+        consensus_parent: Some(Header::genesis(&committee()).id),
+
+        //defaults: payload, parent, 
+        ..Header::default()
+    };
+    Header {
+        id: header.digest(),
+        signature: Signature::new(&header.digest(), &secret),
+        ..header
+    }
 }
 
 // Fixture.
-pub fn vote() -> AcceptVote {
+pub fn accept_vote() -> AcceptVote {
     let (public_key, secret_key) = keys().pop().unwrap();
-    AcceptVote::new_from_key(block().digest(), 1, 1, public_key, &secret_key)
+    AcceptVote::new_from_key(special_header().digest(), 1, 1, public_key, &secret_key)
 }
 
 // Fixture.
 pub fn qc() -> QC {
     let qc = QC {
-        hash: Digest::default(),
+        hash: special_header().id, //Digest::default(),
         view: 1,
         view_round: 1,
         votes: Vec::new(),
@@ -204,10 +236,9 @@ pub fn listener(address: SocketAddr, expected: Option<Bytes>) -> JoinHandle<()> 
             Some(Ok(received)) => {
                 writer.send(Bytes::from("Ack")).await.unwrap();
                 if let Some(expected) = expected {
-                    println!("received message");
-                    println!("expected: {:?}", expected);
-                   
-                    println!("received: {:?}", received);
+                    // println!("received message");
+                    // println!("expected: {:?}", expected);
+                    // println!("received: {:?}", received);
                     assert_eq!(received.freeze(), expected);
                 }
             }

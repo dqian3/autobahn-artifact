@@ -1,5 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::messages::{Certificate, Header, Vote, Ticket};
+use crate::messages::{Certificate, Header, Vote, Ticket, AcceptVote, QC};
 use bytes::Bytes;
 use config::{Authority, Committee, ConsensusAddresses, PrimaryAddresses, WorkerAddresses};
 use crypto::Hash as _;
@@ -22,6 +22,7 @@ pub fn keys() -> Vec<(PublicKey, SecretKey)> {
     let mut rng = StdRng::from_seed([0; 32]);
     (0..4).map(|_| generate_keypair(&mut rng)).collect()
 }
+
 
 // Fixture
 pub fn committee() -> Committee {
@@ -254,4 +255,48 @@ pub fn listener(address: SocketAddr) -> JoinHandle<Bytes> {
             _ => panic!("Failed to receive network message"),
         }
     })
+}
+
+
+//Consensus message_tests
+
+// Fixture.
+pub fn committee_basic() -> Committee {
+    Committee::new(
+        keys()
+            .into_iter()
+            .enumerate()
+            .map(|(i, (name, _))| {
+                let address = format!("127.0.0.1:{}", i).parse().unwrap();
+                let stake = 1;
+                (name, stake, address)
+            })
+            .collect(),
+        /* epoch */ //100,
+    )
+}
+
+// Fixture.
+pub fn accept_vote() -> AcceptVote {
+    let (public_key, secret_key) = keys().pop().unwrap();
+    AcceptVote::new_from_key(special_header().digest(), 1, 1, public_key, &secret_key)
+}
+
+// Fixture.
+pub fn qc() -> QC {
+    let qc = QC {
+        hash: special_header().id, //Digest::default(),
+        view: 1,
+        view_round: 1,
+        votes: Vec::new(),
+    };
+    let digest = qc.digest();
+    let mut keys = keys();
+    let votes: Vec<_> = (0..3)
+        .map(|_| {
+            let (public_key, secret_key) = keys.pop().unwrap();
+            (public_key, Signature::new(&digest, &secret_key))
+        })
+        .collect();
+    QC { votes, ..qc }
 }

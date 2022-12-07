@@ -435,6 +435,7 @@ impl Core {
                     .collect();
                 let message = bincode::serialize(&ConsensusMessage::QC(qc.clone()))
                     .expect("Failed to serialize quorum (commit) certificate");
+
                 self.network
                     .broadcast(addresses, Bytes::from(message))
                     .await;
@@ -575,8 +576,6 @@ impl Core {
 
          //TODO: FIXME: Important: Process_header should still complete (i.e. not throw errors), since validation needs to be asynchronous --> It should always call back down (with val=0 in this case)
        
-      
-
          //1) Check if we have already voted in this view > last voted view
         ensure!(
             header.view > self.last_voted_view,
@@ -691,7 +690,6 @@ impl Core {
         //self.round = header.round; //TODO: FIXME: only update self.round upon commit(?)
         // (Committed Headers should be monotonic. Since consensus is sequential, should suffice to update it then?)
         
-       
         //FIXME: Dummy testing with validation == true.
         let special_valid: u8 = 1;
         //let qc: Option<QC> = Some(ticket.qc);
@@ -806,8 +804,7 @@ impl Core {
                     .consensus_to_consensus;
             let message = bincode::serialize(&ConsensusMessage::AcceptVote(vote))
                     .expect("Failed to serialize vote");
-            println!("accept vote generated: {:?}", message.clone());
-            println!("accept vote bytes generated: {:?}", Bytes::from(message.clone()));
+           
             self.network.send(address, Bytes::from(message)).await;
         }
         
