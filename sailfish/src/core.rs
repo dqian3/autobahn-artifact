@@ -343,6 +343,9 @@ impl Core {
     }
 
     async fn local_timeout_view(&mut self) -> ConsensusResult<()> {
+       //TESTING 
+        return Ok(());
+
         warn!("Timeout reached for view {}", self.view);
 
         // Increase the last voted view.

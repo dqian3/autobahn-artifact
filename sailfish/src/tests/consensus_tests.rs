@@ -100,6 +100,19 @@ fn spawn_nodes(
 ) //-> Vec<JoinHandle<Certificate>> {
  {
 
+     //Create vector of committer channels.
+     let mut committer_channels: VecDeque<(Sender<Certificate>, Receiver<Certificate>)> = keys.iter_mut()
+     .map(|_| {
+        let (tx_committer, rx_committer) = channel(1);
+        (tx_committer, rx_committer)
+     })
+     .collect();
+    let committer_senders: Vec<Sender<Certificate>> = committer_channels.iter_mut()
+    .map(|(sender, receiver)| {
+        sender.clone()
+    })
+    .collect();
+
     //Create vector of consensus channels.
     let mut consensus_channels: VecDeque<(Sender<Certificate>, Receiver<Certificate>)> = keys.iter_mut()
                                  .map(|_| {
@@ -135,7 +148,7 @@ fn spawn_nodes(
             let (tx_consensus_to_mempool, mut rx_consensus_to_mempool) = channel(10);
             //let (_tx_mempool_to_consensus, rx_mempool_to_consensus) = channel(1);
             //let (tx_commit, mut rx_commit) = channel(1);
-            let (tx_committer, rx_committer) = channel(1);
+            //let (tx_committer, rx_committer) = channel(1);
 
             let (tx_output, mut rx_output) = channel(1);
             let (tx_ticket, mut rx_ticket) = channel(1);
@@ -146,11 +159,15 @@ fn spawn_nodes(
             let(tx_request_header_sync, mut rx_request_header_sync) = channel(1);
 
             let rx_mempool_to_consensus = consensus_channels.pop_front().unwrap().1;
+            let rx_committer = committer_channels.pop_front().unwrap().1;
 
+            let committer_sender_channels = committer_senders.clone();
             let consensus_sender_channels = consensus_senders.clone();
             let mut signature_service_copy = signature_service.clone();
             let author = name.clone();
             let mut stores_copy = stores.clone();
+
+            let replica = name.clone();
 
             let store = stores.pop_front().unwrap();
 
@@ -158,12 +175,15 @@ fn spawn_nodes(
             tokio::spawn(async move {
                 loop {
                     tokio::select! {
+                        Some(_) = rx_consensus_to_mempool.recv() => {},
                         Some(_) = rx_request_header_sync.recv() => {},
                         Some(_) = rx_validation.recv() => {},
                           //Receive Ticket
                         Some(tick) = rx_ticket.recv() => {
                             //Ignore all DAG processing TODO: Add a proper primary module here.
                            let ticket: Ticket = tick;
+                           
+                           println!("Received a ticket at replica {}", author.clone());
                            
                            //Issue Certificate to all nodes. (Note: This is simulating *only* special headers)
                            // Create a new header based on past ticket
@@ -172,16 +192,23 @@ fn spawn_nodes(
                            let new_round = ticket.round.clone() + 1;
                            let new_view = ticket.view.clone() + 1;
                 
-                           let header: Header = Header::new(author, new_round, payload.drain(..).collect(), parents, &mut signature_service_copy, true, new_view, None, 0, Some(ticket.clone()), ticket.round.clone(), Some(ticket.digest())).await;
+                           let header: Header = Header::new(author.clone(), new_round, payload.drain(..).collect(), parents, &mut signature_service_copy, true, new_view, None, 0, Some(ticket.clone()), ticket.round.clone(), Some(ticket.digest())).await;
                            // write header to stores
                             for store in &mut stores_copy {
                                 let bytes = bincode::serialize(&header).expect("Failed to serialize header");
                                 (*store).write(header.id.to_vec(), bytes).await;
                             }
                            
-                            
+                           
+                            println!("Injecting new Certificate");
                            let cert: Certificate = Certificate { header: header, special_valids: Vec::new(), votes: Vec::new() };
+
+                           println!("Sending cert to all committers");
+                           for sender in &committer_sender_channels{
+                                sender.send(cert.clone()).await.expect("failed to send cert to committer");
+                           }  
                 
+                        println!("Sending cert to all consensus cores");
                            for sender in &consensus_sender_channels{
                                sender.send(cert.clone()).await.expect("failed to send cert to consensus core");
                            }  
@@ -212,7 +239,7 @@ fn spawn_nodes(
 
                 //rx_commit.recv().await.unwrap()
                 while let Some(header) = rx_output.recv().await {
-                    println!("committed header for view {}", header.view);
+                    println!("committed header for view {} at replica {}", header.view, replica.clone());
                     // NOTE: Here goes the application logic.
                 }
             });
@@ -229,7 +256,7 @@ async fn end_to_end() {
     let store_path = ".db_test_end_to_end";
     let handles = spawn_nodes(keys(), committee, store_path);
 
-    sleep(Duration::from_millis(10_000)).await;
+    sleep(Duration::from_millis(1000)).await;
     // Ensure all threads terminated correctly.
     //let certs = try_join_all(handles).await.unwrap();
     //assert!(certs.windows(2).all(|w| w[0].view+1 == w[1].view));
