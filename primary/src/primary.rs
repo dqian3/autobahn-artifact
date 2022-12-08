@@ -258,11 +258,14 @@ impl MessageHandler for PrimaryReceiverHandler {
                 .send((missing, requestor))
                 .await
                 .expect("Failed to send primary message"),
-            request => self
+            request => {
+                //println!("Made it to dispatch");
+                self
                 .tx_primary_messages
                 .send(request)
                 .await
-                .expect("Failed to send certificate"),
+                .expect("Failed to send certificate")
+            }
         }
         Ok(())
     }

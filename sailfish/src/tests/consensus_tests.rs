@@ -350,7 +350,7 @@ async fn end_to_end_endless() {
 
 #[tokio::test]
 async fn end_to_end_with_dag() {
-    let committee = committee_with_base_port(15_000);
+    let committee = committee_with_base_port(23_000);
 
     // Run all nodes.
     let store_path = ".db_test_end_to_end";
@@ -428,7 +428,7 @@ fn spawn_nodes_with_dag(
 
             });
             
-
+            println!("Before spawn");
             // Spawn the consensus engine.
             tokio::spawn(async move {
 

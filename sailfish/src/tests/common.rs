@@ -64,7 +64,9 @@ pub fn committee_with_base_port(base_port: u16) -> Committee {
         primary.primary_to_primary.set_port(base_port + port);
 
         let port = primary.worker_to_primary.port();
-        primary.worker_to_primary.set_port(base_port + port);
+        primary.worker_to_primary.set_port(base_port + port + 10);
+
+        authority.consensus.consensus_to_consensus.set_port(base_port + port + 40);
 
         for worker in authority.workers.values_mut() {
             let port = worker.primary_to_worker.port();
@@ -75,6 +77,7 @@ pub fn committee_with_base_port(base_port: u16) -> Committee {
 
             let port = worker.worker_to_worker.port();
             worker.worker_to_worker.set_port(base_port + port);
+
         }
     }
     committee
