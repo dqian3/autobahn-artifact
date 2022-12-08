@@ -10,14 +10,24 @@ use bytes::Bytes;
 use config::Committee;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
+use futures::ready;
 use log::{debug, error, warn};
 use network::{CancelHandler, ReliableSender};
 //use tokio::time::error::Elapsed;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+//use std::task::Poll;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::time::{sleep, Duration, Instant};
+use tokio_util::time::{DelayQueue, delay_queue};
+use futures::future::poll_fn;
+use futures::task::{Context, Poll};
+use futures::task;
+
+
+
 //use crate::messages_consensus::{QC, TC};
 
 #[cfg(test)]
@@ -79,6 +89,15 @@ pub struct Core {
     network: ReliableSender,
     /// Keeps the cancel handlers of the messages we sent.
     cancel_handlers: HashMap<Round, Vec<CancelHandler>>,
+
+    // Timeout used for waiting for more special valid votes
+    special_valid_timeout: u64,
+    // Stores special headers that we are waiting on for special valid votes
+    special_valid_headers: HashMap<Digest, Certificate>,
+    // Delay queue for managing all special headers waiting for more votes
+    special_valid_delay_queue: DelayQueue<Digest>,
+    // Set containing all special header digests that we have inserted into the delay queue
+    special_valid_digests: HashMap<Digest, delay_queue::Key>,
 }
 
 impl Core {
@@ -132,6 +151,10 @@ impl Core {
                 certificates_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 network: ReliableSender::new(),
                 cancel_handlers: HashMap::with_capacity(2 * gc_depth as usize),
+                special_valid_timeout: 100,
+                special_valid_headers: HashMap::with_capacity(2 * gc_depth as usize),
+                special_valid_delay_queue: DelayQueue::new(),
+                special_valid_digests: HashMap::with_capacity(2 * gc_depth as usize),
             }
             .run()
             .await;
@@ -334,6 +357,45 @@ impl Core {
                 .extend(handlers);
 
             //TODO: Need to wait for additional votes if special and not enough valid votes. (A little tricky, since we may already be moving the round => i.e. current_header is no longer matching)
+            // Assumption: if additional votes come in, new certificates will be formed (certificate formation can happen more than once)
+            if certificate.header.is_special {
+                // Count how many valid votes
+                let num_valids: u8 = certificate.special_valids.iter().sum();
+                let digest = certificate.header.digest();
+
+                // If not 2f+1 special valid votes then add to our hashmap of special headers that are processing
+                if (num_valids as u32) < self.committee.quorum_threshold() {
+                    match self.special_valid_headers.clone().get(&digest) {
+                        Some(cert) => {
+                            // Update the hashmap only if the new certificate has more special valid votes
+                            let sum: u8 = cert.special_valids.iter().sum();
+                            // If the new certificate has more special valid votes then replace in our hashmap
+                            if num_valids > sum {
+                                self.special_valid_headers.entry(certificate.header.digest()).or_insert(cert.clone());
+                            }
+                        }
+                        None => {
+                            // Otherwise add the new certificate to the hashmap
+                            self.special_valid_headers.entry(certificate.header.digest()).or_insert(certificate.clone());
+                            // Start timer to wait for new certificate
+                            let key = self.special_valid_delay_queue.insert(digest.clone(), Duration::from_millis(self.special_valid_timeout));
+                            self.special_valid_digests.insert(digest, key);
+                        }
+                    }
+                } else {
+                    // We Have enough special valids, cleanup hashmap, cancel the appropriate timer
+
+                    // Check to see whether header is in delay queue
+                    match self.special_valid_digests.get(&digest) {
+                        Some(key) =>  {
+                            self.special_valid_delay_queue.remove(&key);
+                            self.special_valid_digests.remove(&digest);
+                        }
+                        None => {}
+                    }
+                }
+
+            }
 
             //Process the new certificate. 
             self.process_certificate(certificate)
@@ -538,13 +600,34 @@ impl Core {
         certificate.verify(&self.committee).map_err(DagError::from)
     }
 
+    async fn poll_remove(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+        while let Some(entry) = ready!(self.special_valid_delay_queue.poll_expired(cx)) {
+            let key = self.special_valid_digests.get(entry.get_ref());
+            match key {
+                Some(k) => {
+                    self.special_valid_delay_queue.remove(k);
+                }
+                None => {}
+            }
+        }
+
+        Poll::Ready(())
+    }
+
     // Main loop listening to incoming messages.
     pub async fn run(&mut self) {
         //write starting header to store --> just to support Special unit testing
         // let bytes = bincode::serialize(&Header::default()).expect("Failed to serialize header");
         // self.store.write(Header::default().id.to_vec(), bytes).await;
+        //
+
+        let waker = task::noop_waker();
+        let mut cx = Context::from_waker(&waker);
 
         loop {
+            // If any of the timers for invalidations have expired then remove them from the queue
+            self.poll_remove(&mut cx).await;
+
             let result = tokio::select! {
                 // We receive here messages from other primaries.
                 Some(message) = self.rx_primaries.recv() => {

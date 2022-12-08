@@ -1,4 +1,5 @@
 use std::convert::TryInto;
+use std::net::SocketAddr;
 use crate::aggregator::Aggregator;
 use crate::consensus::{ConsensusMessage, View, Round};
 //use crate::error::{ConsensusError, ConsensusResult};
@@ -16,7 +17,7 @@ use crypto::{PublicKey, SignatureService, Digest};
 use futures::FutureExt;
 use log::{debug, error, warn};
 use network::SimpleSender;
-use primary::messages::{Header, Certificate, Timeout, AcceptVote, QC, TC, Ticket};
+use primary::messages::{Header, Certificate, Timeout, AcceptVote, QC, TC, Ticket, Vote};
 use primary::{ensure, error::{ConsensusError, ConsensusResult}};
 //use primary::messages::AcceptVote;
 use std::cmp::max;
@@ -347,6 +348,7 @@ impl Core {
         return Ok(());
 
         warn!("Timeout reached for view {}", self.view);
+        println!("timeout reached for view {}", self.view);
 
         // Increase the last voted view.
         self.increase_last_voted_view(self.view);
@@ -366,7 +368,7 @@ impl Core {
 
         // Broadcast the timeout message.
         debug!("Broadcasting {:?}", timeout);
-        let addresses = self
+        let addresses: Vec<SocketAddr> = self
             .committee
             .others_consensus(&self.name)
             .into_iter()
@@ -374,9 +376,11 @@ impl Core {
             .collect();
         let message = bincode::serialize(&ConsensusMessage::Timeout(timeout.clone()))
             .expect("Failed to serialize timeout message");
+        println!("timeout message bytes {:?}", message.clone());
         self.network
-            .broadcast(addresses, Bytes::from(message))
+            .broadcast(addresses.clone(), Bytes::from(message.clone()))
             .await;
+        //self.network.broadcast(addresses, Bytes::from(message)).await;
 
         // Process our message.
         self.handle_timeout(&timeout).await
@@ -410,6 +414,7 @@ impl Core {
 
     #[async_recursion]
     async fn handle_accept_vote(&mut self, vote: &AcceptVote) -> ConsensusResult<()> {
+        println!("Made it here to accept vote");
         debug!("Processing {:?}", vote);
         if vote.view < self.view {
             return Ok(());
@@ -578,17 +583,23 @@ impl Core {
     async fn process_special_header(&mut self, header: Header) -> ConsensusResult<()> {
 
          //TODO: FIXME: Important: Process_header should still complete (i.e. not throw errors), since validation needs to be asynchronous --> It should always call back down (with val=0 in this case)
-       
+        let mut special_valid: u8 = 1;
+
+        if header.view > self.last_voted_view {
+            special_valid = 0;
+        }
+
          //1) Check if we have already voted in this view > last voted view
-        ensure!(
+        /*ensure!(
             header.view > self.last_voted_view,
             ConsensusError::TooOld(header.id, header.view)  //TODO: Still want to reply invalid in DAG. ==> Corner-case: Have already moved views, but Dag still requires cert.
-        );
+        );*/
         
          //If we have not voted, but have already committed higher view, vote invalid --> TODO: Should suffice to not reply
         if self.last_committed_view >= header.view {
-            self.tx_validation.send((header, 0, None, None)).await.expect("Failed to send payload");
-            return Ok(()); //TODO: change to invalid = 0 and reply.
+            //self.tx_validation.send((header, 0, None, None)).await.expect("Failed to send payload");
+            //return Ok(()); //TODO: change to invalid = 0 and reply.
+            special_valid = 0;
         }
 
         //Indicate that we are processing this header.
@@ -694,7 +705,6 @@ impl Core {
         // (Committed Headers should be monotonic. Since consensus is sequential, should suffice to update it then?)
         
         //FIXME: Dummy testing with validation == true.
-        let special_valid: u8 = 1;
         //let qc: Option<QC> = Some(ticket.qc);
         //let tc: Option<TC> = None;
 
@@ -712,7 +722,7 @@ impl Core {
     #[async_recursion]
     async fn process_sync_cert(&mut self, certificate: Certificate) -> ConsensusResult<()> {
         //call down to Dag layer.
-        self.tx_pushdown_cert.send(certificate).await.expect("Failed to pushdown certificate to Dag layer");
+        //self.tx_pushdown_cert.send(certificate).await.expect("Failed to pushdown certificate to Dag layer");
         //TODO: or should sync itself call down to Dag layer, and let consensus only registers a waiter. --> this would avoid redundantly syncing on the same cert twice. ==> Note: This is what we do now, but we sync on headers.
         //For now don't optimize -- this only affects consensus parents
         // Flow: 
@@ -728,7 +738,7 @@ impl Core {
     //Call process_special_header upon receiving upcall from Dag layer.
     #[async_recursion]
     async fn process_special_certificate(&mut self, certificate: Certificate) -> ConsensusResult<()> {
-       
+        println!("Made it to special cert");
         if self.last_committed_view >= certificate.header.view {
             return Ok(());
         }
@@ -739,6 +749,7 @@ impl Core {
         //process_header if we have not already -> this will process the ticket (Note: This is not strictly necessary, but it's useful to call early to avoid having to sync on consensus_parent_ticket later)
         if !self.processing_headers.get(&certificate.header.round).map_or_else(|| false, |x| x.contains(&certificate.header.id))
         { // This function may still throw an error if the storage fails.
+            println!("Processes header");
             self.process_special_header(certificate.header.clone()).await?;
         }
 
@@ -791,11 +802,12 @@ impl Core {
 
         //3) Send out Vote
 
-        let vote = AcceptVote::new(&header, self.name, self.signature_service.clone()).await;
+        let vote = AcceptVote::new(&header.clone(), self.name, self.signature_service.clone()).await;
 
         debug!("Created {:?}", vote.digest());
         
         let next_leader = self.leader_elector.get_leader(self.view + 1);
+        println!("should handle vote, {}, {}", next_leader, self.name);
         if next_leader == self.name {
             self.handle_accept_vote(&vote).await?;
         } else {
@@ -805,10 +817,12 @@ impl Core {
                     .consensus(&next_leader)
                     .expect("The next leader is not in the committee")
                     .consensus_to_consensus;
+            println!("address sending is {}", address);
             let message = bincode::serialize(&ConsensusMessage::AcceptVote(vote))
                     .expect("Failed to serialize vote");
-           
+
             self.network.send(address, Bytes::from(message)).await;
+
         }
         
         Ok(())

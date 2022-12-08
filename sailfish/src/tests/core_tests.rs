@@ -105,6 +105,7 @@ async fn process_special_header() {
     //let block = chain(vec![leader_keys(1)]).pop().unwrap();
     let (public_key, secret_key) = keys().pop().unwrap();
     let (public_key_1, secret_key_1) = leader_keys(1);
+    //println!("Leader keys {}, {}, {}", leader_keys(2).0, leader_keys(3).0, leader_keys(4).0);
     //let vote = Vote::new_from_key(block.digest(), block.view, public_key, &secret_key);
     //
 
@@ -150,8 +151,8 @@ async fn process_special_cert() {
     let committee = committee_with_base_port(16_000);
 
     // Make a header, cert and the accept_vote we expect to receive.
-    
-    let (public_key, secret_key) = keys().pop().unwrap();
+    println!("Leader keys {}, {}, {}, {}", leader_keys(1).0, leader_keys(2).0, leader_keys(3).0, leader_keys(4).0);
+    let (public_key, secret_key) = leader_keys(4); //keys().get(4).unwrap();
     let (public_key_1, secret_key_1) = leader_keys(1);
     
     let ticket = Ticket {hash: Header::genesis(&committee).id, qc: QC::genesis(&committee), tc: None, view: 0 , round: 0};
@@ -189,12 +190,16 @@ async fn process_special_cert() {
     tx_consensus.send(certificate).await.unwrap();
 
     //process_special_cert should also call process_special_header
+
     let received = rx_validation.recv().await.unwrap();
     //println!("Received validation: {:?}", received);
     assert_eq!(received.1, validate.1);
     assert_eq!(received.2, validate.2);
 
+
     assert!(handle.await.is_ok());
+
+
 }
 
 #[tokio::test]
