@@ -83,6 +83,7 @@ pub struct Core {
     current_header: Header,
     /// Aggregates votes into a certificate.
     votes_aggregator: VotesAggregator,
+    //votes_aggregators: HashMap<Round, VotesAggregator>, //TODO: To accomodate all to all, the map should be map<round, map<publickey, VotesAggreagtor>>
     /// Aggregates certificates to use as parents for new headers.
     certificates_aggregators: HashMap<Round, Box<CertificatesAggregator>>, //Keep the Set of Certs = Edges for multiple rounds.
     /// A network sender to send the batches to the other workers.
@@ -148,6 +149,7 @@ impl Core {
                 processing: HashMap::with_capacity(2 * gc_depth as usize),
                 //current_header: Header::default(),
                 votes_aggregator: VotesAggregator::new(),
+                //votes_aggregator: HashMap::with_capacity(2 * gc_depth as usize),
                 certificates_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 network: ReliableSender::new(),
                 cancel_handlers: HashMap::with_capacity(2 * gc_depth as usize),
@@ -195,6 +197,9 @@ impl Core {
             .or_insert_with(HashSet::new)
             .insert(header.id.clone());
 
+        if header.is_special {
+            println!("processing special block at replica? {}", self.name);
+        }
         // Ensure we have the parents. If at least one parent is missing, the synchronizer returns an empty
         // vector; it will gather the missing parents (as well as all ancestors) from other nodes and then
         // reschedule processing of this header.
@@ -432,6 +437,9 @@ impl Core {
             return Ok(());
         }
 
+        if certificate.header.is_special {
+            println!("processing special block certificate at replica? {}", self.name);
+        }
          //Additional special block processing
          // //Note: If it is a special block, then don't need to wait for the special edge parent. ==> generate a special cert for the parent to pass to the DAG
         if certificate.header.is_special && certificate.header.special_parent.is_some() {
@@ -441,7 +449,8 @@ impl Core {
                 (None, true) => {},
                 // If we have parent header => create cert for committer
                 (Some(special_parent_dummy_cert), _) => {
-                    self.process_certificate(special_parent_dummy_cert).await?;
+                    self.process_certificate(special_parent_dummy_cert).await?; //TODO: if the parent header is our own, call process_own_header, and add an aggregator to the map.
+                                                                                    //Alternatively, if we want to support all-to-all, then we want to declare the aggregator in process_header
 
                         //FIXME: this process_cert call will result in a dummy cert being stored. Future sync requests will retrieve the dummy cert and fail sanitization....
                             //-> Can fix this by only writing to store if not empty
@@ -499,10 +508,19 @@ impl Core {
                 .expect("Failed to send certificate to committer");
         
 
-        
+        if certificate.header.is_special {
+                    println!("trying to upcall at replica? {}", self.name);
+        }
          //If current_header == special && whole quorum is valid ==> pass forward to consensus layer  (if not, then this cert is only relevant to the DAG layer.)
+        if certificate.header.is_special {
+            for valid in &certificate.special_valids {
+                println!("votes: valid? {}", valid);
+            }
+        }
+       
         let sum: u8 = certificate.special_valids.iter().sum();
         if certificate.header.is_special && (sum as u32) >= self.committee.quorum_threshold() {
+        //if certificate.header.is_special && certificate.special_valids[0] == 1 && matching_valids(&certificate.special_valids){
              //Send it to the consensus layer. ==> all replicas will vote.
             let id = certificate.header.id.clone();
             if let Err(e) = self.tx_consensus.send(certificate).await {
@@ -511,6 +529,7 @@ impl Core {
                     id, e
                 );
             }
+            println!("completed upcall at replica? {}", self.name);
         }
         else{
             //TODO: Wait for more. ==> Problem: Need to form a new cert that has 2f+1 valids. Wouldnt match the cert we have upcalled to committer.
@@ -627,7 +646,7 @@ impl Core {
 
         loop {
             // If any of the timers for invalidations have expired then remove them from the queue
-            self.poll_remove(&mut cx).await;
+            //self.poll_remove(&mut cx).await;
 
             let result = tokio::select! {
                 // We receive here messages from other primaries.

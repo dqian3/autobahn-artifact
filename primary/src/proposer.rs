@@ -129,7 +129,9 @@ impl Proposer {
 
     
     async fn make_header(&mut self, is_special: bool) {
-        println!("make block. special? {}", is_special);
+        if is_special {
+            println!("make special block at replica? {}", self.name);
+        }
 
         let mut ticket = None;
         mem::swap(&mut self.ticket, &mut ticket); //Reset self.ticket; and move ticket (this just avoids copying)

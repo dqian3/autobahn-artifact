@@ -612,12 +612,13 @@ impl Core {
     #[async_recursion]
     async fn process_special_header(&mut self, header: Header) -> ConsensusResult<()> {
 
+        println!("CONSENSUS: processing special block certificate at replica? {}", self.name);
         let mut special_valid: u8 = 1;
 
         //A) CHECK WHETHER HEADER IS CURRENT ==> If not, reply invalid   
 
                 //1) Check if we have already voted in this view > last voted view
-                if header.view > self.last_voted_view {
+                if self.last_voted_view >= header.view {
                     special_valid = 0;
                 }
                 /*ensure!(
@@ -643,7 +644,7 @@ impl Core {
 
                 // NOTE: Invalid replies/Proofs thus only need to prove timeout case (since otherwise replicas would stay silent) ==> i.e. checking TC
                 // (or a consecutive QC) for higher view suffices. (I.e. don't need to check round number)
-
+        
 
          //Indicate that we are processing this header.
          self.processing_headers
