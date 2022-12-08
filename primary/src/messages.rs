@@ -14,10 +14,9 @@ use std::convert::TryInto;
 use std::fmt;
 //use crate::messages_consensus::{QC, TC};
 
-//use crate::error_consensus::{ConsensusError, ConsensusResult};
-//#[cfg(test)]
-//#[path = "tests/messages_tests.rs"]
-//pub mod messages_tests;
+#[cfg(test)]
+#[path = "tests/messages_tests.rs"]
+pub mod messages_tests;
 
 ///////////
 #[derive(Clone, Serialize, Deserialize, Default)]

@@ -392,6 +392,8 @@ fn spawn_nodes_with_dag(
             let(tx_request_header_sync, mut rx_request_header_sync) = channel(1);
 
             let replica = name.clone();
+            println!("Spawning node {}", replica.clone());
+
             let name_copy = name.clone();
             let mut store_copy = store.clone();
             let committee_copy = committee.clone();
@@ -428,7 +430,7 @@ fn spawn_nodes_with_dag(
 
             });
             
-            println!("Before spawn");
+            
             // Spawn the consensus engine.
             tokio::spawn(async move {
 

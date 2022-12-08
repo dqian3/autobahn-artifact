@@ -12,7 +12,7 @@ use crate::timer::Timer;
 use async_recursion::async_recursion;
 use bytes::Bytes;
 use config::Committee;
-use crypto::Hash as _;
+use crypto::{Hash as _, CryptoError};
 use crypto::{PublicKey, SignatureService, Digest};
 use futures::FutureExt;
 use log::{debug, error, warn};
@@ -471,7 +471,9 @@ impl Core {
 
         //verify qc
         // Ensure the vote is well formed.
-        qc.verify(&self.committee)?;
+        if let Err(_) =  qc.verify(&self.committee){
+            return Err(ConsensusError::InvalidQC(qc.clone()));
+        } 
         
         // Process the QC.  Adopts view, high qc, and resets timer. //Adopt prev_view_round if higher.
         self.process_qc(qc).await;
@@ -578,49 +580,9 @@ impl Core {
         self.round = max(self.round, qc.view_round);
     }
 
-    //Call process_special_header upon receiving upcall from Dag layer.
-    #[async_recursion]
-    async fn process_special_header(&mut self, header: Header) -> ConsensusResult<()> {
-
-         //TODO: FIXME: Important: Process_header should still complete (i.e. not throw errors), since validation needs to be asynchronous --> It should always call back down (with val=0 in this case)
-        let mut special_valid: u8 = 1;
-
-        if header.view > self.last_voted_view {
-            special_valid = 0;
-        }
-
-         //1) Check if we have already voted in this view > last voted view
-        /*ensure!(
-            header.view > self.last_voted_view,
-            ConsensusError::TooOld(header.id, header.view)  //TODO: Still want to reply invalid in DAG. ==> Corner-case: Have already moved views, but Dag still requires cert.
-        );*/
-        
-         //If we have not voted, but have already committed higher view, vote invalid --> TODO: Should suffice to not reply
-        if self.last_committed_view >= header.view {
-            //self.tx_validation.send((header, 0, None, None)).await.expect("Failed to send payload");
-            //return Ok(()); //TODO: change to invalid = 0 and reply.
-            special_valid = 0;
-        }
-
-        //Indicate that we are processing this header.
-        self.processing_headers
-            .entry(header.round)
-            .or_insert_with(HashSet::new)
-            .insert(header.id.clone());
-
-        
-        //0)Check if Ticket valid. If we have not processed qc/tc in ticket yet then process it.
-        ensure!(
-            header.ticket.is_some(),
-            ConsensusError::InvalidTicket
-        );
-        let ticket = header.ticket.clone().unwrap();
-        /*if ticket.qc.view > self.last_committed_view {
-            self.handle_qc(&ticket.qc).await?;
-        }*/
-
+    async fn process_ticket(&mut self, header: &Header, ticket: Ticket) -> ConsensusResult<()>{
         //Process ticket qc/tc (i.e. commit last proposal)
-        match ticket.tc.clone() {
+        match ticket.tc {
             Some(tc) => {
                 // check if tc for prev view.
                 ensure!(
@@ -629,7 +591,7 @@ impl Core {
                 );
                 // check if we need to process qc.
                 if tc.view > self.last_committed_view { // Since we update last_committed_view only upon commit it is implied that last_committed_view <= view
-                    self.handle_tc(&tc).await?; //TODO: don't do this redundantly/check for duplicates 
+                    return self.handle_tc(&tc).await; //TODO: don't do this redundantly/check for duplicates 
                 }
             },
             None => {
@@ -639,78 +601,135 @@ impl Core {
                 );
 
                 if ticket.qc.view > self.last_committed_view {
-                    self.handle_qc(&ticket.qc).await?; //TODO: don't do this redundantly/check for duplicates 
+                    return self.handle_qc(&ticket.qc).await; //TODO: don't do this redundantly/check for duplicates 
                 }
             }
-        };
+        }
+        Ok(())
+    }
 
-        
-      
-        //IGNORE Comment (only true if we use Ticket as proof for validation result.)
-            // // I.e. whether have QC/TC for view v-1 
-            // // If don't have QC/TC. Start a waiter. If waiter triggers, call this function again (or directly call down validation complete)
+    //Call process_special_header upon receiving upcall from Dag layer.
+    #[async_recursion]
+    async fn process_special_header(&mut self, header: Header) -> ConsensusResult<()> {
+
+        let mut special_valid: u8 = 1;
+
+        //A) CHECK WHETHER HEADER IS CURRENT ==> If not, reply invalid   
+
+                //1) Check if we have already voted in this view > last voted view
+                if header.view > self.last_voted_view {
+                    special_valid = 0;
+                }
+                /*ensure!(
+                    header.view > self.last_voted_view,
+                    ConsensusError::TooOld(header.id, header.view)  //TODO: Still want to reply invalid in DAG. ==> Corner-case: Have already moved views, but Dag still requires cert.
+                );*/
+                
+                //2) If we have not voted, but have already committed higher view, vote invalid
+                if self.last_committed_view >= header.view {
+                    special_valid = 0;
+                }
+
+                if special_valid == 0 {
+                    self.tx_validation.send((header, special_valid, None, None)).await .expect("Failed to send payload");
+                    return Ok(());
+                }
+            
+                // TODO: If we have already voted for this view; or we have already voted in a previoius view for this vote round or
+                // bigger ==> then don't vote at all. The proposer must be byz.
+                // But if we cannot vote for this view because of a timeout; then do want to vote for Dag, but invalidate the specialness.
+                // Problem: Might not have a proof yet. ==> Need to wait for it.
+                // (I.e. if don't have conflict QC/TC, start a waiter)
+
+                // NOTE: Invalid replies/Proofs thus only need to prove timeout case (since otherwise replicas would stay silent) ==> i.e. checking TC
+                // (or a consecutive QC) for higher view suffices. (I.e. don't need to check round number)
+
+
+         //Indicate that we are processing this header.
+         self.processing_headers
+         .entry(header.view)
+         .or_insert_with(HashSet::new)
+         .insert(header.id.clone());
+     
 
     
+        //B) CHECK HEADER CORRECTNESS ==> If not, don't need to reply. Proposer must be byz
 
-        // TODO: If we have already voted for this view; or we have already voted in a previoius view for this vote round or
-        // bigger ==> then don't vote at all. The proposer must be byz.
-        // But if we cannot vote for this view because of a timeout; then do want to vote for Dag, but invalidate the specialness.
-        // Problem: Might not have a proof yet. ==> Need to wait for it.
-        // (I.e. if don't have conflict QC/TC, start a waiter)
+            //1) Header signature correct => If false, dont need to reply
+            if let Err(_) = header.verify(&self.committee){
+                return Err(ConsensusError::InvalidHeader);
+            } 
 
-        // NOTE: Proofs thus only need to prove timeout case (since otherwise replicas would stay silent) ==> i.e. checking TC
-        // (or a consecutive QC) for higher view suffices. (I.e. don't need to check round number)
+            //2) Header author == view leader
+            ensure!(
+                header.author == self.leader_elector.get_leader(header.view),
+                 ConsensusError::WrongProposer
+            );
 
-        // 2) round > last round
-        // Only process special header if the round number is increasing  // self.round >= ticket.qc.view_round since we
-        // process_qc first.
-        ensure!(
-            header.round > self.round,
-            ConsensusError::NonMonotonicRounds(header.round, self.round)
-        );
+            //3) Ensure that proposed round isnt reaching too far ahead TODO:
+                // Check that header.prev_view_round is satisfied by ticket. 
+                //FIXME: Technically want to do this in the DAG layer already; to avoid the DAG joining a high round that is invalid/too far ahead.
+                //NOTE: DAG doesn't "join round", it just keeps track. If it receives a high round, but there is no quorum, it doesnt matter.
+                    //honest proposer should fall into the trap of proposing something too high ===> can guard this by ensuring ticket vouches for round
+                    // ===> transitively, ticket only exist if enough replicas checked during process_special_header that round does not exceed parents by 2
+                    // i.e. check that round = max(parents+2, last_consensus_round+1);
 
-        //TODO: Ensure that proposed round isnt reaching too far ahead
-        // Check that header.prev_view_round is satisfied by ticket. 
-        //FIXME: Technically want to do this in the DAG layer already; to avoid the DAG joining a high round that is invalid/too far ahead.
-        //NOTE: DAG doesn't "join round", it just keeps track. If it receives a high round, but there is no quorum, it doesnt matter.
-            //honest proposer should fall into the trap of proposing something too high ===> can guard this by ensuring ticket vouches for round
-            // ===> transitively, ticket only exist if enough replicas checked during process_special_header that round does not exceed parents by 2
-            // i.e. check that round = max(parents+2, last_consensus_round+1);
+            //4)Check if Ticket valid. If we have not processed qc/tc in ticket yet then process it.
 
+                        // ensure!(
+                        //     header.ticket.is_some(),
+                        //     ConsensusError::InvalidTicket
+                        // );
+            if header.ticket.is_none() { //TODO: Could ignore ticket validation if we have header.consensus_parent (=ticket) in store already.
+                special_valid = 0;
+            }
+            else{ //If there is a ticket attached
+                let ticket = header.ticket.clone().unwrap();
+                if let Err(e) = self.process_ticket(&header, ticket).await {
+                    return Err(e);
+                }
+            }
+                //IGNORE Comment (only true if we use Ticket as proof for validation result.)
+                    // // I.e. whether have QC/TC for view v-1 
+                    // // If don't have QC/TC. Start a waiter. If waiter triggers, call this function again (or directly call down validation complete)
 
-        //3) Header signature correct
-        header.verify(&self.committee)?;
-
-
-        //4) Header author == view leader
-        ensure!(
-            header.author == self.leader_elector.get_leader(header.view),
-            ConsensusError::WrongProposer
-        );
-
-
-        //6) Update latest prepared. Update latest_voted_view.
-        self.view = header.view; //
-        self.increase_last_voted_view(self.view);
-
-        let copy = header.clone();
-        let id = copy.id.clone();
-
-        self.high_prepare = copy.clone();
-
-        self.store_header(&header).await;
-        self.stored_headers.insert(id, copy);
-       
-        //self.round = header.round; //TODO: FIXME: only update self.round upon commit(?)
-        // (Committed Headers should be monotonic. Since consensus is sequential, should suffice to update it then?)
+                //5) proposed round > last committed round
+                // Only process special header if the round number is increasing  // self.round >= ticket.qc.view_round since we process_qc first.
+                if header.round <= self.round {
+                    special_valid = 0;
+                }
+                // ensure!(
+                //     header.round > self.round,
+                //     ConsensusError::NonMonotonicRounds(header.round, self.round)
+                // );
         
-        //FIXME: Dummy testing with validation == true.
-        //let qc: Option<QC> = Some(ticket.qc);
-        //let tc: Option<TC> = None;
+    
+        //C) PROCESS CORRECT SPECIAL HEADER
+        
+            //Update latest prepared. Update latest_voted_view.
+            self.view = header.view; //
+            self.increase_last_voted_view(self.view);
+
+            let copy = header.clone();
+            let id = copy.id.clone();
+
+            self.high_prepare = copy.clone();
+
+            self.store_header(&header).await;
+            self.stored_headers.insert(id, copy);
+            
+                //self.round = header.round; //only update self.round upon commit(?)
+                // (Committed Headers should be monotonic. Since consensus is sequential, should suffice to update it then?)
+        
+        //D) SEND REPLY TO THE DAG
+
+        //Dummy proofs ==> Currently are NOT using proofs, but using timeouts.
+        let qc: Option<QC> = None;
+        let tc: Option<TC> = None;
 
         // Loopback to RB, confirming that special block is valid.
         self.tx_validation
-            .send((header, special_valid, None, None))
+            .send((header, special_valid, qc, tc))
             .await
             .expect("Failed to send payload");
 
@@ -802,8 +821,7 @@ impl Core {
 
         //3) Send out Vote
 
-        let vote = AcceptVote::new(&header.clone(), self.name, self.signature_service.clone()).await;
-
+        let vote = AcceptVote::new(&header, self.name, self.signature_service.clone()).await;  
         debug!("Created {:?}", vote.digest());
         
         let next_leader = self.leader_elector.get_leader(self.view + 1);
@@ -921,7 +939,10 @@ impl Core {
     
 
     async fn handle_tc(&mut self, tc: &TC) -> ConsensusResult<()> {
-        tc.verify(&self.committee)?; //FIXME: Added this because I didnt' see any TC validation elsewhere. If there is already, remove this.
+        //tc.verify(&self.committee)?; //FIXME: Added this because I didnt' see any TC validation elsewhere. If there is already, remove this.
+        if let Err(_) =  tc.verify(&self.committee){
+            return Err(ConsensusError::InvalidTC(tc.clone()));
+        } 
 
         self.process_tc(tc).await
     }

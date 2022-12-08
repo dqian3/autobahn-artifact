@@ -1,5 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::primary::{Round, View};
+use crate::{primary::{Round, View}, messages::{QC, TC}};
 use crypto::{CryptoError, Digest, PublicKey};
 use store::StoreError;
 use thiserror::Error;
@@ -128,6 +128,15 @@ pub enum ConsensusError {
 
     #[error("Received block for round {0} smaller than current_round {1}")]
     NonMonotonicRounds(Round, Round),
+
+    #[error("Header proposer provided invalid Header")]
+    InvalidHeader,
+
+    #[error("QC invalid {0:?}")]
+    InvalidQC(QC),
+
+    #[error("TC invalid {0:?}")]
+    InvalidTC(TC),
 
     #[error("Header proposer provided no ticket")]
     InvalidTicket,

@@ -45,7 +45,7 @@ impl<Handler: MessageHandler> Receiver<Handler> {
 
     /// Main loop responsible to accept incoming connections and spawn a new runner to handle it.
     async fn run(&self) {
-        println!("address resuse {}", self.address.clone().to_string());
+        println!("receiver address {}", self.address.clone().to_string());
         let listener = TcpListener::bind(&self.address)
             .await
             .expect("Failed to bind TCP port");

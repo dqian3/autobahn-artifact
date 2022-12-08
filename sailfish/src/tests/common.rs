@@ -1,5 +1,5 @@
 use super::*;
-use config::Committee;
+use config::{Committee, Authority, ConsensusAddresses, PrimaryAddresses, WorkerAddresses};
 use primary::error::{ConsensusError};
 use primary::messages::Ticket;
 use crate::consensus::ConsensusMessage;
@@ -15,6 +15,7 @@ use futures::stream::StreamExt as _;
 use primary::messages::Header;
 use rand::rngs::StdRng;
 use rand::SeedableRng as _;
+use ::core::panic;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
@@ -27,20 +28,20 @@ pub fn keys() -> Vec<(PublicKey, SecretKey)> {
 }
 
 // Fixture.
-pub fn committee() -> Committee {
-    Committee::new(
-        keys()
-            .into_iter()
-            .enumerate()
-            .map(|(i, (name, _))| {
-                let address = format!("127.0.0.1:{}", i).parse().unwrap();
-                let stake = 1;
-                (name, stake, address)
-            })
-            .collect(),
-        /* epoch */ //100,
-    )
-}
+// pub fn committee() -> Committee {
+//     Committee::new(
+//         keys()
+//             .into_iter()
+//             .enumerate()
+//             .map(|(i, (name, _))| {
+//                 let address = format!("127.0.0.1:{}", i).parse().unwrap();
+//                 let stake = 1;
+//                 (name, stake, address)
+//             })
+//             .collect(),
+//         /* epoch */ //100,
+//     )
+// }
 
 // Fixture.
 // pub fn committee_with_base_port(base_port: u16) -> Committee {
@@ -54,6 +55,46 @@ pub fn committee() -> Committee {
 //     committee
 // }
 
+
+pub fn committee() -> Committee {
+    Committee {
+        authorities: keys()
+            .iter()
+            .enumerate()
+            .map(|(i, (id, _))| {
+                let consensus = ConsensusAddresses {
+                    consensus_to_consensus: format!("127.0.0.1:{}", 000 + i).parse().unwrap(),
+                };
+                let primary = PrimaryAddresses {
+                    primary_to_primary: format!("127.0.0.1:{}", 100 + i).parse().unwrap(),
+                    worker_to_primary: format!("127.0.0.1:{}", 200 + i).parse().unwrap(),
+                };
+                let workers = vec![(
+                    0,
+                    WorkerAddresses {
+                        primary_to_worker: format!("127.0.0.1:{}", 300 + i).parse().unwrap(),
+                        transactions: format!("127.0.0.1:{}", 400 + i).parse().unwrap(),
+                        worker_to_worker: format!("127.0.0.1:{}", 500 + i).parse().unwrap(),
+                    },
+                )]
+                .iter()
+                .cloned()
+                .collect();
+                (
+                    *id,
+                    Authority {
+                        stake: 1,
+                        consensus,
+                        primary,
+                        workers,
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
+
 // Fixture.
 pub fn committee_with_base_port(base_port: u16) -> Committee {
     let mut committee = committee();
@@ -64,9 +105,10 @@ pub fn committee_with_base_port(base_port: u16) -> Committee {
         primary.primary_to_primary.set_port(base_port + port);
 
         let port = primary.worker_to_primary.port();
-        primary.worker_to_primary.set_port(base_port + port + 10);
+        primary.worker_to_primary.set_port(base_port + port);
 
-        authority.consensus.consensus_to_consensus.set_port(base_port + port + 40);
+        let port =  authority.consensus.consensus_to_consensus.port();
+        authority.consensus.consensus_to_consensus.set_port(base_port + port);
 
         for worker in authority.workers.values_mut() {
             let port = worker.primary_to_worker.port();
