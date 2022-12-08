@@ -98,6 +98,8 @@ pub struct Core {
     special_valid_delay_queue: DelayQueue<Digest>,
     // Set containing all special header digests that we have inserted into the delay queue
     special_valid_digests: HashMap<Digest, delay_queue::Key>,
+    // Hashmap containing votes aggregators
+    special_valid_vote_aggregators: HashMap<Digest, VotesAggregator>,
 }
 
 impl Core {
@@ -155,6 +157,7 @@ impl Core {
                 special_valid_headers: HashMap::with_capacity(2 * gc_depth as usize),
                 special_valid_delay_queue: DelayQueue::new(),
                 special_valid_digests: HashMap::with_capacity(2 * gc_depth as usize),
+                special_valid_vote_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
             }
             .run()
             .await;
@@ -329,8 +332,12 @@ impl Core {
     #[async_recursion]
     async fn process_vote(&mut self, vote: Vote) -> DagResult<()> {
         debug!("Processing {:?}", vote);
-    
+
+        self.special_valid_vote_aggregators.entry(vote.clone().id).or_insert(VotesAggregator::new());
+        let vote_agg = self.special_valid_vote_aggregators.get(&vote.id).into();
+
         // Add it to the votes' aggregator and try to make a new certificate.
+
         if let Some(certificate) =
             self.votes_aggregator
                 .append(vote, &self.committee, &self.current_header)?   //TODO: If want to use all to all broadcast, then must create a votes_aggregator for every header we are processing.
