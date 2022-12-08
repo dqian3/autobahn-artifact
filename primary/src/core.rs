@@ -501,7 +501,8 @@ impl Core {
 
         
          //If current_header == special && whole quorum is valid ==> pass forward to consensus layer  (if not, then this cert is only relevant to the DAG layer.)
-        if certificate.header.is_special && certificate.special_valids[0] == 1 && matching_valids(&certificate.special_valids){
+        let sum: u8 = certificate.special_valids.iter().sum();
+        if certificate.header.is_special && (sum as u32) >= self.committee.quorum_threshold() {
              //Send it to the consensus layer. ==> all replicas will vote.
             let id = certificate.header.id.clone();
             if let Err(e) = self.tx_consensus.send(certificate).await {
