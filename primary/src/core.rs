@@ -69,28 +69,33 @@ pub struct Core {
 
     /// The last garbage collected round.
     gc_round: Round,
-    /// The authors of the last voted headers.
+
+    /// The authors of the last voted headers. (Ensures only voting for one header per round)
     last_voted: HashMap<Round, HashSet<PublicKey>>,
-    /// The set of headers we are currently processing.
-    processing: HashMap<Round, HashSet<Digest>>,
+    // /// The set of headers we are currently processing.
+    processing: HashMap<Round, HashSet<Digest>>, //NOTE: Keep processing separate from current_headers ==> to allow us to process multiple headers from same replica (e.g. in case we first got a header that isnt the one that creates a cert)
     /// The last header we proposed (for which we are waiting votes).
-    current_header: Header,
-    /// Aggregates votes into a certificate.
-    votes_aggregator: VotesAggregator,
+    // current_header: Header,
+
+    // Keeps track of current headers
+    //TODO: Merge current_headers && processing.
+    current_headers: HashMap<Round, HashMap<Digest, Header>>, ///HashMap<Digest, Header>, //Note, re-factored this map to do GC cleaner. 
+    // Hashmap containing votes aggregators
+    vote_aggregators: HashMap<Round, HashMap<Digest, Box<VotesAggregator>>>,  //HashMap<Digest, VotesAggregator>,
+    // /// Aggregates votes into a certificate.
+    // votes_aggregator: VotesAggregator,
+
     //votes_aggregators: HashMap<Round, VotesAggregator>, //TODO: To accomodate all to all, the map should be map<round, map<publickey, VotesAggreagtor>>
     /// Aggregates certificates to use as parents for new headers.
-    certificates_aggregators: HashMap<Round, Box<CertificatesAggregator>>, //Keep the Set of Certs = Edges for multiple rounds.
+    certificates_aggregators: HashMap<Round, Box<CertificatesAggregator>>, //Keep the Set of Certs = Edges for multiple rounds. //TODO: for all-to-all need to store CertAggregators per node.
     /// A network sender to send the batches to the other workers.
     network: ReliableSender,
     /// Keeps the cancel handlers of the messages we sent.
     cancel_handlers: HashMap<Round, Vec<CancelHandler>>,
 
-    // Keeps track of current headers
-    current_headers: HashMap<Digest, Header>,
-    // Hashmap containing votes aggregators
-    vote_aggregators: HashMap<Digest, VotesAggregator>,
+   
     // GC the vote aggregators and current headers
-    gc_map: HashMap<Round, Digest>,
+    // gc_map: HashMap<Round, Digest>,
 }
 
 impl Core {
@@ -118,7 +123,7 @@ impl Core {
         tokio::spawn(async move {
             Self {
                 name,
-                current_header: Header::genesis(&committee),
+                //current_header: Header::genesis(&committee),
                 committee,
                 store,
                 synchronizer,
@@ -140,14 +145,14 @@ impl Core {
                 last_voted: HashMap::with_capacity(2 * gc_depth as usize),
                 processing: HashMap::with_capacity(2 * gc_depth as usize),
                 //current_header: Header::default(),
-                votes_aggregator: VotesAggregator::new(),
-                //votes_aggregator: HashMap::with_capacity(2 * gc_depth as usize),
+                current_headers: HashMap::with_capacity(2 * gc_depth as usize),
+                //votes_aggregator: VotesAggregator::new(),
+                vote_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 certificates_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 network: ReliableSender::new(),
                 cancel_handlers: HashMap::with_capacity(2 * gc_depth as usize),
-                vote_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
-                current_headers: HashMap::with_capacity(2 * gc_depth as usize),
-                gc_map: HashMap::with_capacity(2 * gc_depth as usize),
+               
+                //gc_map: HashMap::with_capacity(2 * gc_depth as usize),
             }
             .run()
             .await;
@@ -157,10 +162,21 @@ impl Core {
     async fn process_own_header(&mut self, header: Header) -> DagResult<()> {
     
         // Reset the votes aggregator.
-        self.current_header = header.clone();
-        self.votes_aggregator = VotesAggregator::new();
+        // self.current_header = header.clone();
+        // self.votes_aggregator = VotesAggregator::new();
 
-        self.current_headers.entry(header.clone().id).or_insert(header.clone());
+        //TODO: for all-to-all: Don't let other replicas insert into current_headers twice.
+        self.current_headers
+            .entry(header.round)
+            .or_insert_with(HashMap::new)
+            .entry(header.id.clone())
+            .or_insert(header.clone());
+
+        self.processing
+        .entry(header.round)
+        .or_insert_with(HashSet::new)
+        .insert(header.id.clone());
+
 
         // Broadcast the new header in a reliable manner.
         let addresses = self
@@ -270,10 +286,7 @@ impl Core {
             .or_insert_with(HashSet::new)
             .insert(header.author)  //checks that we have not already voted.
         {
-            //TODO: only do this if header is special
-              //TODO: For special headers: Upcall to consensus layer to confirm whether the special header is valid for consensus
-            // If special header is ones own, skip this and vote immediatley, Actually: For own block should also upcall. View might be outdated if accepted a view change...
-            // Otherwise, upcall. On downcall, create message and send (mark it special valid/invalid)
+           //  For special headers: Upcall to consensus layer to confirm whether the special header is valid for consensus
             if header.is_special {
                 self.tx_special
                 .send(header)
@@ -328,188 +341,69 @@ impl Core {
     async fn process_vote(&mut self, vote: Vote) -> DagResult<()> {
         debug!("Processing {:?}", vote);
 
-        let vote_agg = self.vote_aggregators.entry(vote.clone().id).or_insert(VotesAggregator::new());
-        let curr_header = self.current_headers.get(&vote.id);
+        //TODO: For all to all communication: curr_header might exist --> must add to current_headers inside process_header, and require a sync here on current_header being in store.
+       let current_header = self.current_headers
+        .entry(vote.round)
+        .or_insert_with(HashMap::new)
+        .get(&vote.id);
 
-        match curr_header {
-            Some(current_header) => {
-                let cert = vote_agg.append(vote, &self.committee, &current_header)?;
-
-                if current_header.is_special {
-                    let sum: u8 = vote_agg.special_valids.iter().sum();
-
-                    if (sum as u32) >= self.committee.quorum_threshold() {
-                        let special_cert = Certificate {header: current_header.clone(), votes: vote_agg.votes.clone(), special_valids: vote_agg.special_valids.clone() };
-                        let addresses = self
-                            .committee
-                            .others_primaries(&self.name)
-                            .iter()
-                            .map(|(_, x)| x.primary_to_primary)
-                            .collect();
-                        let bytes = bincode::serialize(&PrimaryMessage::Certificate(special_cert.clone()))
-                            .expect("Failed to serialize our own certificate");
-                        let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
-                        self.cancel_handlers
-                            .entry(special_cert.round())
-                            .or_insert_with(Vec::new)
-                            .extend(handlers);
-
-                        self.process_certificate(special_cert)
-                            .await
-                            .expect("Failed to process valid certificate");
-
-                        return Ok(())
-                    }
-                }
-
-                if let Some(certificate) = cert   //TODO: If want to use all to all broadcast, then must create a votes_aggregator for every header we are processing.
-                {
-                   debug!("Assembled {:?}", certificate);
-
-                   // // //FIXME: Just testing.
-                   //  self.tx_committer.send(certificate.clone()).await.expect("Failed to send special parent certificate to committer");
-
-
-                   // Broadcast the certificate.
-                   let addresses = self
-                       .committee
-                       .others_primaries(&self.name)
-                       .iter()
-                       .map(|(_, x)| x.primary_to_primary)
-                       .collect();
-                   let bytes = bincode::serialize(&PrimaryMessage::Certificate(certificate.clone()))
-                       .expect("Failed to serialize our own certificate");
-                   let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
-                   self.cancel_handlers
-                       .entry(certificate.round())
-                       .or_insert_with(Vec::new)
-                       .extend(handlers);
-
-                   //TODO: Need to wait for additional votes if special and not enough valid votes. (A little tricky, since we may already be moving the round => i.e. current_header is no longer matching)
-                   // Assumption: if additional votes come in, new certificates will be formed (certificate formation can happen more than once)
-                   /*if certificate.header.is_special {
-                       // Count how many valid votes
-                       let num_valids: u8 = certificate.special_valids.iter().sum();
-                       let digest = certificate.header.digest();
-
-                       // If not 2f+1 special valid votes then add to our hashmap of special headers that are processing
-                       if (num_valids as u32) < self.committee.quorum_threshold() {
-                           match self.special_valid_headers.clone().get(&digest) {
-                               Some(cert) => {
-                                   // Update the hashmap only if the new certificate has more special valid votes
-                                   let sum: u8 = cert.special_valids.iter().sum();
-                                   // If the new certificate has more special valid votes then replace in our hashmap
-                                   if num_valids > sum {
-                                       self.special_valid_headers.entry(certificate.header.digest()).or_insert(cert.clone());
-                                   }
-                               }
-                               None => {
-                                   // Otherwise add the new certificate to the hashmap
-                                   self.special_valid_headers.entry(certificate.header.digest()).or_insert(certificate.clone());
-                                   // Start timer to wait for new certificate
-                                   let key = self.special_valid_delay_queue.insert(digest.clone(), Duration::from_millis(self.special_valid_timeout));
-                                   self.special_valid_digests.insert(digest, key);
-                               }
-                           }
-                       } else {
-                           // We Have enough special valids, cleanup hashmap, cancel the appropriate timer
-
-                           // Check to see whether header is in delay queue
-                           match self.special_valid_digests.get(&digest) {
-                               Some(key) =>  {
-                                   self.special_valid_delay_queue.remove(&key);
-                                   self.special_valid_digests.remove(&digest);
-                               }
-                               None => {}
-                           }
-                       }
-
-                   }*/
-
-                   //Process the new certificate.
-                   self.process_certificate(certificate)
-                       .await
-                       .expect("Failed to process valid certificate");
-               }
-               return Ok(())
-
-            }
-            None => return Ok(())
+        if current_header == None {
+            panic!("Currently should only receive votes for our own headers -- which are the only ones in current_header for now. Not yet logged");
+            return Ok(());
         }
 
+        let current_header = current_header.unwrap();
+   
+        let vote_aggregator = self
+            .vote_aggregators
+            .entry(current_header.round)
+            .or_insert_with(HashMap::new)
+            .entry(current_header.id.clone())
+            .or_insert_with(|| Box::new(VotesAggregator::new()));
 
-        // Add it to the votes' aggregator and try to make a new certificate.
-
-        /*if let Some(certificate) = cert   //TODO: If want to use all to all broadcast, then must create a votes_aggregator for every header we are processing.
+        if let (Some(certificate), first_quorum, special_ready) = vote_aggregator.append(vote, &self.committee, current_header)?
         {
             debug!("Assembled {:?}", certificate);
-            
-            // // //FIXME: Just testing.
-            //  self.tx_committer.send(certificate.clone()).await.expect("Failed to send special parent certificate to committer");
+            if current_header.is_special {
+                 //If current_header == special && whole quorum is valid ==> pass forward to consensus layer  
+                if special_ready {
+                    debug!("Assembled complete special certificate: {:?}", certificate);
+                   
+                    //Send it to the consensus layer. ==> all replicas will vote.
+                    let id = certificate.header.id.clone();
+                    if let Err(e) = self.tx_consensus.send(certificate.clone()).await {    //NOTE: Process_cert will be called after this, which will start DAG parent sync. committer.CertificateWaiter will wait for the DAG parents.
+                        warn!("Failed to deliver certificate {} to the consensus: {}", id, e);
+                    }
+                }
+            }
 
+            if !first_quorum { //Don't need to broadcast and process_cert again.
+                return Ok(());
+            }
 
             // Broadcast the certificate.
             let addresses = self
-                .committee
-                .others_primaries(&self.name)
-                .iter()
-                .map(|(_, x)| x.primary_to_primary)
-                .collect();
+                   .committee
+                   .others_primaries(&self.name)
+                   .iter()
+                   .map(|(_, x)| x.primary_to_primary)
+                   .collect();
             let bytes = bincode::serialize(&PrimaryMessage::Certificate(certificate.clone()))
-                .expect("Failed to serialize our own certificate");
+                   .expect("Failed to serialize our own certificate");
             let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
             self.cancel_handlers
-                .entry(certificate.round())
-                .or_insert_with(Vec::new)
-                .extend(handlers);
+                   .entry(certificate.round())
+                   .or_insert_with(Vec::new)
+                   .extend(handlers);
 
-            //TODO: Need to wait for additional votes if special and not enough valid votes. (A little tricky, since we may already be moving the round => i.e. current_header is no longer matching)
-            // Assumption: if additional votes come in, new certificates will be formed (certificate formation can happen more than once)
-            /*if certificate.header.is_special {
-                // Count how many valid votes
-                let num_valids: u8 = certificate.special_valids.iter().sum();
-                let digest = certificate.header.digest();
-
-                // If not 2f+1 special valid votes then add to our hashmap of special headers that are processing
-                if (num_valids as u32) < self.committee.quorum_threshold() {
-                    match self.special_valid_headers.clone().get(&digest) {
-                        Some(cert) => {
-                            // Update the hashmap only if the new certificate has more special valid votes
-                            let sum: u8 = cert.special_valids.iter().sum();
-                            // If the new certificate has more special valid votes then replace in our hashmap
-                            if num_valids > sum {
-                                self.special_valid_headers.entry(certificate.header.digest()).or_insert(cert.clone());
-                            }
-                        }
-                        None => {
-                            // Otherwise add the new certificate to the hashmap
-                            self.special_valid_headers.entry(certificate.header.digest()).or_insert(certificate.clone());
-                            // Start timer to wait for new certificate
-                            let key = self.special_valid_delay_queue.insert(digest.clone(), Duration::from_millis(self.special_valid_timeout));
-                            self.special_valid_digests.insert(digest, key);
-                        }
-                    }
-                } else {
-                    // We Have enough special valids, cleanup hashmap, cancel the appropriate timer
-
-                    // Check to see whether header is in delay queue
-                    match self.special_valid_digests.get(&digest) {
-                        Some(key) =>  {
-                            self.special_valid_delay_queue.remove(&key);
-                            self.special_valid_digests.remove(&digest);
-                        }
-                        None => {}
-                    }
-                }
-
-            }*/
-
-            //Process the new certificate. 
+            //Process the new certificate.
             self.process_certificate(certificate)
-                .await
-                .expect("Failed to process valid certificate");
+                   .await
+                   .expect("Failed to process valid certificate");
+           
         }
-        Ok(())*/
+
+        Ok(())
     }
 
     #[async_recursion]
@@ -551,6 +445,14 @@ impl Core {
                 (None, true) => {},
                 // If we have parent header => create cert for committer
                 (Some(special_parent_dummy_cert), _) => {
+                    //TESTING: Make sure we have logged this header if it is our own (could happen if child parent is processed first due to Tokio async)
+                    //This should not be necessary ==> process_own_header should be called in order.
+                    if special_parent_dummy_cert.header.author == self.name {
+                        let parent_header = special_parent_dummy_cert.header.clone();
+                        if None == self.current_headers.entry(parent_header.round).or_insert_with(HashMap::new).get(&parent_header.id) {
+                            panic!("This should never happen --> process_own_header should occur in order!");
+                        }
+                    }
                     self.process_certificate(special_parent_dummy_cert).await?; //TODO: if the parent header is our own, call process_own_header, and add an aggregator to the map.
                                                                                     //Alternatively, if we want to support all-to-all, then we want to declare the aggregator in process_header
 
@@ -609,36 +511,6 @@ impl Core {
                 .await
                 .expect("Failed to send certificate to committer");
         
-
-        if certificate.header.is_special {
-                    println!("trying to upcall at replica? {}", self.name);
-        }
-         //If current_header == special && whole quorum is valid ==> pass forward to consensus layer  (if not, then this cert is only relevant to the DAG layer.)
-        if certificate.header.is_special {
-            for valid in &certificate.special_valids {
-                println!("votes: valid? {}", valid);
-            }
-        }
-       
-        let sum: u8 = certificate.special_valids.iter().sum();
-        if certificate.header.is_special && (sum as u32) >= self.committee.quorum_threshold() {
-        //if certificate.header.is_special && certificate.special_valids[0] == 1 && matching_valids(&certificate.special_valids){
-             //Send it to the consensus layer. ==> all replicas will vote.
-            let id = certificate.header.id.clone();
-            if let Err(e) = self.tx_consensus.send(certificate).await {
-                warn!(
-                    "Failed to deliver certificate {} to the consensus: {}",
-                    id, e
-                );
-            }
-            println!("completed upcall at replica? {}", self.name);
-        }
-        else{
-            //TODO: Wait for more. ==> Problem: Need to form a new cert that has 2f+1 valids. Wouldnt match the cert we have upcalled to committer.
-            //FIXME: If its special, don't send to committer directly, but wait for timeout.
-            // The committers DAG might not keep growing async, but that doesnt matter, thats just its view. As soon as we upcall, it WILL have all the certs it needs.
-        }
-       
         Ok(())
     }
 
@@ -658,55 +530,61 @@ impl Core {
 
     fn sanitize_vote(&mut self, vote: &Vote) -> DagResult<()> {  //TODO: If we want to be able to wait for additional votes for consensus, this must be changed to receive older round votes too.
         
-        
         ensure!(
-            self.current_header.round <= vote.round,
+            self.current_headers.get(&vote.round) != None,
             DagError::VoteTooOld(vote.digest(), vote.round)
         );
+        // ensure!(
+        //     self.current_header.round <= vote.round,
+        //     DagError::VoteTooOld(vote.digest(), vote.round)
+        // );
 
        
         // Ensure we receive a vote on the expected header.
+        let current_header = self.current_headers.entry(vote.round).or_insert_with(HashMap::new).get(&vote.id);
         ensure!(
-            vote.id == self.current_header.id
-                && vote.origin == self.current_header.author
-                && vote.round == self.current_header.round,
+            current_header != None && current_header.unwrap().author == vote.origin,
             DagError::UnexpectedVote(vote.id.clone())
         );
+        // ensure!(
+        //     vote.id == self.current_header.id
+        //         && vote.origin == self.current_header.author
+        //         && vote.round == self.current_header.round,
+        //     DagError::UnexpectedVote(vote.id.clone())
+        // );
         
-        //For special blocks that were invalidated also ensure that invalidation carries a correct proof
-                     //Note TODO: Currently uses current_header to lookup relevant header id-- if we want to broadcast votes instead (for special headers) then we need to look up headers in processing
-        //FIXME: Can we write this code nicer... I just played around with some existing features I saw.
-        //TODO: Currently not in use.
-        if false && self.current_header.is_special && vote.special_valid == 0 {
-            match &vote.tc {
-                Some(tc) => { //invalidation proof = a TC that formed for the current view (or a future one). Implies one cannot vote in this view anymore.
-                    ensure!( 
-                        tc.view >= self.current_header.view,
-                        DagError::InvalidVoteInvalidation
-                    );
-                    match tc.verify(&self.committee) {
-                        Ok(()) => {},
-                        _ => return Err(DagError::InvalidVoteInvalidation)
-                    }
+    
+        //Deprecated code for Invalid vote proofs 
+        // if false && self.current_header.is_special && vote.special_valid == 0 {
+        //     match &vote.tc {
+        //         Some(tc) => { //invalidation proof = a TC that formed for the current view (or a future one). Implies one cannot vote in this view anymore.
+        //             ensure!( 
+        //                 tc.view >= self.current_header.view,
+        //                 DagError::InvalidVoteInvalidation
+        //             );
+        //             match tc.verify(&self.committee) {
+        //                 Ok(()) => {},
+        //                 _ => return Err(DagError::InvalidVoteInvalidation)
+        //             }
                     
-                 }, 
-                None => { 
-                    match &vote.qc { 
-                        Some(qc) => { //invalidation proof = a QC that formed for a future view (i.e. an extension of some TC in current view or future)
-                            ensure!( //proof is actually showing a conflict.
-                                qc.view > self.current_header.view,
-                                DagError::InvalidVoteInvalidation
-                            );
-                            match qc.verify(&self.committee) {
-                                Ok(()) => {},
-                                _ => return Err(DagError::InvalidVoteInvalidation)
-                            }
-                        }
-                        None => { return Err(DagError::InvalidVoteInvalidation)}
-                    }
-                }, 
-            }
-        } 
+        //          }, 
+        //         None => { 
+        //             match &vote.qc { 
+        //                 Some(qc) => { //invalidation proof = a QC that formed for a future view (i.e. an extension of some TC in current view or future)
+        //                     ensure!( //proof is actually showing a conflict.
+        //                         qc.view > self.current_header.view,
+        //                         DagError::InvalidVoteInvalidation
+        //                     );
+        //                     match qc.verify(&self.committee) {
+        //                         Ok(()) => {},
+        //                         _ => return Err(DagError::InvalidVoteInvalidation)
+        //                     }
+        //                 }
+        //                 None => { return Err(DagError::InvalidVoteInvalidation)}
+        //             }
+        //         }, 
+        //     }
+        // } 
        
         // Verify the vote.
         vote.verify(&self.committee).map_err(DagError::from)
@@ -802,6 +680,10 @@ impl Core {
                 let gc_round = round - self.gc_depth;
                 self.last_voted.retain(|k, _| k >= &gc_round);
                 self.processing.retain(|k, _| k >= &gc_round);
+
+                self.current_headers.retain(|k, _| k >= &gc_round);
+                self.vote_aggregators.retain(|k, _| k >= &gc_round);
+
                 self.certificates_aggregators.retain(|k, _| k >= &gc_round);
                 self.cancel_handlers.retain(|k, _| k >= &gc_round);
                 self.gc_round = gc_round;

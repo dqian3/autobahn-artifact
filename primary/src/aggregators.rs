@@ -12,6 +12,9 @@ pub struct VotesAggregator {
     pub special_valids: Vec<u8>,
     pub votes: Vec<(PublicKey, Signature)>,
     used: HashSet<PublicKey>,
+    first_quorum: bool,
+    first_special: bool, 
+    valid_weight: Stake,
 }
 
 impl VotesAggregator {
@@ -21,15 +24,22 @@ impl VotesAggregator {
             special_valids: Vec::new(),
             votes: Vec::new(),
             used: HashSet::new(),
+            first_quorum: true,
+            first_special: true,
+            valid_weight: 0,
         }
     }
+
+    // pub fn count_valids(&mut self) -> u8 {
+    //     self.special_valids.iter().sum()
+    // }
 
     pub fn append(
         &mut self,
         vote: Vote,
         committee: &Committee,
         header: &Header,
-    ) -> DagResult<Option<Certificate>> {
+    ) -> DagResult<(Option<Certificate>, bool, bool)> {
         let author = vote.author;
 
         // Ensure it is the first time this authority votes.
@@ -38,15 +48,28 @@ impl VotesAggregator {
         self.special_valids.push(vote.special_valid);
         self.votes.push((author, vote.signature));
         self.weight += committee.stake(&author);
+        self.valid_weight += committee.stake(&author) * (vote.special_valid as Stake);
+
         if self.weight >= committee.quorum_threshold() {
-            self.weight = 0; // Ensures quorum is only reached once.
-            return Ok(Some(Certificate {
-                header: header.clone(),
-                special_valids: self.special_valids.clone(),
-                votes: self.votes.clone(),
-            }));
+            //self.weight = 0; // Ensures quorum is only reached once.  ==> Removed this: We need the votes_aggregator to keep adding votes.
+            let special_ready = self.valid_weight >= committee.quorum_threshold();
+
+            if self.first_quorum || (special_ready && self.first_special) { 
+                //Only send quorum once per condition
+                self.first_quorum = false;
+                if self.first_special { 
+                    self.first_special = false
+                }
+
+                let cert = Certificate {
+                    header: header.clone(),
+                    special_valids: self.special_valids.clone(),
+                    votes: self.votes.clone(),
+                };
+                return Ok((Some(cert), self.first_quorum, special_ready));
+            }
         }
-        Ok(None)
+        Ok((None, false, false))
     }
 }
 
