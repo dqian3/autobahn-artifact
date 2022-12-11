@@ -11,6 +11,7 @@ use std::time::Duration;
 use tokio::{sync::mpsc::channel, time::sleep};
 use tokio::task::JoinHandle;
 use std::net::SocketAddr;
+use serial_test::serial;
 
 
 fn spawn_nodes(
@@ -45,9 +46,9 @@ fn spawn_nodes(
                                .collect();
 
    let mut stores: VecDeque<Store> = consensus_channels.iter_mut().enumerate().map(|(i, _)| {
-       let store_path = format!("{}_{}", store_path, i);
-       let _ = fs::remove_dir_all(&store_path);
-       let store = Store::new(&store_path).unwrap();
+       let store_path_1 = format!("{}_{}", store_path, i);
+       let _ = fs::remove_dir_all(&store_path_1);
+       let store = Store::new(&store_path_1).unwrap();
        store
    }).collect();
 
@@ -319,6 +320,7 @@ fn spawn_nodes_2(
 
 
 #[tokio::test]
+#[serial]
 async fn end_to_end_single_header() {
     let committee = committee_with_base_port(15_000);
 
@@ -336,6 +338,7 @@ async fn end_to_end_single_header() {
 }
 
 #[tokio::test]
+#[serial]
 async fn end_to_end_endless() {
     let committee = committee_with_base_port(15_000);
 
@@ -349,6 +352,7 @@ async fn end_to_end_endless() {
 
 
 #[tokio::test]
+#[serial]
 async fn end_to_end_with_dag_single_commit() {
     let committee = committee_with_base_port(23_000);
       // Run all nodes.
@@ -373,8 +377,10 @@ fn spawn_nodes_with_dag_single(
         .enumerate()
         .map(|(i, (name, secret))| {
             let committee = committee.clone();
+            // FIXME: Need to set timeout at 1 second otherwise timeout messages will be sent
+            // Potentially concerning that it takes a long time
             let parameters = Parameters {
-                timeout_delay: 100,
+                timeout_delay: 1000,
                 ..Parameters::default()
             };
             let store_path = format!("{}_{}", store_path, i);
@@ -481,6 +487,7 @@ fn spawn_nodes_with_dag_single(
 
 
 #[tokio::test]
+#[serial]
 async fn end_to_end_with_dag_endless() {
     let committee = committee_with_base_port(23_000);
 

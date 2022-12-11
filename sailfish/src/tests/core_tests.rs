@@ -5,6 +5,7 @@ use primary::messages::{Header, QC, TC, Vote, Block};
 use futures::future::try_join_all;
 use std::{fs, collections::BTreeMap, collections::BTreeSet, time::Duration};
 use tokio::{sync::mpsc::channel, time::sleep};
+use serial_test::serial;
 
 fn core(
     name: PublicKey,
@@ -98,6 +99,7 @@ fn leader_keys(view: View) -> (PublicKey, SecretKey) {
 }
 
 #[tokio::test]
+#[serial]
 async fn process_special_header() {
     let committee = committee_with_base_port(16_000);
 
@@ -318,6 +320,7 @@ async fn generate_proposal() {
 }
 
 #[tokio::test]
+#[serial]
 async fn commit_header() {
     // Get enough distinct leaders to form a quorum.
     let leaders = vec![leader_keys(1), leader_keys(2), leader_keys(3)];
@@ -402,6 +405,7 @@ async fn commit_header() {
 
 //NOTE: This code also tests the synchronizer code
 #[tokio::test]
+#[serial]
 async fn commit_header_chain() {  
     // Get enough distinct leaders to form a quorum.
     let leaders = vec![leader_keys(1), leader_keys(2), leader_keys(3)];

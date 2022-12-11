@@ -6,8 +6,10 @@ use crate::common::{
 use futures::future::try_join_all;
 use std::{fs, time::Duration};
 use tokio::{sync::mpsc::channel, time::sleep};
+use serial_test::serial;
 
 #[tokio::test]
+#[serial]
 async fn process_header() {
     let mut keys = keys();
     let _ = keys.pop().unwrap(); // Skip the header' author.
@@ -100,6 +102,7 @@ async fn process_header() {
 }
 
 #[tokio::test]
+#[serial]
 async fn process_header_missing_parent() {
     let (name, secret) = keys().pop().unwrap();
     let signature_service = SignatureService::new(secret);
@@ -171,6 +174,7 @@ async fn process_header_missing_parent() {
 }
 
 #[tokio::test]
+#[serial]
 async fn process_header_missing_payload() {
     let (name, secret) = keys().pop().unwrap();
     let signature_service = SignatureService::new(secret);
@@ -242,6 +246,7 @@ async fn process_header_missing_payload() {
 }
 
 #[tokio::test]
+#[serial]
 async fn process_votes() {
     let (name, secret) = keys().pop().unwrap();
     let signature_service = SignatureService::new(secret);
@@ -334,6 +339,7 @@ async fn process_votes() {
 }
 
 #[tokio::test]
+#[serial]
 async fn process_certificates() {
     let (name, secret) = keys().pop().unwrap();
     let signature_service = SignatureService::new(secret);
@@ -437,6 +443,7 @@ async fn process_certificates() {
 
 
 #[tokio::test]
+#[serial]
 async fn process_special_header() {
     let mut keys = keys();
     let _ = keys.pop().unwrap(); // Skip the header' author.
@@ -572,6 +579,7 @@ async fn process_special_header() {
 
 
 #[tokio::test]
+#[serial]
 async fn process_special_votes() { 
     let (name, secret) = keys().pop().unwrap();
     let signature_service = SignatureService::new(secret);
@@ -703,6 +711,7 @@ async fn process_special_votes() {
 
 
 #[tokio::test]
+#[serial]
 async fn process_special_certificate() {
     let (name, secret) = keys().pop().unwrap();
     let signature_service = SignatureService::new(secret);

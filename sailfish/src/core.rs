@@ -345,7 +345,7 @@ impl Core {
 
     async fn local_timeout_view(&mut self) -> ConsensusResult<()> {
        //TESTING 
-        return Ok(());
+        //return Ok(());
 
         warn!("Timeout reached for view {}", self.view);
         println!("timeout reached for view {}", self.view);
@@ -728,6 +728,7 @@ impl Core {
         let qc: Option<QC> = None;
         let tc: Option<TC> = None;
 
+
         // Loopback to RB, confirming that special block is valid.
         self.tx_validation
             .send((header, special_valid, qc, tc))
@@ -759,6 +760,7 @@ impl Core {
     #[async_recursion]
     async fn process_special_certificate(&mut self, certificate: Certificate) -> ConsensusResult<()> {
         println!("Made it to special cert");
+        println!("Neil process speical cert at replica {}", self.name);
         if self.last_committed_view >= certificate.header.view {
             return Ok(());
         }

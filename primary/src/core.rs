@@ -120,6 +120,11 @@ impl Core {
         rx_pushdown_cert: Receiver<Certificate>,
         rx_request_header_sync: Receiver<Digest>,
     ) {
+        let mut curr_headers: HashMap<Round, HashMap<Digest, Header>> = HashMap::with_capacity(2 * gc_depth as usize);
+        let mut second_map: HashMap<Digest, Header> = HashMap::with_capacity(2 * gc_depth as usize);
+        let first_header = Header::genesis(&committee);
+        second_map.insert(first_header.clone().id, first_header.clone());
+        curr_headers.insert(0, second_map);
         tokio::spawn(async move {
             Self {
                 name,
@@ -145,7 +150,7 @@ impl Core {
                 last_voted: HashMap::with_capacity(2 * gc_depth as usize),
                 processing: HashMap::with_capacity(2 * gc_depth as usize),
                 //current_header: Header::default(),
-                current_headers: HashMap::with_capacity(2 * gc_depth as usize),
+                current_headers: curr_headers,
                 //votes_aggregator: VotesAggregator::new(),
                 vote_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 certificates_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
@@ -340,12 +345,14 @@ impl Core {
     #[async_recursion]
     async fn process_vote(&mut self, vote: Vote) -> DagResult<()> {
         debug!("Processing {:?}", vote);
+        println!("Made it to process vote");
 
         //TODO: For all to all communication: curr_header might exist --> must add to current_headers inside process_header, and require a sync here on current_header being in store.
        let current_header = self.current_headers
         .entry(vote.round)
         .or_insert_with(HashMap::new)
         .get(&vote.id);
+
 
         if current_header == None {
             panic!("Currently should only receive votes for our own headers -- which are the only ones in current_header for now. Not yet logged");
@@ -364,6 +371,7 @@ impl Core {
         if let (Some(certificate), first_quorum, special_ready) = vote_aggregator.append(vote, &self.committee, current_header)?
         {
             debug!("Assembled {:?}", certificate);
+
             if current_header.is_special {
                  //If current_header == special && whole quorum is valid ==> pass forward to consensus layer  
                 if special_ready {
@@ -371,15 +379,17 @@ impl Core {
                    
                     //Send it to the consensus layer. ==> all replicas will vote.
                     let id = certificate.header.id.clone();
+                    println!("Sending certificate");
                     if let Err(e) = self.tx_consensus.send(certificate.clone()).await {    //NOTE: Process_cert will be called after this, which will start DAG parent sync. committer.CertificateWaiter will wait for the DAG parents.
                         warn!("Failed to deliver certificate {} to the consensus: {}", id, e);
                     }
                 }
             }
 
-            if !first_quorum { //Don't need to broadcast and process_cert again.
+            // FIXME: This logic prevents sending the cert to everyone
+            /*if !first_quorum { //Don't need to broadcast and process_cert again.
                 return Ok(());
-            }
+            }*/
 
             // Broadcast the certificate.
             let addresses = self
@@ -395,6 +405,7 @@ impl Core {
                    .entry(certificate.round())
                    .or_insert_with(Vec::new)
                    .extend(handlers);
+
 
             //Process the new certificate.
             self.process_certificate(certificate)
@@ -436,6 +447,7 @@ impl Core {
         if certificate.header.is_special {
             println!("processing special block certificate at replica? {}", self.name);
         }
+
          //Additional special block processing
          // //Note: If it is a special block, then don't need to wait for the special edge parent. ==> generate a special cert for the parent to pass to the DAG
         if certificate.header.is_special && certificate.header.special_parent.is_some() {
@@ -470,6 +482,14 @@ impl Core {
                 },
                 // If we don't have parent => create a waiter. (or just return -- since process_header should have added it.)
                 _ => return Ok(())
+            }
+        }
+
+        // FIXME: Probably not the right way to solve this
+        // Issue is that process_special_cert wasn't being called at every replica (only the one that assembled the cert)
+        if certificate.header.is_special {
+            if let Err(e) = self.tx_consensus.send(certificate.clone()).await {    //NOTE: Process_cert will be called after this, which will start DAG parent sync. committer.CertificateWaiter will wait for the DAG parents.
+                warn!("Failed to deliver certificate to the consensus:");
             }
         }
        
@@ -528,8 +548,7 @@ impl Core {
         Ok(())
     }
 
-    fn sanitize_vote(&mut self, vote: &Vote) -> DagResult<()> {  //TODO: If we want to be able to wait for additional votes for consensus, this must be changed to receive older round votes too.
-        
+    fn sanitize_vote(&mut self, vote: &Vote) -> DagResult<()> {//TODO: If we want to be able to wait for additional votes for consensus, this must be changed to receive older round votes too.
         ensure!(
             self.current_headers.get(&vote.round) != None,
             DagError::VoteTooOld(vote.digest(), vote.round)
@@ -538,7 +557,6 @@ impl Core {
         //     self.current_header.round <= vote.round,
         //     DagError::VoteTooOld(vote.digest(), vote.round)
         // );
-
        
         // Ensure we receive a vote on the expected header.
         let current_header = self.current_headers.entry(vote.round).or_insert_with(HashMap::new).get(&vote.id);

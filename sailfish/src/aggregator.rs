@@ -42,6 +42,9 @@ impl Aggregator {
     pub fn add_accept_vote(&mut self, vote: AcceptVote) -> ConsensusResult<Option<QC>> {
         // TODO [issue #7]: A bad node may make us run out of memory by sending many votes
         // with different view numbers or different digests.
+        //
+
+        println!("vote added");
 
         // Add the new vote to our aggregator and see if we have a QC.
         self.votes_aggregators
