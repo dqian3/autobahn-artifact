@@ -387,9 +387,9 @@ impl Core {
             }
 
             // FIXME: This logic prevents sending the cert to everyone
-            /*if !first_quorum { //Don't need to broadcast and process_cert again.
+            if !first_quorum { //Don't need to broadcast and process_cert again.
                 return Ok(());
-            }*/
+            }
 
             // Broadcast the certificate.
             let addresses = self

@@ -54,7 +54,8 @@ impl VotesAggregator {
             //self.weight = 0; // Ensures quorum is only reached once.  ==> Removed this: We need the votes_aggregator to keep adding votes.
             let special_ready = self.valid_weight >= committee.quorum_threshold();
 
-            if self.first_quorum || (special_ready && self.first_special) { 
+            if self.first_quorum || (special_ready && self.first_special) {
+                let is_first_quorum = self.first_quorum;
                 //Only send quorum once per condition
                 self.first_quorum = false;
                 if self.first_special { 
@@ -66,7 +67,7 @@ impl VotesAggregator {
                     special_valids: self.special_valids.clone(),
                     votes: self.votes.clone(),
                 };
-                return Ok((Some(cert), self.first_quorum, special_ready));
+                return Ok((Some(cert), is_first_quorum, special_ready));
             }
         }
         Ok((None, false, false))
