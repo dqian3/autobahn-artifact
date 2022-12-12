@@ -44,8 +44,6 @@ impl Aggregator {
         // with different view numbers or different digests.
         //
 
-        println!("vote added");
-
         // Add the new vote to our aggregator and see if we have a QC.
         self.votes_aggregators
             .entry(vote.view)

@@ -350,7 +350,7 @@ impl Core {
 
     async fn local_timeout_view(&mut self) -> ConsensusResult<()> {
        //TESTING 
-        return Ok(());
+        //return Ok(());
 
         warn!("Timeout reached for view {}", self.view);
         println!("timeout reached for view {}", self.view);
@@ -420,7 +420,6 @@ impl Core {
 
     #[async_recursion]
     async fn handle_accept_vote(&mut self, vote: &AcceptVote) -> ConsensusResult<()> {
-        println!("Made it here to accept vote");
         debug!("Processing {:?}", vote);
         if vote.view < self.view {
             return Ok(());
@@ -618,8 +617,19 @@ impl Core {
     #[async_recursion]
     async fn process_special_header(&mut self, header: Header) -> ConsensusResult<()> {
 
-        println!("CONSENSUS: processing special block certificate at replica? {}", self.name);
+        //println!("CONSENSUS: processing special header view {} certificate at replica? {}", header.view.clone(), self.name);
+
+         //Indicate that we are processing this header.
+        if !self.processing_headers
+         .entry(header.view)
+         .or_insert_with(HashSet::new)
+         .insert(header.id.clone()){
+            return Ok(());
+         }
+
+
         let mut special_valid: u8 = 1;
+
 
         //A) CHECK WHETHER HEADER IS CURRENT ==> If not, reply invalid   
 
@@ -651,14 +661,6 @@ impl Core {
                 // NOTE: Invalid replies/Proofs thus only need to prove timeout case (since otherwise replicas would stay silent) ==> i.e. checking TC
                 // (or a consecutive QC) for higher view suffices. (I.e. don't need to check round number)
         
-
-         //Indicate that we are processing this header.
-         self.processing_headers
-         .entry(header.view)
-         .or_insert_with(HashSet::new)
-         .insert(header.id.clone());
-     
-
     
         //B) CHECK HEADER CORRECTNESS ==> If not, don't need to reply. Proposer must be byz
 
@@ -765,8 +767,8 @@ impl Core {
     //Call process_special_header upon receiving upcall from Dag layer.
     #[async_recursion]
     async fn process_special_certificate(&mut self, certificate: Certificate) -> ConsensusResult<()> {
-        println!("Made it to special cert");
-        println!("Neil process speical cert at replica {}", self.name);
+      
+        //println!("process special cert for view {} at replica {}", certificate.header.view.clone(), self.name);
     
          //1) Check if cert is still relevant to current view, if so, update view and high_cert. Ignore cert if we've already committed in the round.
          ensure!(
@@ -787,7 +789,6 @@ impl Core {
         //process_header if we have not already -> this will process the ticket (Note: This is not strictly necessary, but it's useful to call early to avoid having to sync on consensus_parent_ticket later)
         if !self.processing_headers.get(&certificate.header.round).map_or_else(|| false, |x| x.contains(&certificate.header.id))
         { // This function may still throw an error if the storage fails.
-            println!("Processes header");
             self.process_special_header(certificate.header.clone()).await?;
         }
 
@@ -839,7 +840,7 @@ impl Core {
         debug!("Created {:?}", vote.digest());
         
         let next_leader = self.leader_elector.get_leader(self.view + 1);
-        println!("should handle vote, {}, {}", next_leader, self.name);
+        //println!("should handle vote, {}, {}", next_leader, self.name);
         if next_leader == self.name {
             self.handle_accept_vote(&vote).await?;
         } else {
@@ -849,7 +850,7 @@ impl Core {
                     .consensus(&next_leader)
                     .expect("The next leader is not in the committee")
                     .consensus_to_consensus;
-            println!("address sending is {}", address);
+            //println!("address sending is {}", address);
             let message = bincode::serialize(&ConsensusMessage::AcceptVote(vote))
                     .expect("Failed to serialize vote");
 

@@ -130,7 +130,7 @@ impl Proposer {
     
     async fn make_header(&mut self, is_special: bool) {
         if is_special {
-            println!("make special block at replica? {}", self.name);
+            println!("PROPOSER: make special block for view {}, round {} at replica? {}", self.view, self.round, self.name);
         }
 
         let mut ticket = None;

@@ -1,9 +1,11 @@
+use crate::Round;
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::{DagError, DagResult};
 use crate::messages::{Certificate, Header, Vote};
 use config::{Committee, Stake};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, Signature};
+use core::panic;
 use std::collections::HashSet;
 
 /// Aggregates votes for a particular header into a certificate.
@@ -42,12 +44,14 @@ impl VotesAggregator {
     ) -> DagResult<(Option<Certificate>, bool)> {
         let author = vote.author;
 
+
+        //println!("Vote aggregator for : header id {}, round {}. Adding vote sent by replica {}", self.round, self.dig.clone(), vote.author.clone());
         // Ensure it is the first time this authority votes.
         ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
 
         self.special_valids.push(vote.special_valid);
         self.votes.push((author, vote.signature));
-        
+
         self.weight += committee.stake(&author);
         self.valid_weight += committee.stake(&author) * (vote.special_valid as Stake);
 

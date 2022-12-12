@@ -309,7 +309,7 @@ fn spawn_nodes_2(
                 );
 
                 while let Some(header) = rx_output.recv().await {
-                    println!("committed header for view {} at replica {}", header.view, replica.clone());
+                    println!("committed header for round {} at replica {}", header.round, replica.clone());
                     // NOTE: Here goes the application logic.
                 }
             });
@@ -495,7 +495,7 @@ async fn end_to_end_with_dag_endless() {
     let store_path = ".db_test_end_to_end";
     spawn_nodes_with_dag(keys(), committee, store_path);
 
-    sleep(Duration::from_millis(1000)).await;
+    sleep(Duration::from_millis(2000)).await;
    
 }
 
@@ -510,7 +510,7 @@ fn spawn_nodes_with_dag(
         .map(|(i, (name, secret))| {
             let committee = committee.clone();
             let parameters = Parameters {
-                timeout_delay: 100,
+                timeout_delay: 1000,
                 ..Parameters::default()
             };
             let store_path = format!("{}_{}", store_path, i);
@@ -607,7 +607,13 @@ fn spawn_nodes_with_dag(
                 );
 
                 while let Some(header) = rx_output.recv().await {
-                    println!("committed header for view {} at replica {}", header.view, replica.clone());
+                    if header.is_special {
+                        println!("SPECIAL committed view {}, view_round {} at replica {}", header.view, header.round, replica.clone());
+                    }
+                    else{
+                        println!("NORMAL: committed header for round {} at replica {}", header.round, replica.clone());
+                    }
+                    
                     // NOTE: Here goes the application logic.
                 }
             });

@@ -166,6 +166,7 @@ impl Core {
         // self.votes_aggregator = VotesAggregator::new();
 
         //TODO: for all-to-all: Don't let other replicas insert into current_headers twice.
+
         self.current_headers
             .entry(header.round)
             .or_insert_with(HashMap::new)
@@ -206,9 +207,7 @@ impl Core {
             .or_insert_with(HashSet::new)
             .insert(header.id.clone());
 
-        if header.is_special {
-            println!("processing special block at replica? {}", self.name);
-        }
+        
         // Ensure we have the parents. If at least one parent is missing, the synchronizer returns an empty
         // vector; it will gather the missing parents (as well as all ancestors) from other nodes and then
         // reschedule processing of this header.
@@ -286,6 +285,8 @@ impl Core {
             .or_insert_with(HashSet::new)
             .insert(header.author)  //checks that we have not already voted.
         {
+        
+           // println!("Processing Last voted.  vote for origin: {}, header id {}, round {}. Called on replica {}", header.author.clone(), header.id.clone(), header.round.clone(), self.name.clone());
            //  For special headers: Upcall to consensus layer to confirm whether the special header is valid for consensus
             if header.is_special {
                 self.tx_special
@@ -317,6 +318,7 @@ impl Core {
          debug!("Created {:?}", vote);
 
          if vote.origin == self.name {
+             //println!("Calling process vote on our own header. Replica {}, Header id {}", header.author.clone(), header.id.clone());
              self.process_vote(vote)
                  .await
                  .expect("Failed to process our own vote");
@@ -347,7 +349,7 @@ impl Core {
         .or_insert_with(HashMap::new)
         .get(&vote.id);
 
-        println!("Processing vote for origin: {}, header id {}, round {}. Vote sent by replica {}", vote.origin.clone(), vote.id.clone(), vote.round.clone(), vote.author.clone());
+        //println!("Processing vote for origin: {}, header id {}, round {}. Vote sent by replica {}", vote.origin.clone(), vote.id.clone(), vote.round.clone(), vote.author.clone());
 
         if current_header == None {
             panic!("Currently should only receive votes for our own headers -- which are the only ones in current_header for now. Not yet logged");
@@ -458,10 +460,6 @@ impl Core {
             return Ok(());
         }
 
-        if certificate.header.is_special {
-            println!("processing special block certificate at replica? {}", self.name);
-        }
-
          //Additional special block processing
          // //Note: If it is a special block, then don't need to wait for the special edge parent. ==> generate a special cert for the parent to pass to the DAG
         if certificate.header.is_special && certificate.header.special_parent.is_some() {
@@ -555,6 +553,8 @@ impl Core {
     }
 
     fn sanitize_vote(&mut self, vote: &Vote) -> DagResult<()> {
+
+        //println!("Received vote for origin: {}, header id {}, round {}. Vote sent by replica {}", vote.origin.clone(), vote.id.clone(), vote.round.clone(), vote.author.clone());
         ensure!(
             self.current_headers.get(&vote.round) != None,
             DagError::VoteTooOld(vote.digest(), vote.round)
