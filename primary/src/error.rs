@@ -117,8 +117,11 @@ pub enum ConsensusError {
     #[error("Invalid payload")]
     InvalidPayload,
 
-    #[error("Message {0} (view {1}) too old")]
+    #[error("Cert {0} (view {1}) too old")]
     TooOld(Digest, View),
+
+    #[error("Already voted for Cert {0} (view {1})")]
+    AlreadyVoted(Digest, View),
 
     #[error(transparent)]
     DagError(#[from] DagError),

@@ -120,11 +120,6 @@ impl Core {
         rx_pushdown_cert: Receiver<Certificate>,
         rx_request_header_sync: Receiver<Digest>,
     ) {
-        let mut curr_headers: HashMap<Round, HashMap<Digest, Header>> = HashMap::with_capacity(2 * gc_depth as usize);
-        let mut second_map: HashMap<Digest, Header> = HashMap::with_capacity(2 * gc_depth as usize);
-        let first_header = Header::genesis(&committee);
-        second_map.insert(first_header.clone().id, first_header.clone());
-        curr_headers.insert(0, second_map);
         tokio::spawn(async move {
             Self {
                 name,
@@ -150,7 +145,7 @@ impl Core {
                 last_voted: HashMap::with_capacity(2 * gc_depth as usize),
                 processing: HashMap::with_capacity(2 * gc_depth as usize),
                 //current_header: Header::default(),
-                current_headers: curr_headers,
+                current_headers: HashMap::with_capacity(2 * gc_depth as usize),
                 //votes_aggregator: VotesAggregator::new(),
                 vote_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 certificates_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
@@ -345,7 +340,6 @@ impl Core {
     #[async_recursion]
     async fn process_vote(&mut self, vote: Vote) -> DagResult<()> {
         debug!("Processing {:?}", vote);
-        println!("Made it to process vote");
 
         //TODO: For all to all communication: curr_header might exist --> must add to current_headers inside process_header, and require a sync here on current_header being in store.
        let current_header = self.current_headers
@@ -353,6 +347,7 @@ impl Core {
         .or_insert_with(HashMap::new)
         .get(&vote.id);
 
+        println!("Processing vote for origin: {}, header id {}, round {}. Vote sent by replica {}", vote.origin.clone(), vote.id.clone(), vote.round.clone(), vote.author.clone());
 
         if current_header == None {
             panic!("Currently should only receive votes for our own headers -- which are the only ones in current_header for now. Not yet logged");
@@ -368,30 +363,23 @@ impl Core {
             .entry(current_header.id.clone())
             .or_insert_with(|| Box::new(VotesAggregator::new()));
 
-        if let (Some(certificate), first_quorum, special_ready) = vote_aggregator.append(vote, &self.committee, current_header)?
-        {
+        if let (Some(certificate), special_ready) = vote_aggregator.append(vote, &self.committee, current_header)?
+        { 
+            //Only broadcast and process_cert upon generation of initial cert, and first valid cert (Note: these might be the same). //TODO: broadcast again for Fast-Cert
+            //Note: Is it fine for process_cert to be called multiple times?
+            // ==> should be. Just replaces cert in all data structures. Sync won't be triggered redundantly. CertAggregator won't add twice
             debug!("Assembled {:?}", certificate);
 
-            if current_header.is_special {
-                 //If current_header == special && whole quorum is valid ==> pass forward to consensus layer  
-                if special_ready {
-                    debug!("Assembled complete special certificate: {:?}", certificate);
-                   
-                    //Send it to the consensus layer. ==> all replicas will vote.
-                    let id = certificate.header.id.clone();
-                    println!("Sending certificate");
-                    if let Err(e) = self.tx_consensus.send(certificate.clone()).await {    //NOTE: Process_cert will be called after this, which will start DAG parent sync. committer.CertificateWaiter will wait for the DAG parents.
-                        warn!("Failed to deliver certificate {} to the consensus: {}", id, e);
-                    }
-                }
-            }
-
-            // FIXME: This logic prevents sending the cert to everyone
-            if !first_quorum { //Don't need to broadcast and process_cert again.
-                return Ok(());
-            }
-
-            // Broadcast the certificate.
+            // if current_header.is_special {
+            //      //If current_header == special && whole quorum is valid ==> pass forward to consensus layer  
+            //     if special_ready {
+            //         debug!("Assembled complete special certificate: {:?}", certificate);
+            //         //Send it to the consensus layer. ==> all replicas will vote.
+            //         self.try_upcall_process_special_certificate(&certificate).await;
+            //     }
+            // }
+           
+            // Broadcast the certificate.  ==> Note: This will re-broadcast if a special_cert gets formed later.
             let addresses = self
                    .committee
                    .others_primaries(&self.name)
@@ -417,10 +405,36 @@ impl Core {
         Ok(())
     }
 
+    
+    async fn try_upcall_process_special_certificate(&mut self, certificate: &Certificate){
+
+        if certificate.header.is_special && certificate.is_special_valid(&self.committee){
+            // Issue is that process_special_cert wasn't being called at every replica (only the one that assembled the cert)
+            if let Err(e) = self.tx_consensus.send(certificate.clone()).await {    //NOTE: Process_cert will be called after this, which will start DAG parent sync. committer.CertificateWaiter will wait for the DAG parents.
+                warn!("Failed to deliver certificate {} to the consensus: {}", certificate.header.id.clone(), e);
+            }
+        }
+    }
+
+    // #[async_recursion]
+    // async fn receive_certificate(&mut self, certificate: Certificate) -> DagResult<()> {
+    //     //NOTE: Could remove this function, and call try_upcall directly; 
+
+    //     if certificate.header.is_special && certificate.is_special_valid(&self.committee){
+    //         self.try_upcall_process_special_certificate(&certificate).await;
+    //     }
+    //     self.process_certificate(certificate).await
+    // }
+
     #[async_recursion]
     async fn process_certificate(&mut self, certificate: Certificate) -> DagResult<()> {
         debug!("Processing {:?}", certificate);
 
+        //Try upcalling to Consensus layer.
+        //Note: Calling this before parent sync could result in a duplicate call if sync puts us to sleep and re-execs ==> However, I took care that process_special_cert does not vote twice.
+        self.try_upcall_process_special_certificate(&certificate).await; 
+
+    
         // Process the header embedded in the certificate if we haven't already voted for it (if we already
         // voted, it means we already processed it). Since this header got certified, we are sure that all
         // the data it refers to (ie. its payload and its parents) are available. We can thus continue the
@@ -484,14 +498,6 @@ impl Core {
                 _ => return Ok(())
             }
         }
-
-        // FIXME: Probably not the right way to solve this
-        // Issue is that process_special_cert wasn't being called at every replica (only the one that assembled the cert)
-        if certificate.header.is_special {
-            if let Err(e) = self.tx_consensus.send(certificate.clone()).await {    //NOTE: Process_cert will be called after this, which will start DAG parent sync. committer.CertificateWaiter will wait for the DAG parents.
-                warn!("Failed to deliver certificate to the consensus:");
-            }
-        }
        
         // Store the certificate.
         let bytes = bincode::serialize(&certificate).expect("Failed to serialize certificate");
@@ -548,7 +554,7 @@ impl Core {
         Ok(())
     }
 
-    fn sanitize_vote(&mut self, vote: &Vote) -> DagResult<()> {//TODO: If we want to be able to wait for additional votes for consensus, this must be changed to receive older round votes too.
+    fn sanitize_vote(&mut self, vote: &Vote) -> DagResult<()> {
         ensure!(
             self.current_headers.get(&vote.round) != None,
             DagError::VoteTooOld(vote.digest(), vote.round)
@@ -624,7 +630,8 @@ impl Core {
         // let bytes = bincode::serialize(&Header::default()).expect("Failed to serialize header");
         // self.store.write(Header::default().id.to_vec(), bytes).await;
         //
-
+        let genesis_header = Header::genesis(&self.committee);
+        self.current_headers.entry(0).or_insert_with(HashMap::new).insert(genesis_header.id.clone(), genesis_header);
 
         loop {
             let result = tokio::select! {
@@ -646,7 +653,7 @@ impl Core {
                         },
                         PrimaryMessage::Certificate(certificate) => {
                             match self.sanitize_certificate(&certificate) {
-                                Ok(()) => self.process_certificate(certificate).await,
+                                Ok(()) => self.process_certificate(certificate).await, //self.receive_certificate(certificate).await, 
                                 error => error
                             }
                         },
@@ -672,7 +679,8 @@ impl Core {
                 // we interrupted execution (we were missing some of their ancestors) and we are now ready to resume
                 // processing.
                 Some(certificate) = self.rx_certificate_waiter.recv() => self.process_certificate(certificate).await,
-                // Loopback certificates from Consensus layer. Those are certificates of consensus parents. //TODO: This might be redundant sync with the Dag layers sync.
+
+                // DEPRECATED: Loopback certificates from Consensus layer. Those are certificates of consensus parents. //TODO: This might be redundant sync with the Dag layers sync.
                 Some(certificate) = self.rx_pushdown_cert.recv() => self.process_certificate(certificate).await,
 
             

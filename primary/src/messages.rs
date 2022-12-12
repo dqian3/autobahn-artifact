@@ -4,7 +4,7 @@ use crate::error::{DagError, DagResult, ConsensusError, ConsensusResult};
 //use sailfish::error::{DagError, DagResult, ConsensusError, ConsensusResult};
 use crate::primary::{Round, View};
 //use crate::config::{Committee};
-use config::{Committee, WorkerId};
+use config::{Committee, WorkerId, Stake};
 use crypto::{Digest, Hash, PublicKey, Signature, SignatureService, SecretKey};
 use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
@@ -544,6 +544,20 @@ impl Certificate {
             Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
         }
     
+    }
+
+    pub fn is_special_valid(&self, committee: &Committee) -> bool {
+       
+        let valid_weight: Stake = self.votes
+                                            .iter()
+                                            .enumerate()
+                                            .map(|(i, (author, _))| {
+                                                committee.stake(&author) * (self.special_valids[i] as Stake)
+                                            })
+                                            .sum();
+
+        valid_weight >= committee.quorum_threshold() 
+
     }
     
 }

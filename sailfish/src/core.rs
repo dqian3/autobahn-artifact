@@ -56,6 +56,7 @@ pub struct Core {
     rx_loopback_commit: Receiver<(Header, Ticket)>,
 
     view: View,
+    last_prepared_view: View,
     last_voted_view: View,
     last_committed_view: View,
     stored_headers: HashMap<Digest, Header>,
@@ -121,6 +122,7 @@ impl Core {
                 rx_loopback_commit,
 
                 view: 1,
+                last_prepared_view: 0, 
                 last_voted_view: 0,
                 last_committed_view: 0,
                 stored_headers: HashMap::default(),         //TODO: Can remove?
@@ -168,6 +170,9 @@ impl Core {
     }
 
 
+    fn increase_last_prepared_view(&mut self, target: View) {
+        self.last_prepared_view = max(self.last_prepared_view, target);
+    }
 
     fn increase_last_voted_view(&mut self, target: View) {
         self.last_voted_view = max(self.last_voted_view, target);
@@ -345,12 +350,13 @@ impl Core {
 
     async fn local_timeout_view(&mut self) -> ConsensusResult<()> {
        //TESTING 
-        //return Ok(());
+        return Ok(());
 
         warn!("Timeout reached for view {}", self.view);
         println!("timeout reached for view {}", self.view);
 
-        // Increase the last voted view.
+        // Increase the last prepared and voted view.
+        self.increase_last_prepared_view(self.view);
         self.increase_last_voted_view(self.view);
 
         // Make a timeout message.
@@ -617,12 +623,12 @@ impl Core {
 
         //A) CHECK WHETHER HEADER IS CURRENT ==> If not, reply invalid   
 
-                //1) Check if we have already voted in this view > last voted view
-                if self.last_voted_view >= header.view {
+                //1) Check if we have already voted in this view > last prepared view
+                if self.last_prepared_view >= header.view {
                     special_valid = 0;
                 }
                 /*ensure!(
-                    header.view > self.last_voted_view,
+                    header.view > self.last_prepared_view,
                     ConsensusError::TooOld(header.id, header.view)  //TODO: Still want to reply invalid in DAG. ==> Corner-case: Have already moved views, but Dag still requires cert.
                 );*/
                 
@@ -709,7 +715,7 @@ impl Core {
         
             //Update latest prepared. Update latest_voted_view.
             self.view = header.view; //
-            self.increase_last_voted_view(self.view);
+            self.increase_last_prepared_view(self.view);
 
             let copy = header.clone();
             let id = copy.id.clone();
@@ -761,9 +767,19 @@ impl Core {
     async fn process_special_certificate(&mut self, certificate: Certificate) -> ConsensusResult<()> {
         println!("Made it to special cert");
         println!("Neil process speical cert at replica {}", self.name);
-        if self.last_committed_view >= certificate.header.view {
-            return Ok(());
-        }
+    
+         //1) Check if cert is still relevant to current view, if so, update view and high_cert. Ignore cert if we've already committed in the round.
+         ensure!(
+            certificate.header.view >= self.view && certificate.header.view > self.last_committed_view,
+            ConsensusError::TooOld(certificate.header.id, certificate.header.view)
+        );
+
+        //2)  Don't vote twice on a cert; 
+        ensure!(
+            certificate.header.view > self.last_voted_view,
+            ConsensusError::AlreadyVoted(certificate.header.id, certificate.header.view)
+        );
+         
 
          //Indicate that we are processing this header. (don't need this unless we want to avoid duplicates)
          //self.processing_certs.entry(certificate.header.round).or_insert_with(HashSet::new).insert(certificate.header.id.clone());
@@ -800,11 +816,6 @@ impl Core {
         let header = certificate.clone().header;
         let id = header.clone().id;
 
-        //1) Check if cert is still relevant to current view, if so, update view and high_cert
-        ensure!(
-            header.view >= self.view,
-            ConsensusError::TooOld(header.id, header.view)
-        );
         self.advance_view(header.view);
         self.increase_last_voted_view(header.view);
 
