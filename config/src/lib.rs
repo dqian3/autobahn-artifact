@@ -205,6 +205,11 @@ impl Committee {
         (total_votes + 2) / 3
     }
 
+    pub fn fast_threshold(&self) -> Stake {
+        let total_votes: Stake = self.authorities.values().map(|x| x.stake).sum();
+        total_votes
+    }
+
     /// Returns the consensus addresses of the target consensus node.
     pub fn consensus(&self, to: &PublicKey) -> Result<ConsensusAddresses, ConfigError> {
         self.authorities

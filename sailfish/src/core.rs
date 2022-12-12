@@ -197,6 +197,19 @@ impl Core {
     //     Some(Vote::new(&block, self.name, self.signature_service.clone()).await)
     // }
     
+    async fn generate_and_handle_fast_qc(&mut self, certificate: Certificate) -> ConsensusResult<> {
+
+        //generate fast QC
+        let qc: QC = QC {
+            hash: certificate.header.id,
+            view: certificate.header.view,
+            view_round: certificate.header.round,
+            votes: certificate.votes,
+        };
+        //TODO: Edit QC verification function to verify a fast QC (check whether votes.size = 3f+1, and if so, generate a dummy cert with special_valid = 1 and verify Certificate instead)
+        // call handle_qc
+        self.handle_qc(&qc).await
+    }
    
     async fn generate_ticket_and_commit(&mut self, header_digest: Digest, qc: Option<QC>, tc: Option<TC>) -> ConsensusResult<Ticket> {
       
@@ -825,16 +838,13 @@ impl Core {
         self.store_cert(&certificate).await;
 
 
-        // //2) Set marker that process_cert is complete.
-        // self.process_commit.insert(id.clone());
+        //2) Fast Path:
+        if certificate.is_special_fast(&self.committee){
+            self.generate_and_handle_fast_qc(certificate).await;
+            return Ok(());
+        }
 
-        // // check marker whether commit is ready. If yes, call commit. If no, send vote.
-        // if self.waiting_to_commit.contains(&id) {
-        //     self.commit(header).await?;
-        //     return Ok(());
-        // }
-
-        //3) Send out Vote
+        //3) Slow Path: Send out AcceptVote
 
         let vote = AcceptVote::new(&header, self.name, self.signature_service.clone()).await;  
         debug!("Created {:?}", vote.digest());

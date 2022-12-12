@@ -546,17 +546,24 @@ impl Certificate {
     
     }
 
-    pub fn is_special_valid(&self, committee: &Committee) -> bool {
-       
-        let valid_weight: Stake = self.votes
-                                            .iter()
-                                            .enumerate()
-                                            .map(|(i, (author, _))| {
-                                                committee.stake(&author) * (self.special_valids[i] as Stake)
-                                            })
-                                            .sum();
+    fn valid_weight(&self, committee: &Committee) -> Stake {
+        self.votes
+            .iter()
+            .enumerate()
+            .map(|(i, (author, _))| {
+                committee.stake(&author) * (self.special_valids[i] as Stake)
+                 })
+            .sum()
+    }
 
-        valid_weight >= committee.quorum_threshold() 
+    pub fn is_special_valid(&self, committee: &Committee) -> bool {
+
+        self.valid_weight(committee) >= committee.quorum_threshold() 
+    
+    }
+    pub fn is_special_fast(&self, committee: &Committee) -> bool {
+       
+        self.valid_weight(committee) >= committee.fast_threshold() 
 
     }
     

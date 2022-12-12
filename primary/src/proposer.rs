@@ -132,6 +132,9 @@ impl Proposer {
         if is_special {
             println!("PROPOSER: make special block for view {}, round {} at replica? {}", self.view, self.round, self.name);
         }
+        else {
+            println!("PROPOSER: make normal block for round {} at replica? {}", self.round, self.name);
+        }
 
         let mut ticket = None;
         mem::swap(&mut self.ticket, &mut ticket); //Reset self.ticket; and move ticket (this just avoids copying)

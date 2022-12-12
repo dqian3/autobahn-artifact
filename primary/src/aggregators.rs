@@ -12,6 +12,7 @@ use std::collections::HashSet;
 pub struct VotesAggregator {
     weight: Stake,
     valid_weight: Stake,
+    fast_weight: Stake,
     pub special_valids: Vec<u8>,
     pub votes: Vec<(PublicKey, Signature)>,
     used: HashSet<PublicKey>,
@@ -24,6 +25,7 @@ impl VotesAggregator {
         Self {
             weight: 0,
             valid_weight: 0,
+            fast_weight: 0,
             special_valids: Vec::new(),
             votes: Vec::new(),
             used: HashSet::new(),
@@ -54,18 +56,23 @@ impl VotesAggregator {
 
         self.weight += committee.stake(&author);
         self.valid_weight += committee.stake(&author) * (vote.special_valid as Stake);
+        self.fast_weight += self.valid_weight
 
         let normal_ready = self.weight >= committee.quorum_threshold();
         let special_ready = self.valid_weight >= committee.quorum_threshold();
+        let fast_ready = self.fast_weight >= committee.fast_threshold();
 
-        //TODO: may want to broadcast again for Fast-Cert
-        if normal_ready || special_ready {
+        //Currently forming cert (implies broadcast + process) up to 3 times: a) 2f+1 invalid cert, b) 2f+1 valid cert, c) 3f+1 valid cert
+        //TODO: To avoid redundantly starting both slow and fast path, can make default valid cert gen fast, and unlock slow one after a timer
+        //Note: 2f+1 invalid cert should always be able to form asynchronously for DAG progress
+                //Note: Even if we put the Dag Quorum behind a timer the DAG would be asynchronous -- albeit not responsive.
+        if normal_ready || special_ready || fast_ready {
             self.weight = 0; // Ensures normal quorum is only reached once. 
            
             if special_ready {
                 self.valid_weight = 0; // Ensures special quorum is only reached once. 
             }
-               
+            
             let cert = Certificate {
                     header: header.clone(),
                     special_valids: self.special_valids.clone(),
