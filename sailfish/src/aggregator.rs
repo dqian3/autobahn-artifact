@@ -1,4 +1,5 @@
 use crate::consensus::View;
+use primary::Certificate;
 //use crate::error::{ConsensusError, ConsensusResult};
 use primary::messages::{Timeout, QC, TC, AcceptVote};
 use primary::{ensure, error::{ConsensusError, ConsensusResult}};
@@ -140,7 +141,10 @@ impl QCMaker {
 
 struct TCMaker { //TimeoutCert for View Changes,
     weight: Stake,
-    votes: Vec<(PublicKey, Signature, View)>, // View == view of the highestQC a replica has seen.
+ 
+    // In first iteration, Aggregator can simply be "dumb" and collect all timeouts. ==> In second iteration, can make it smarter if want to broadcast less data.
+    votes: Vec<Timeout>, //In first iteration, just forward the timeout quorum. //TODO: In second iteration, send only quorum of signatures of hashes + 1 code proposal
+    // votes: Vec<(PublicKey, Signature, View)>, // View == view of the highestQC a replica has seen.
     used: HashSet<PublicKey>,
 }
 
@@ -169,7 +173,7 @@ impl TCMaker {
 
         // Add the timeout to the accumulator.
         self.votes
-            .push((author, timeout.signature, timeout.high_qc.view));
+            .push(timeout);
         self.weight += committee.stake(&author);
         if self.weight >= committee.quorum_threshold() {
             self.weight = 0; // Ensures TC is only created once.
@@ -183,3 +187,50 @@ impl TCMaker {
         Ok(None)
     }
 }
+
+
+// struct TCMaker { //TimeoutCert for View Changes,
+//     weight: Stake,
+//     votes: Vec<(PublicKey, Signature, View)>, // View == view of the highestQC a replica has seen.
+//     used: HashSet<PublicKey>,
+// }
+
+// impl TCMaker {
+//     pub fn new() -> Self {
+//         Self {
+//             weight: 0,
+//             votes: Vec::new(),
+//             used: HashSet::new(),
+//         }
+//     }
+
+//     /// Try to append a signature to a (partial) quorum.
+//     pub fn append(
+//         &mut self,
+//         timeout: Timeout,
+//         committee: &Committee,
+//     ) -> ConsensusResult<Option<TC>> {
+//         let author = timeout.author;
+
+//         // Ensure it is the first time this authority votes.
+//         ensure!(
+//             self.used.insert(author),
+//             ConsensusError::AuthorityReuse(author)
+//         );
+
+//         // Add the timeout to the accumulator.
+//         self.votes
+//             .push((author, timeout.signature, timeout.high_qc.view));
+//         self.weight += committee.stake(&author);
+//         if self.weight >= committee.quorum_threshold() {
+//             self.weight = 0; // Ensures TC is only created once.
+//             return Ok(Some(TC {
+//                 hash: Digest::default(), //TODO: FIXME: Replace this with our new TC rule: I.e. whatever logic picks a header to propose
+//                 view: timeout.view,
+//                 view_round: 0, //TODO: FIXME: Replace this with new TC rule (round of the header we propose)
+//                 votes: self.votes.clone(),
+//             }));
+//         }
+//         Ok(None)
+//     }
+// }

@@ -410,8 +410,8 @@ impl Core {
     
     async fn try_upcall_process_special_certificate(&mut self, certificate: &Certificate){
 
+        //Only upcall if cert is special and valid. Don't upcall for invalid (Note: dummy certs are invalid by default, since valid_weight = 0)
         if certificate.header.is_special && certificate.is_special_valid(&self.committee){
-            // Issue is that process_special_cert wasn't being called at every replica (only the one that assembled the cert)
             if let Err(e) = self.tx_consensus.send(certificate.clone()).await {    //NOTE: Process_cert will be called after this, which will start DAG parent sync. committer.CertificateWaiter will wait for the DAG parents.
                 warn!("Failed to deliver certificate {} to the consensus: {}", certificate.header.id.clone(), e);
             }

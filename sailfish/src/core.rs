@@ -61,7 +61,7 @@ pub struct Core {
     last_committed_view: View,
     stored_headers: HashMap<Digest, Header>,
     high_prepare: Header,
-    high_cert: Certificate,  //this is a DAG QC
+    high_accept: Certificate,  //this is a DAG QC
     high_qc: QC,             //this is a CommitQC
     high_tc: TC,             //last TC --> just in case we need to reply with a proof. ::Note: This is not necessary if we are not proving invalidations. (For Timeout messages high_prepare suffices)
     timer: Timer,
@@ -127,7 +127,7 @@ impl Core {
                 last_committed_view: 0,
                 stored_headers: HashMap::default(),         //TODO: Can remove?
                 high_prepare: Header::genesis(&committee),
-                high_cert: Certificate::genesis_cert(&committee), //== first cert of Cert::genesis
+                high_accept: Certificate::genesis_cert(&committee), //== first cert of Cert::genesis
                 high_qc: QC::genesis(&committee),
                 high_tc: TC::genesis(&committee),
                 timer: Timer::new(timeout_delay),
@@ -213,7 +213,7 @@ impl Core {
         self.handle_qc(&qc).await
     }
    
-    async fn generate_ticket_and_commit(&mut self, header_digest: Digest, qc: Option<QC>, tc: Option<TC>) -> ConsensusResult<Ticket> {
+    async fn generate_ticket_and_commit(&mut self, header_digest: Digest, header: Option<Header>, qc: Option<QC>, tc: Option<TC>) -> ConsensusResult<Ticket> {
       
         //generate header
         //let new_ticket = Ticket::new(qc.unwrap(), tc, header_digest.clone(), self.view).await;
@@ -229,7 +229,13 @@ impl Core {
             }
            
         };
-        self.process_commit(header_digest, new_ticket.clone()).await?; //TODO: Can execute this asynchronously? 
+        if header.is_none(){
+            self.process_commit(header_digest, new_ticket.clone()).await?; //TODO: Can execute this asynchronously? 
+        }
+        else{
+            self.commit(header, new_ticket);
+        }
+        
         Ok(new_ticket)
     }
 
@@ -374,9 +380,26 @@ impl Core {
         self.increase_last_prepared_view(self.view);
         self.increase_last_voted_view(self.view);
 
+        let send_high_prepare = false;
+        let send_high_accept = false;
+        let send_high_qc = false;
+        //Send either high_qc or high_accept depending on which is newer (both suffice to commit)
+        if self.high_qc.view >= self.high_accept.header.view {
+            send_high_qc = true;
+        }
+        else {
+            send_high_accept = true
+        }
+        //Send High Prepare only if it is newer
+        if self.high_prepare.view > max(self.high_qc.view, self.high_accept.header.view) {
+            send_high_accept = true;
+        }
+      
         // Make a timeout message.
         let timeout = Timeout::new(
-            self.high_qc.clone(),
+            if send_high_prepare {Some(self.high_prepare.clone())} else {None},
+            if send_high_accept {Some(self.high_accept.clone())} else {None},
+            if send_high_qc {Some(self.high_qc.clone())} else {None},
             self.view,
             self.name,
             self.signature_service.clone(),
@@ -470,7 +493,7 @@ impl Core {
              }
             
 
-            let ticket = self.generate_ticket_and_commit(qc.hash.clone(), Some(qc.clone()), None).await?;
+            let ticket = self.generate_ticket_and_commit(qc.hash.clone(), None, Some(qc.clone()), None).await?;
             // Make a new special header if we are the next leader.
             if self.name == self.leader_elector.get_leader(self.view) {
                 self.generate_proposal(ticket).await;
@@ -491,14 +514,15 @@ impl Core {
 
         //verify qc
         // Ensure the vote is well formed.
-        if let Err(_) =  qc.verify(&self.committee){
-            return Err(ConsensusError::InvalidQC(qc.clone()));
-        } 
+        qc.verify(&self.committee)?;
+        // if let Err(_) = qc.verify(&self.committee) {
+        //     return Err(ConsensusError::InvalidQC(qc.clone()));
+        // } 
         
         // Process the QC.  Adopts view, high qc, and resets timer. //Adopt prev_view_round if higher.
         self.process_qc(qc).await;
         
-        let ticket = self.generate_ticket_and_commit(qc.hash.clone(), Some(qc.clone()), None).await?;
+        let ticket = self.generate_ticket_and_commit(qc.hash.clone(), None, Some(qc.clone()), None).await?;
     
          // Make a new special header if we are the next leader.
          if self.name == self.leader_elector.get_leader(self.view) {
@@ -517,19 +541,24 @@ impl Core {
         // Ensure the timeout is well formed.
         timeout.verify(&self.committee)?;
 
-        // Process the QC embedded in the timeout.
-        self.process_qc(&timeout.high_qc).await;
+
+        // Handle the QC embedded in the timeout if present.
+        if let Some(qc) = timeout.high_qc {
+            self.handle_qc(&timeout.high_qc).await;
+        }
+       
+        //TODO: NOTE: Don't view change just because we receive one timeout (could be from byz) ==> only accept view change once >= f+1 arrive. Waiting for TC to form (>= 2f+1) is also fine.
 
         // Add the new vote to our aggregator and see if we have a quorum.
-        if let Some(tc) = self.aggregator.add_timeout(timeout.clone())? {  //TODO: FIXME: Re-factor this TC to include a proposal and a proof of the proposal
+        if let Some(tc) = self.aggregator.add_timeout(timeout.clone())? {  //TODO: FIXME: Re-factor this to be an aggregator per view. Garbage collect old ones.
             debug!("Assembled {:?}", tc);
 
             self.process_tc(&tc).await?;
 
             //The TC will be forwarded as part of the next proposals ticket. If we are pessimistic/we want it faster, we can also broadcast
-            let pessimistic_qc_exchange = true; //TODO: Turn this into a flag.
+            let pessimistic_tc_exchange = true; //TODO: Turn this into a flag.
               // Broadcast the QC. //alternatively: pass it down as ticket.
-            if pessimistic_qc_exchange {
+            if pessimistic_tc_exchange {
                 // Broadcast the TC.
                 debug!("Broadcasting {:?}", tc);
                 let addresses = self
@@ -626,6 +655,27 @@ impl Core {
             }
         }
         Ok(())
+    }
+
+    fn update_high_prepare(&mut self, header: &Header) {
+        if header.view > self.high_prepare.view {
+            self.high_prepare = header.clone();
+        }
+    }
+
+    async fn process_prepare(&mut self, header: &Header) {
+        debug!("Processing {:?}", header);
+        self.advance_view(header.view).await; 
+
+         //Update latest prepared. Update latest_prepared_view.
+        self.increase_last_prepared_view(header.view);
+        self.update_high_prepare(header);
+       
+        self.store_header(&header).await;
+        //self.stored_headers.insert(header.id, header); //FIXME: Can probably remove, don't think it is used anymore
+         
+             //self.round = header.round; //only update self.round upon commit(?)
+             // (Committed Headers should be monotonic. Since consensus is sequential, should suffice to update it then?)
     }
 
     //Call process_special_header upon receiving upcall from Dag layer.
@@ -730,20 +780,7 @@ impl Core {
     
         //C) PROCESS CORRECT SPECIAL HEADER
         
-            //Update latest prepared. Update latest_voted_view.
-            self.view = header.view; //
-            self.increase_last_prepared_view(self.view);
-
-            let copy = header.clone();
-            let id = copy.id.clone();
-
-            self.high_prepare = copy.clone();
-
-            self.store_header(&header).await;
-            self.stored_headers.insert(id, copy);
-            
-                //self.round = header.round; //only update self.round upon commit(?)
-                // (Committed Headers should be monotonic. Since consensus is sequential, should suffice to update it then?)
+        self.process_prepare(&header).await;
         
         //D) SEND REPLY TO THE DAG
 
@@ -779,13 +816,32 @@ impl Core {
         Ok(())
     }
 
+    fn update_high_prepare(&mut self, cert: &Certificate) {
+        if cert.header.view > self.high_accept.header.view {
+            self.high_prepare = cert.clone();
+        }
+    }
+
+    
+
+    async fn process_accept(&mut self, cert: &Certificate) {
+        debug!("Processing {:?}", cert);
+        self.advance_view(cert.header.view).await;
+
+         //Update latest prepared. Update latest_prepared_view.
+        self.increase_last_voted_view(cert.header.view);
+        self.update_high_accept(cert);
+       
+        self.store_cert(&certificate).await;  
+    }
+
     //Call process_special_header upon receiving upcall from Dag layer.
     #[async_recursion]
     async fn process_special_certificate(&mut self, certificate: Certificate) -> ConsensusResult<()> {
       
         //println!("process special cert for view {} at replica {}", certificate.header.view.clone(), self.name);
     
-         //1) Check if cert is still relevant to current view, if so, update view and high_cert. Ignore cert if we've already committed in the round.
+         //1) Check if cert is still relevant to current view, if so, update view and high_accept. Ignore cert if we've already committed in the round.
          ensure!(
             certificate.header.view >= self.view && certificate.header.view > self.last_committed_view,
             ConsensusError::TooOld(certificate.header.id, certificate.header.view)
@@ -829,16 +885,7 @@ impl Core {
         // }
 
 
-        let header = certificate.clone().header;
-        let id = header.clone().id;
-
-        self.advance_view(header.view);
-        self.increase_last_voted_view(header.view);
-
-        self.high_cert = certificate.clone();
-        self.stored_headers.insert(id.clone(), header.clone());
-        self.store_cert(&certificate).await;
-
+        self.process_accept(&certificate);
 
         //2) Fast Path:
         if certificate.is_special_fast(&self.committee){
@@ -966,23 +1013,39 @@ impl Core {
     
 
     async fn handle_tc(&mut self, tc: &TC) -> ConsensusResult<()> {
-        //tc.verify(&self.committee)?; //FIXME: Added this because I didnt' see any TC validation elsewhere. If there is already, remove this.
-        if let Err(_) =  tc.verify(&self.committee){
-            return Err(ConsensusError::InvalidTC(tc.clone()));
-        } 
+        tc.verify(&self.committee)?; 
+        // if let Err(_) =  tc.verify(&self.committee){
+        //     return Err(ConsensusError::InvalidTC(tc.clone()));
+        // } 
 
         self.process_tc(tc).await
     }
 
     async fn process_tc(&mut self, tc: &TC) -> ConsensusResult<()> {
         
-        //TODO: FIXME:
-        //Set high_prepare/high_cert/high_qc to the content of the TC
-
         debug!("Processing {:?}", tc);
         self.advance_view(tc.view).await;
 
-        let ticket = self.generate_ticket_and_commit(tc.hash.clone(), None, Some(tc.clone())).await?;
+        let (proposal_dig, header, certificate, qc) = tc.determine_proposal(&self.committee);
+
+        let ticket;
+
+         //TODO: For safety, should adopt any high_accept > high_qc? No. Header should suffice if high_prepare >high_accept. Since high_accept must have a valid commit ticket, it must either extend high_accept, or high accept did not commit
+        if let Some(header) = header {
+            self.process_prepare(header);
+            // if the tc proposes a header, commit a TC ticket
+            ticket = self.generate_ticket_and_commit(proposal_dig, Some(header), None, Some(tc.clone())).await?;
+        }
+        else if let Some(cert) = certificate {
+            self.process_accept(cert);  
+            // if the tc proposes a cert, commit a TC ticket
+            ticket = self.generate_ticket_and_commit(proposal_dig, Some(cert.header), None, Some(tc.clone())).await?;
+            
+        }
+        else{ //if the tc proposes a qc, just commit the qc
+            self.process_qc(&qc).await;
+            ticket = self.generate_ticket_and_commit(proposal_dig, None, Some(qc), None).await?;
+        }
         
         // Make a new special header if we are the next leader.
         if self.name == self.leader_elector.get_leader(self.view) {

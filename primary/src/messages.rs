@@ -9,7 +9,8 @@ use crypto::{Digest, Hash, PublicKey, Signature, SignatureService, SecretKey};
 use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::cmp::max;
+use std::collections::{BTreeMap, BTreeSet, HashSet, HashMap};
 use std::convert::TryInto;
 use std::fmt;
 //use crate::messages_consensus::{QC, TC};
@@ -923,11 +924,24 @@ impl PartialEq for QC {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Timeout {
-    pub high_prepare: Option<Header>,  //Send full header, or just digest?   //If f+1 vouch for this header, then TC can include just digest; if just 1, and there are no conflicts, then send Header
-    pub high_cert: Option<Certificate>, //If sending Cert, don't need to send high_prepare.  // this does not need to be signed
-    //MUST sync on at least high_cert. Otherwise it could be possible that a commit_QC exists.
+    //Note, if we accepted a previous TC's proposal, and it is not committed yet, then that TC'proposal must be the local high_prepare/high_accept.
 
-    pub high_qc: QC,  //TODO: make an option too.
+    //Highest header we have Voted on ==> For FP must recover if f+1 are highest (since fast QC could exist)
+    pub high_prepare: Option<Header>,  //Send full header, or just digest?   //If f+1 vouch for this header, then TC can include just digest; if just 1, and there are no conflicts, then send Header
+
+    //Highest cert we have Accepted (AcceptVote) ==> For SP must recover if 1 is highest (since slow QC could exist)
+    pub high_accept: Option<Certificate>, //If sending Cert, don't need to send high_prepare.  // this does not need to be signed
+  
+    //Highest qc we have committed ==> Forward to confirm commit for view was successful
+    pub high_qc: Option<QC>,  //TODO: make an option too.
+
+    //Note: if high_prepare > high_qc, must send high_qc too? 
+    // ==> Don't think so: 
+
+    //TODO: Sign hashes and view instead of high_prep/accept/qc. That way TC only needs to include 1 proposal content + quorum of timeout vote hashes + sigs
+    // pub timeout_vote_hash: Digest, 
+    // pub timeout_vote_view: View,
+
     pub view: View,
     pub author: PublicKey,
     pub signature: Signature,
@@ -935,14 +949,16 @@ pub struct Timeout {
 
 impl Timeout {
     pub async fn new(
-        high_qc: QC,
+        high_prepare: Option<Header>,
+        high_accept: Option<Certificate>,
+        high_qc: Option<QC>,
         view: View,
         author: PublicKey,
         mut signature_service: SignatureService,
     ) -> Self {
         let timeout = Self {
-            high_prepare: None,
-            high_cert: None, 
+            high_prepare,
+            high_accept,
             high_qc,
             view,
             author,
@@ -1025,7 +1041,8 @@ pub struct TC {
     pub hash: Digest,
     pub view: View,
     pub view_round: Round, 
-    pub votes: Vec<(PublicKey, Signature, View)>,
+    pub votes: Vec<Timeout>,
+    //pub votes: Vec<(PublicKey, Signature, View)>,
 }
 
 impl PartialEq for TC {
@@ -1046,6 +1063,64 @@ impl TC {
         }
     }
 
+    pub fn determine_proposal(mut self, committee: &Committee) -> ConsensusResult<(Digest, Option<Header>, Option<Certificate>, QC)> { //returns the header_digest to be used for TC proposal (I.e. ticket proposal)
+        
+        //1) keep track of highest prepare
+        let high_prepare = Header::default();
+        let high_prepares: HashMap<Digest, u32>; //count appearances, need f+1
+        //2) keep track of highest accept
+        let high_accept = Certificate::default();
+        //3) keep track of highest qc
+        let high_qc = QC::default();
+
+        for timeout in self.votes {
+            if let Some(header) = timeout.high_prepare {
+                *high_prepares.entry(header.id.to_owned()).or_default() += 1;
+                if high_prepares.get(&header.id).unwrap() == &committee.validity_threshold() && header.view >= high_prepare.view {
+                    if let Ok(()) = header.verify(committee){
+                        high_prepare = header;
+                    }
+                }
+            } 
+            if let Some(cert) = timeout.high_accept {
+                if cert.header.view >= high_accept.header.view {
+                    if let Ok(()) = cert.verify(committee) {
+                        high_accept = cert;
+                    }
+                   
+                }
+            }
+            if let Some(qc) = timeout.high_qc {
+                if qc.view >= high_qc.view {
+                    if let Ok(()) = qc.verify(committee){
+                        high_qc = qc;
+                    }
+                   
+                }
+            }
+        }
+        
+        // pick the highest proposal. Break ties by qc > cert > header
+        let mut proposal = Digest::default(); //high_qc.hash.clone();
+        let mut header: Option<Header> = None;
+        let mut cert: Option<Certificate> = None;
+
+        if high_accept.header.view > high_qc.view {
+            proposal = high_accept.header.id.clone();
+            cert = Some(high_accept);
+        }
+        if high_prepare.view > max(high_accept.header.view, high_qc.view) {
+            proposal = high_prepare.id;
+            header = Some(high_prepare);
+        }
+        //Note: 
+        // If the header is from a higher view than high_accept, and high_accept did commit, then header must extend it. If header does not extend it, then high_accept did not commit so we can ignore.
+      
+
+        Ok((proposal, header, cert, high_qc))  //Note: If header && cert == None ==> pick Qc; If header == None && cert == Some ==> pick Cert; If header == Some ==> pick Header
+    
+    }
+
     pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
 
         //genesis TC always valid
@@ -1056,7 +1131,8 @@ impl TC {
         // Ensure the QC has a quorum.
         let mut weight = 0;
         let mut used = HashSet::new();
-        for (name, _, _) in self.votes.iter() {
+        for timeout in self.votes.iter() {
+            let name = &timeout.author;
             ensure!(!used.contains(name), ConsensusError::AuthorityReuse(*name));
             let voting_rights = committee.stake(name);
             ensure!(voting_rights > 0, ConsensusError::UnknownAuthority(*name));
@@ -1069,7 +1145,11 @@ impl TC {
         );
 
         // Check the signatures.
-        for (author, signature, high_qc_view) in &self.votes {
+        for timeout in &self.votes {
+            let author;
+            let signature;
+            let high_qc_view;
+
             let mut hasher = Sha512::new();
             hasher.update(self.view.to_le_bytes());
             hasher.update(self.view_round.to_le_bytes());
