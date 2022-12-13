@@ -1,5 +1,5 @@
 use super::*;
-use crate::common::{committee, qc, accept_vote, special_header};
+use crate::common::{committee, qc, accept_vote, special_header, fast_qc};
 use crate::primary;
 use crate::error::{ConsensusError};
 use crypto::generate_keypair;
@@ -36,6 +36,12 @@ async fn verify_accept_vote_unknown_authority() {
 async fn verify_valid_qc() {
     assert!(qc().verify(&committee()).is_ok());
 }
+
+#[tokio::test]
+async fn verify_valid_fast_qc() {
+    assert!(fast_qc().verify(&committee()).is_ok());
+}
+
 
 #[tokio::test]
 async fn verify_qc_authority_reuse() {

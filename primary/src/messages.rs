@@ -234,6 +234,7 @@ impl Header {
         view: View,
         round: Round,
         secret: &SecretKey,
+        committee: &Committee,
     ) -> Header {
         let header = Header {
             author,
@@ -241,10 +242,13 @@ impl Header {
             signature: Signature::default(),
             is_special: true,
             view,
+            //ticket: Some(Ticket::genesis(committee)),
+            consensus_parent: Some(Ticket::genesis(committee).digest()),
            ..Header::default()
         };
-        let signature = Signature::new(&header.digest(), secret);
-        Self { signature, ..header }
+        let id = header.digest();
+        let signature = Signature::new(&id, secret);
+        Self {id, signature, ..header }
     }
 }
 
@@ -403,15 +407,15 @@ impl fmt::Debug for Vote {
 }
 
 impl Vote {
-    pub fn new_from_key(id: Digest, round: Round, author: PublicKey, secret: &SecretKey) -> Self {
+    pub fn new_from_key(id: Digest, round: Round, origin: PublicKey, author: PublicKey, secret: &SecretKey) -> Self {
         let vote = Vote {
             id: id.clone(),
             round,
-            origin: author,
+            origin,
             author,
             signature: Signature::default(),
             view: round,
-            special_valid: 0,
+            special_valid: 1,
             qc: None,
             tc: None,
         };
@@ -523,7 +527,7 @@ impl Certificate {
         self.header.author
     }
 
-    fn verifiable_digest(&self) -> Digest {
+    pub fn verifiable_digest(&self) -> Digest {
         if matching_valids(&self.special_valids) {
             let mut hasher = Sha512::new();
             hasher.update(&self.header.id);
@@ -827,6 +831,10 @@ pub struct QC {
     pub view: View,
     pub view_round: Round,
     pub votes: Vec<(PublicKey, Signature)>,
+
+    pub origin: PublicKey, //Author that issued Header; Necessary only for FastQC to simulate Certificate. (Alternatively, could remove it from Cert?)
+                            //==> vote must contain origin too.
+                            //Note: origin field is not part of Digest, as digest is used for SlowQC validation.
 }
 
 impl QC {
@@ -837,6 +845,7 @@ impl QC {
             hash: genesis_header.id,
             view: genesis_header.view,
             view_round: genesis_header.round,
+            origin: genesis_header.author,
             ..QC::default()
         }
     }
@@ -867,8 +876,26 @@ impl QC {
             weight >= committee.quorum_threshold(),
             ConsensusError::QCRequiresQuorum
         );
+
+        let verifiable_digest;
+
+        //Check if FastQC -- if so, use Cert verification
+        if weight >= committee.fast_threshold() {
+            //generate Cert digest:
+            let mut hasher = Sha512::new();
+            hasher.update(&self.hash);
+            hasher.update(self.view_round.to_le_bytes());
+            hasher.update(&self.origin);  
+            hasher.update(&1u8.to_le_bytes());
+            verifiable_digest = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
+        }
+        //If SlowQC -- use QC digest == AcceptVote digest
+        else{
+            verifiable_digest = self.digest();
+        }
+
         // Check the signatures.
-        Signature::verify_batch(&self.digest(), &self.votes).map_err(ConsensusError::from)
+        Signature::verify_batch(&verifiable_digest, &self.votes).map_err(ConsensusError::from)
     }
 }
 

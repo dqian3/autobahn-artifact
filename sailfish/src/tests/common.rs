@@ -249,10 +249,11 @@ pub fn qc() -> QC {
         view: 1,
         view_round: 1,
         votes: Vec::new(),
+        origin: special_header().author, 
     };
     let digest = qc.digest();
     let mut keys = keys();
-    let votes: Vec<_> = (0..3)
+    let votes: Vec<_> = (0..4)
         .map(|_| {
             let (public_key, secret_key) = keys.pop().unwrap();
             (public_key, Signature::new(&digest, &secret_key))
@@ -283,6 +284,7 @@ pub fn chain(keys: Vec<(PublicKey, SecretKey)>) -> Vec<Block> {
                 view: block.view,
                 view_round: 1,
                 votes: Vec::new(),
+                origin: PublicKey::default(),
             };
             let digest = qc.digest();
             let votes: Vec<_> = keys

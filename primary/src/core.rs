@@ -363,7 +363,7 @@ impl Core {
             .entry(current_header.round)
             .or_insert_with(HashMap::new)
             .entry(current_header.id.clone())
-            .or_insert_with(|| Box::new(VotesAggregator::new());
+            .or_insert_with(|| Box::new(VotesAggregator::new()));
 
         if let (Some(certificate), special_ready) = vote_aggregator.append(vote, &self.committee, current_header)?
         { 

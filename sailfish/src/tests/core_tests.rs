@@ -249,6 +249,7 @@ async fn handle_accept_votes() {
             .cloned()
             .map(|x| (x.author, x.signature))
             .collect(),
+        origin: PublicKey::default(),
     };
     let expected = bincode::serialize(&ConsensusMessage::QC(high_qc)).unwrap();
     
@@ -271,53 +272,6 @@ async fn handle_accept_votes() {
     assert!(try_join_all(handles).await.is_ok());
 }
 
-#[tokio::test]
-async fn generate_proposal() {
-    // Get the keys of the leaders of this round and the next.
-    let (leader, leader_key) = leader_keys(1);
-    let (next_leader, next_leader_key) = leader_keys(2);
-
-    // Make a header, votes, and QC.
-    let header = Header::new_from_key(leader, 1, 1, &leader_key); //pubkey, view, round, privkey
-    let hash = header.digest();
-    let votes: Vec<_> = keys()
-        .iter()
-        .map(|(public_key, secret_key)| {
-            AcceptVote::new_from_key(hash.clone(), header.view, header.round, *public_key, &secret_key)
-        })
-        .collect();
-    let high_qc = QC {
-        hash,
-        view: header.view,
-        view_round: header.round,
-        votes: votes
-            .iter()
-            .cloned()
-            .map(|x| (x.author, x.signature))
-            .collect(),
-    };
-
-    // Run a core instance.
-    let store_path = ".db_test_generate_proposal";
-    let (tx_core, _rx_commit, _, _, mut rx_ticket, _, _, _) =
-        core(next_leader, next_leader_key, committee(), store_path);
-
-    let message = ConsensusMessage::QC(high_qc.clone());
-    tx_core.send(message).await.unwrap();
-
-    // Send all votes to the core.
-    /*for vote in votes.clone() {
-        let message = ConsensusMessage::Vote(vote);
-        tx_core.send(message).await.unwrap();
-    }*/
-
-    // Ensure the core sends a new ticket.
-    let ticket = rx_ticket.recv().await.unwrap();
-    assert_eq!(ticket.round, 1);
-    assert_eq!(ticket.view, 1);
-    assert_eq!(ticket.qc, high_qc);
-    assert!(ticket.tc.is_none());
-}
 
 #[tokio::test]
 #[serial]
@@ -356,6 +310,7 @@ async fn commit_header() {
 
     let votes: Vec<_> = keys()
         .iter()
+        .take(3)
         .map(|(public_key, secret_key)| {
             AcceptVote::new_from_key(id.clone(), 1, 1, *public_key, &secret_key)
         })
@@ -369,6 +324,7 @@ async fn commit_header() {
             .cloned()
             .map(|x| (x.author, x.signature))
             .collect(),
+        origin: PublicKey::default()
     };
 
     let committed = Certificate { header: head, special_valids: Vec::new(), votes: high_qc.votes.clone() };
@@ -440,6 +396,7 @@ async fn commit_header_chain() {
 
     let votes: Vec<_> = keys()
         .iter()
+        .take(3)
         .map(|(public_key, secret_key)| {
             AcceptVote::new_from_key(id.clone(), 1, 1, *public_key, &secret_key)
         })
@@ -453,6 +410,7 @@ async fn commit_header_chain() {
             .cloned()
             .map(|x| (x.author, x.signature))
             .collect(),
+        origin: PublicKey::default(),
     };
 
     let committed_1 = Certificate { header: head.clone(), special_valids: Vec::new(), votes: high_qc.votes.clone() };
@@ -477,6 +435,7 @@ async fn commit_header_chain() {
     //Generate QC
     let votes: Vec<_> = keys()
     .iter()
+    .take(3)
     .map(|(public_key, secret_key)| {
         AcceptVote::new_from_key(id.clone(), 1, 1, *public_key, &secret_key)
     })
@@ -490,6 +449,7 @@ async fn commit_header_chain() {
             .cloned()
             .map(|x| (x.author, x.signature))
             .collect(),
+        origin: PublicKey::default(),
     };
     let committed_2 = Certificate { header: head.clone(), special_valids: Vec::new(), votes: high_qc.votes.clone() };
 
@@ -509,6 +469,107 @@ async fn commit_header_chain() {
     let b = rx_commit.recv().await.unwrap();
     assert_eq!(b, committed_2);
    
+}
+
+
+#[tokio::test]
+async fn generate_proposal() {
+    // Get the keys of the leaders of this round and the next.
+    let (leader, leader_key) = leader_keys(1);
+    let (next_leader, next_leader_key) = leader_keys(2);
+
+     // Run a core instance.
+     let store_path = ".db_test_generate_proposal";
+     let (tx_core, _, mut rx_validation, tx_special, mut rx_ticket, mut rx_commit, tx_consensus, mut store) =
+         core(next_leader, next_leader_key, committee(), store_path);
+
+    // Make a header, votes, and QC.
+    let header = Header::new_from_key(leader, 1, 1, &leader_key, &committee()); //pubkey, view, round, privkey
+    let id = header.digest();
+
+   
+    //Write header to store so it can be committed.
+    let bytes = bincode::serialize(&header).expect("Failed to serialize header");
+    store.write(header.id.to_vec(), bytes).await;
+
+    let votes: Vec<_> = keys()
+        .iter()
+        .take(3)
+        .map(|(public_key, secret_key)| {
+            AcceptVote::new_from_key(id.clone(), header.view.clone(), header.round.clone(), *public_key, &secret_key)
+        })
+        .collect();
+    let high_qc = QC {
+        hash: id,
+        view: header.view,
+        view_round: header.round,
+        votes: votes
+            .iter()
+            .cloned()
+            .map(|x| (x.author, x.signature))
+            .collect(),
+        origin: PublicKey::default()
+    };
+
+    let message = ConsensusMessage::QC(high_qc.clone());
+    tx_core.send(message).await.unwrap();
+
+    // Ensure the core sends a new ticket.
+    let ticket = rx_ticket.recv().await.unwrap();
+    assert_eq!(ticket.round, 1);
+    assert_eq!(ticket.view, 1);
+    assert_eq!(ticket.qc, high_qc);
+    assert!(ticket.tc.is_none());
+}
+
+#[tokio::test]
+async fn commit_fast_qc() {
+    // Get the keys of the leaders of this round and the next.
+    let (leader, leader_key) = leader_keys(1);
+    let (next_leader, next_leader_key) = leader_keys(2);
+
+     // Run a core instance.
+     let store_path = ".db_test_generate_proposal";
+     let (tx_core, _, mut rx_validation, tx_special, mut rx_ticket, mut rx_commit, tx_consensus, mut store) =
+         core(next_leader, next_leader_key, committee(), store_path);
+
+    // Make a header, votes, and QC.
+    let header = Header::new_from_key(leader, 1, 1, &leader_key, &committee()); //pubkey, view, round, privkey
+    let id = header.digest();
+
+   
+    //Write header to store so it can be committed.
+    let bytes = bincode::serialize(&header).expect("Failed to serialize header");
+    store.write(header.id.to_vec(), bytes).await;
+
+    let votes: Vec<Vote> = keys()
+        .iter()
+        .take(4)
+        .map(|(public_key, secret_key)| {
+            Vote::new_from_key(id.clone(), header.round.clone(), header.author.clone(), *public_key, &secret_key)
+        })
+        .collect();
+    let fast_qc = QC {
+        hash: id,
+        view: header.view,
+        view_round: header.round,
+        votes: votes
+            .iter()
+            .cloned()
+            .map(|x| (x.author, x.signature))
+            .collect(),
+        origin: header.author,
+    };
+
+    let message = ConsensusMessage::QC(fast_qc.clone());  //Fast qc
+    tx_core.send(message).await.unwrap();
+
+    // Ensure the core sends a new ticket.
+    let ticket = rx_ticket.recv().await.unwrap();
+    assert_eq!(ticket.round, 1);
+    assert_eq!(ticket.view, 1);
+    assert_eq!(ticket.qc, fast_qc);
+    assert!(ticket.tc.is_none());
 }
 
 #[tokio::test]

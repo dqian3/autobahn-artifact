@@ -197,7 +197,7 @@ impl Core {
     //     Some(Vote::new(&block, self.name, self.signature_service.clone()).await)
     // }
     
-    async fn generate_and_handle_fast_qc(&mut self, certificate: Certificate) -> ConsensusResult<> {
+    async fn generate_and_handle_fast_qc(&mut self, certificate: Certificate) -> ConsensusResult<()> {
 
         //generate fast QC
         let qc: QC = QC {
@@ -205,8 +205,10 @@ impl Core {
             view: certificate.header.view,
             view_round: certificate.header.round,
             votes: certificate.votes,
+            origin: certificate.header.author,
         };
-        //TODO: Edit QC verification function to verify a fast QC (check whether votes.size = 3f+1, and if so, generate a dummy cert with special_valid = 1 and verify Certificate instead)
+        //Note: QC verification function verifies a fast QC by checking whether votes.size = 3f+1, and if so, generating and verifying the hash of a cert with special_valid = 1 
+        
         // call handle_qc
         self.handle_qc(&qc).await
     }

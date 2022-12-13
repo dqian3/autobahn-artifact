@@ -289,10 +289,52 @@ pub fn qc() -> QC {
         view: 1,
         view_round: 1,
         votes: Vec::new(),
+        origin: PublicKey::default(),
     };
     let digest = qc.digest();
     let mut keys = keys();
     let votes: Vec<_> = (0..3)
+        .map(|_| {
+            let (public_key, secret_key) = keys.pop().unwrap();
+            (public_key, Signature::new(&digest, &secret_key))
+        })
+        .collect();
+    QC { votes, ..qc }
+}
+
+// Fixture.
+pub fn fast_qc() -> QC {
+    let qc = QC {
+        hash: special_header().id, //Digest::default(),
+        view: 1,
+        view_round: 1,
+        votes: Vec::new(),
+        origin: special_header().author,
+    };
+
+    let vote = Vote {
+        id: special_header().id, 
+        round: 1,
+        origin: special_header().author,
+        author: PublicKey::default(),
+        signature: Signature::default(),
+        view: 1, 
+        special_valid: 1,
+        qc: None,
+        tc: None,
+    };
+    let digest = vote.digest();
+
+    //Using Cert to simulate should be equivalent
+    // let cert = Certificate {
+    //     header: special_header(),
+    //     special_valids: vec![1u8, 1u8, 1u8, 1u8],
+    //     votes: Vec::new(),
+    // };
+    // let digest = cert.verifiable_digest();
+
+    let mut keys = keys();
+    let votes: Vec<_> = (0..4)
         .map(|_| {
             let (public_key, secret_key) = keys.pop().unwrap();
             (public_key, Signature::new(&digest, &secret_key))

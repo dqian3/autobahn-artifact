@@ -298,6 +298,7 @@ impl Synchronizer {
 
    
     pub async fn get_commit_header(&mut self, header_digest: Digest, new_ticket: &Ticket) -> ConsensusResult<Option<Header>>{
+        
         //read digest
         debug!("getting header");
         match self.store.read(header_digest.to_vec()).await? {

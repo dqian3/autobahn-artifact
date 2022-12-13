@@ -131,6 +131,7 @@ impl QCMaker {
                 view: vote.view,
                 view_round: vote.view_round, //Note: Currently aren't checking anywhere that the view_rounds of the Votes match. However, they must be matching transitively: Replicas only vote on certs, and a cert only is formed on matching view_round.
                 votes: self.votes.clone(),
+                origin: PublicKey::default(), //Note: Don't need this for slow QC's
             }));
         }
         Ok(None)

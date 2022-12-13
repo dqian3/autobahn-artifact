@@ -55,17 +55,21 @@ impl VotesAggregator {
         self.votes.push((author, vote.signature));
 
         self.weight += committee.stake(&author);
-        self.valid_weight += committee.stake(&author) * (vote.special_valid as Stake);
-        self.fast_weight += self.valid_weight
+        let vote_valid_weight = committee.stake(&author) * (vote.special_valid as Stake);
+        self.valid_weight += vote_valid_weight;
+        self.fast_weight += vote_valid_weight;
 
         let normal_ready = self.weight >= committee.quorum_threshold();
         let special_ready = self.valid_weight >= committee.quorum_threshold();
         let fast_ready = self.fast_weight >= committee.fast_threshold();
 
         //Currently forming cert (implies broadcast + process) up to 3 times: a) 2f+1 invalid cert, b) 2f+1 valid cert, c) 3f+1 valid cert
+            //In the common case, where all nodes are valid, a) and b) happen together.
+
         //TODO: To avoid redundantly starting both slow and fast path, can make default valid cert gen fast, and unlock slow one after a timer
         //Note: 2f+1 invalid cert should always be able to form asynchronously for DAG progress
                 //Note: Even if we put the Dag Quorum behind a timer the DAG would be asynchronous -- albeit not responsive.
+                
         if normal_ready || special_ready || fast_ready {
             self.weight = 0; // Ensures normal quorum is only reached once. 
            
