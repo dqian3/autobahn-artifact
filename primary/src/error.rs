@@ -1,5 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::{primary::{Round, View}, messages::{QC, TC}};
+use crate::{primary::{Round, View}, messages::{QC, TC, Timeout}};
 use crypto::{CryptoError, Digest, PublicKey};
 use store::StoreError;
 use thiserror::Error;
@@ -134,6 +134,9 @@ pub enum ConsensusError {
 
     #[error("Header proposer provided invalid Header")]
     InvalidHeader,
+
+    #[error("Timeout invalid {0:?}")]
+    InvalidTimeout(Timeout),
 
     #[error("QC invalid {0:?}")]
     InvalidQC(QC),

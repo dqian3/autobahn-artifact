@@ -172,17 +172,14 @@ impl TCMaker {
         );
 
         // Add the timeout to the accumulator.
+        let view = timeout.view;
         self.votes
             .push(timeout);
         self.weight += committee.stake(&author);
         if self.weight >= committee.quorum_threshold() {
             self.weight = 0; // Ensures TC is only created once.
-            return Ok(Some(TC {
-                hash: Digest::default(), //TODO: FIXME: Replace this with our new TC rule: I.e. whatever logic picks a header to propose
-                view: timeout.view,
-                view_round: 0, //TODO: FIXME: Replace this with new TC rule (round of the header we propose)
-                votes: self.votes.clone(),
-            }));
+            let tc = TC::new(committee, view, self.votes.clone());
+            return Ok(Some(tc));
         }
         Ok(None)
     }
