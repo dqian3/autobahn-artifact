@@ -374,7 +374,7 @@ impl Core {
 
     async fn local_timeout_view(&mut self) -> ConsensusResult<()> {
        //TESTING 
-        //return Ok(());
+        return Ok(());
 
         warn!("Timeout reached for view {}", self.view);
         println!("timeout reached for view {}", self.view);
@@ -634,7 +634,7 @@ impl Core {
 
     async fn process_ticket(&mut self, header: &Header, ticket: Ticket) -> ConsensusResult<()>{
 
-        // Ensure that proposed round isnt reaching too far ahead TODO:
+        //TODO:  Ensure that proposed consensus round isnt reaching too far ahead 
                 // Check that header.prev_view_round is satisfied by ticket. 
                 //FIXME: Technically want to do this in the DAG layer already; to avoid the DAG joining a high round that is invalid/too far ahead.
                 //NOTE: DAG doesn't "join round", it just keeps track. If it receives a high round, but there is no quorum, it doesnt matter.
@@ -646,12 +646,13 @@ impl Core {
         //Process ticket qc/tc (i.e. commit last proposal)
         match ticket.tc {
             Some(tc) => {
-                // check if tc for prev view.
+                // ensure that tc is from prev view.
                 ensure!(
                     header.view == tc.view + 1,
                     ConsensusError::InvalidTicket
                 );
 
+                // ensure that consensus rounds are monotonic
                 ensure!(
                     header.round > tc.view_round,
                     ConsensusError::InvalidHeader
@@ -662,10 +663,12 @@ impl Core {
                 }
             },
             None => {
+                // ensure that qc is from prev view.
                 ensure!(
                     header.view == ticket.qc.view + 1,
                     ConsensusError::InvalidTicket
                 );
+                 // ensure that consensus rounds are monotonic
                 ensure!(
                     header.round > ticket.qc.view_round,
                     ConsensusError::InvalidHeader
@@ -679,19 +682,21 @@ impl Core {
         Ok(())
     }
 
-    fn update_high_prepare(&mut self, header: &Header) {
-        if header.view > self.high_prepare.view {
+    fn update_high_prepare(&mut self, header: &Header, tc_force: bool) {
+        if tc_force || header.view > self.high_prepare.view {
             self.high_prepare = header.clone();
         }
     }
 
-    async fn process_prepare(&mut self, header: &Header) {
-        debug!("Processing {:?}", header);
-        self.advance_view(header.view).await; 
 
+    async fn process_prepare(&mut self, header: &Header, tc_force: bool) {
+        debug!("Processing {:?}", header);
+        //Catchup view if we're behind. Note: This should never be necessary: process_ticket will have caught us up...
+        self.view = max(self.view, header.view);
+     
          //Update latest prepared. Update latest_prepared_view.
         self.increase_last_prepared_view(header.view);
-        self.update_high_prepare(header);
+        self.update_high_prepare(header, tc_force); // If this is the decision recovered by a TC then we MUST adopt it as our current
        
         self.store_header(&header).await;
         //self.stored_headers.insert(header.id, header); //FIXME: Can probably remove, don't think it is used anymore
@@ -704,7 +709,7 @@ impl Core {
     #[async_recursion]
     async fn process_special_header(&mut self, header: Header) -> ConsensusResult<()> {
 
-        //println!("CONSENSUS: processing special header view {} certificate at replica? {}", header.view.clone(), self.name);
+        //println!("CONSENSUS: processing special header view {} certificate at replica? {}. Curr view = {}", header.view.clone(), self.name, self.view);
 
          //Indicate that we are processing this header.
         if !self.processing_headers
@@ -773,9 +778,7 @@ impl Core {
             }
             else{ //If there is a ticket attached
                 let ticket = header.ticket.clone().unwrap();
-                if let Err(e) = self.process_ticket(&header, ticket).await {
-                    return Err(e);
-                }
+                self.process_ticket(&header, ticket).await?;    
             }
                 //IGNORE Comment (only true if we use Ticket as proof for validation result.)
                     // // I.e. whether have QC/TC for view v-1 
@@ -794,12 +797,11 @@ impl Core {
         
     
         //C) PROCESS CORRECT SPECIAL HEADER
-        
-        self.process_prepare(&header).await;
-        
+        self.process_prepare(&header, false).await;
+     
         //D) SEND REPLY TO THE DAG
 
-        //Dummy proofs ==> Currently are NOT using proofs, but using timeouts.
+        //DEPRECATED. Dummy proofs ==> Currently are NOT using proofs, but using timeouts.
         let qc: Option<QC> = None;
         let tc: Option<TC> = None;
 
@@ -831,19 +833,20 @@ impl Core {
         Ok(())
     }
 
-    fn update_high_accept(&mut self, cert: &Certificate) {
-        if cert.header.view > self.high_accept.header.view {
+    fn update_high_accept(&mut self, cert: &Certificate, tc_force: bool) {
+        if tc_force || cert.header.view > self.high_accept.header.view {
             self.high_accept = cert.clone();
         }
     }
 
-    async fn process_accept(&mut self, cert: &Certificate) {
+    async fn process_accept(&mut self, cert: &Certificate, tc_force: bool) {
         debug!("Processing {:?}", cert);
-        self.advance_view(cert.header.view).await;
+         //Catchup view if we're behind. Note: This should never be necessary: process_ticket will have caught us up...
+         self.view = max(self.view, cert.header.view);
 
          //Update latest prepared. Update latest_prepared_view.
         self.increase_last_voted_view(cert.header.view);
-        self.update_high_accept(cert);
+        self.update_high_accept(cert, tc_force); // If this is the decision recovered by a TC then we MUST adopt it as our current
        
         self.store_cert(cert).await;  
     }
@@ -852,28 +855,27 @@ impl Core {
     #[async_recursion]
     async fn process_special_certificate(&mut self, certificate: Certificate) -> ConsensusResult<()> {
       
-        //println!("process special cert for view {} at replica {}", certificate.header.view.clone(), self.name);
+        println!("process special cert for view {} at replica {}", certificate.header.view.clone(), self.name);
     
          //1) Check if cert is still relevant to current view, if so, update view and high_accept. Ignore cert if we've already committed in the round.
          ensure!(
             certificate.header.view >= self.view && certificate.header.view > self.last_committed_view,
             ConsensusError::TooOld(certificate.header.id, certificate.header.view)
         );
-
+     
         //2)  Don't vote twice on a cert; 
         ensure!(
             certificate.header.view > self.last_voted_view,
             ConsensusError::AlreadyVoted(certificate.header.id, certificate.header.view)
         );
-         
-
+        
          //Indicate that we are processing this header. (don't need this unless we want to avoid duplicates)
          //self.processing_certs.entry(certificate.header.round).or_insert_with(HashSet::new).insert(certificate.header.id.clone());
 
         //process_header if we have not already -> this will process the ticket (Note: This is not strictly necessary, but it's useful to call early to avoid having to sync on consensus_parent_ticket later)
         if !self.processing_headers.get(&certificate.header.round).map_or_else(|| false, |x| x.contains(&certificate.header.id))
         { // This function may still throw an error if the storage fails.
-            self.process_special_header(certificate.header.clone()).await?;
+            self.process_special_header(certificate.header.clone()).await.expect("process_special_header should never fail if we already have a cert"); //Because it only fails if ticket is wrong
         }
 
 
@@ -898,7 +900,7 @@ impl Core {
         // }
 
 
-        self.process_accept(&certificate).await;
+        self.process_accept(&certificate, false).await;
 
         //2) Fast Path:
         if certificate.is_special_fast(&self.committee){
@@ -907,7 +909,6 @@ impl Core {
         }
 
         //3) Slow Path: Send out AcceptVote
-
         let vote = AcceptVote::new(&certificate.header, self.name, self.signature_service.clone()).await;  
         debug!("Created {:?}", vote.digest());
         
@@ -1026,6 +1027,10 @@ impl Core {
     
 
     async fn handle_tc(&mut self, tc: TC) -> ConsensusResult<()> {
+        if tc.view < self.view {
+            return Ok(());
+        }
+
         tc.verify(&self.committee)?; 
         // if let Err(_) =  tc.verify(&self.committee){
         //     return Err(ConsensusError::InvalidTC(tc.clone()));
@@ -1047,13 +1052,14 @@ impl Core {
          //TODO: For safety, should adopt any high_accept > high_qc? 
          // --> No. Header should suffice if high_prepare >high_accept. Since high_accept must have a valid commit ticket, it must either extend high_accept, or high accept did not commit
        
+         //NOTE: For safety: MUST adopt the winning proposal (from a TC >= self.view), even if we have a higher local one (Note: only applies to high_prepare/high_accept; effectively undoes high one because its not committing)
          if let Some(header) = header {
-            self.process_prepare(&header).await;
+            self.process_prepare(&header, true).await;
             // if the tc proposes a header, commit a TC ticket
             ticket = self.generate_ticket_and_commit(header.id.clone(), Some(header), None, Some(tc)).await?;
         }
         else if let Some(cert) = certificate {
-            self.process_accept(&cert).await;  
+            self.process_accept(&cert, true).await;  
             // if the tc proposes a cert, commit a TC ticket
             ticket = self.generate_ticket_and_commit(cert.header.id.clone(), Some(cert.header), None, Some(tc)).await?;
             
