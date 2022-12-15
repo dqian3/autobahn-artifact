@@ -1273,7 +1273,7 @@ impl TC {
         if winner == 0 { //==> High_Prepare won
             let winning_prepare: &Header = self.winning_proposal.0.as_ref().expect("Invalid winning proposal");
             ensure!(
-                winning_prepare.id == *high_prepare_meta.0 && winning_prepare.view == high_prepare_meta.1,
+                winning_prepare.id == *high_prepare_meta.0 && winning_prepare.view == high_prepare_meta.1 && self.view_round == winning_prepare.round,
                 ConsensusError::InvalidTC(self.clone())
             );
             //verify correctness of winning header
@@ -1283,7 +1283,7 @@ impl TC {
         else if winner == 1 { // ==> High_Accept won
             let winning_cert: &Certificate = self.winning_proposal.1.as_ref().expect("Invalid winning proposal");
             ensure!(
-                winning_cert.header.view == high_accept_view,
+                winning_cert.header.view == high_accept_view && self.view_round == winning_cert.header.round,
                 ConsensusError::InvalidTC(self.clone())
             );
             //verify correctness of winning cert
@@ -1293,7 +1293,7 @@ impl TC {
         else { //winner == 2 ==> High_QC won
             let winning_qc: &QC = self.winning_proposal.2.as_ref().expect("Invalid winning proposal"); 
             ensure!(
-                winning_qc.view == high_qc_view,
+                winning_qc.view == high_qc_view && self.view_round == winning_qc.view_round,
                 ConsensusError::InvalidTC(self.clone())
             );
             //verify correctness of winning qc

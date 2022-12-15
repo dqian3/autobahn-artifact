@@ -633,6 +633,16 @@ impl Core {
     }
 
     async fn process_ticket(&mut self, header: &Header, ticket: Ticket) -> ConsensusResult<()>{
+
+        // Ensure that proposed round isnt reaching too far ahead TODO:
+                // Check that header.prev_view_round is satisfied by ticket. 
+                //FIXME: Technically want to do this in the DAG layer already; to avoid the DAG joining a high round that is invalid/too far ahead.
+                //NOTE: DAG doesn't "join round", it just keeps track. If it receives a high round, but there is no quorum, it doesnt matter.
+                    //honest proposer should fall into the trap of proposing something too high ===> can guard this by ensuring ticket vouches for round
+                    // ===> transitively, ticket only exist if enough replicas checked during process_special_header that round does not exceed parents by 2
+                    // i.e. check that round = max(parents+2, last_consensus_round+1);
+
+
         //Process ticket qc/tc (i.e. commit last proposal)
         match ticket.tc {
             Some(tc) => {
@@ -641,9 +651,14 @@ impl Core {
                     header.view == tc.view + 1,
                     ConsensusError::InvalidTicket
                 );
+
+                ensure!(
+                    header.round > tc.view_round,
+                    ConsensusError::InvalidHeader
+                );
                 // check if we need to process qc.
                 if tc.view > self.last_committed_view { // Since we update last_committed_view only upon commit it is implied that last_committed_view <= view
-                    return self.handle_tc(tc).await; //TODO: don't do this redundantly/check for duplicates 
+                    self.handle_tc(tc).await?; //TODO: don't do this redundantly/check for duplicates 
                 }
             },
             None => {
@@ -651,9 +666,13 @@ impl Core {
                     header.view == ticket.qc.view + 1,
                     ConsensusError::InvalidTicket
                 );
+                ensure!(
+                    header.round > ticket.qc.view_round,
+                    ConsensusError::InvalidHeader
+                );
 
                 if ticket.qc.view > self.last_committed_view {
-                    return self.handle_qc(ticket.qc).await; //TODO: don't do this redundantly/check for duplicates 
+                    self.handle_qc(ticket.qc).await?; //TODO: don't do this redundantly/check for duplicates 
                 }
             }
         }
@@ -743,15 +762,7 @@ impl Core {
                  ConsensusError::WrongProposer
             );
 
-            //3) Ensure that proposed round isnt reaching too far ahead TODO:
-                // Check that header.prev_view_round is satisfied by ticket. 
-                //FIXME: Technically want to do this in the DAG layer already; to avoid the DAG joining a high round that is invalid/too far ahead.
-                //NOTE: DAG doesn't "join round", it just keeps track. If it receives a high round, but there is no quorum, it doesnt matter.
-                    //honest proposer should fall into the trap of proposing something too high ===> can guard this by ensuring ticket vouches for round
-                    // ===> transitively, ticket only exist if enough replicas checked during process_special_header that round does not exceed parents by 2
-                    // i.e. check that round = max(parents+2, last_consensus_round+1);
-
-            //4)Check if Ticket valid. If we have not processed qc/tc in ticket yet then process it.
+            //3)Check if Ticket valid. If we have not processed qc/tc in ticket yet then process it.
 
                         // ensure!(
                         //     header.ticket.is_some(),
@@ -770,7 +781,8 @@ impl Core {
                     // // I.e. whether have QC/TC for view v-1 
                     // // If don't have QC/TC. Start a waiter. If waiter triggers, call this function again (or directly call down validation complete)
 
-                //5) proposed round > last committed round
+
+            //4) proposed round > last committed round
                 // Only process special header if the round number is increasing  // self.round >= ticket.qc.view_round since we process_qc first.
                 if header.round <= self.round {
                     special_valid = 0;
