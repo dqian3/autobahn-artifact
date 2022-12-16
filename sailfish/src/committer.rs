@@ -306,10 +306,12 @@ impl CertificateWaiter {
             .map(|(x, y)| y.notify_read(x.to_vec()))
             .collect();
 
-        try_join_all(waiting)
+        let deliver = try_join_all(waiting)
             .await
             .map(|_| deliver)
-            .map_err(ConsensusError::from)
+            .map_err(ConsensusError::from);
+        debug!("Finished waiting, delivering");
+        deliver
     }
 
     async fn run(&mut self) {
@@ -337,11 +339,12 @@ impl CertificateWaiter {
 
                      //Add a waiter for the special parent header.
                      if certificate.header.special_parent.is_some(){
-                        debug!("Waiting for special edge of {:?}", certificate);
                         let special_parent = certificate
                         .header
                         .special_parent
                         .clone().unwrap();
+                        debug!("Waiting for special edge {} of {:?}", special_parent, certificate);
+
                         //create dummy digest
                         let mut hasher = Sha512::new();
                         hasher.update(&special_parent); //== parent_header.id
@@ -350,7 +353,7 @@ impl CertificateWaiter {
                         let special_wait_for = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
                         wait_for.push(  (special_wait_for.to_vec(), self.store.clone())  );
                      }
-
+                     debug!("Waiting for {} parents", wait_for.len());
                     let fut = Self::waiter(wait_for, certificate);
                     waiting.push_back(fut);
                 }

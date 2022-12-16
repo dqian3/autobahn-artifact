@@ -200,7 +200,7 @@ impl Core {
 
     #[async_recursion]
     async fn process_header(&mut self, header: Header) -> DagResult<()> {
-        debug!("Processing {:?}", header);
+        debug!("Processing Header {:?}", header);
         // Indicate that we are processing this header.
         self.processing
             .entry(header.round)
@@ -215,13 +215,18 @@ impl Core {
         //TODO: Modify so we don't have to wait for parent cert if the block is special -- but need to wait for parent.
 
         if header.is_special && header.special_parent.is_some() {
-            //TODO: Check that parent header has been received. // IF so, then when a cert for this special block forms, also form a dummy cert of the parent.
+            debug!("syncing on special parent header");
+
+            //Check that parent header has been received. // IF so, then when a cert for this special block forms, also form a dummy cert of the parent.
             //1) Read from store to confirm parent exists.
             
              // let (special_parent, is_genesis) = self.synchronizer.get_special_parent(&header, false).await?;  
-            let sync_if_missing = false;
+            let sync_if_missing = true;
             match self.synchronizer.get_special_parent(&header, sync_if_missing).await? {
-                (None, _) => return Ok(()),
+                (None, _) => {
+                    debug!("missing special parent header");
+                    return Ok(());
+                },
                 (Some(special_parent_header), is_genesis) => { 
                   //TODO: FIXME: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
                    
@@ -326,7 +331,7 @@ impl Core {
          // Make a vote and send it to the header's creator.
 
          let vote = Vote::new(&header, &self.name, &mut self.signature_service, special_valid, qc, tc).await;
-         debug!("Created {:?}", vote);
+         debug!("Created Vote {:?}", vote);
 
          if vote.origin == self.name {
              //println!("Calling process vote on our own header. Replica {}, Header id {}", header.author.clone(), header.id.clone());
@@ -352,7 +357,7 @@ impl Core {
 
     #[async_recursion]
     async fn process_vote(&mut self, vote: Vote) -> DagResult<()> {
-        debug!("Processing {:?}", vote);
+        debug!("Processing Vote {:?}", vote);
 
         //TODO: For all to all communication: curr_header might exist --> must add to current_headers inside process_header, and require a sync here on current_header being in store.
        let current_header = self.current_headers
@@ -476,7 +481,7 @@ impl Core {
          //Additional special block processing
          // //Note: If it is a special block, then don't need to wait for the special edge parent. ==> generate a special cert for the parent to pass to the DAG
         if certificate.header.is_special && certificate.header.special_parent.is_some() {
-            let sync_if_missing = false;
+            let sync_if_missing = true;
             match self.synchronizer.deliver_special_certificate(&certificate, sync_if_missing).await? {
                 //If we have parent cert => do nothing
                 (None, true) => {},

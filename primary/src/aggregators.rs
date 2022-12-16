@@ -61,7 +61,7 @@ impl VotesAggregator {
 
         let normal_ready = self.weight >= committee.quorum_threshold();
         let special_ready = self.valid_weight >= committee.quorum_threshold();
-        let fast_ready = self.fast_weight >= committee.fast_threshold();
+        let fast_ready = false; //self.fast_weight >= committee.fast_threshold();
 
         //Currently forming cert (implies broadcast + process) up to 3 times: a) 2f+1 invalid cert, b) 2f+1 valid cert, c) 3f+1 valid cert
             //In the common case, where all nodes are valid, a) and b) happen together.
@@ -70,7 +70,7 @@ impl VotesAggregator {
         //Note: 2f+1 invalid cert should always be able to form asynchronously for DAG progress
                 //Note: Even if we put the Dag Quorum behind a timer the DAG would be asynchronous -- albeit not responsive.
 
-        if normal_ready || special_ready { //|| fast_ready {
+        if normal_ready || special_ready || fast_ready {
             self.weight = 0; // Ensures normal quorum is only reached once. 
            
             if special_ready {

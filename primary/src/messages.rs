@@ -607,7 +607,7 @@ impl fmt::Debug for Certificate {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "{}: C{}({}, {}, {:?})",
+            "{}: C{}({}, {}, {:?}, {:?})",
             self.digest(),
             self.round(),
             self.origin(),
@@ -616,7 +616,8 @@ impl fmt::Debug for Certificate {
                 .parents
                 .iter()
                 .map(|x| format!("{}", x))
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>(),
+            if self.header.special_parent.is_some() {self.header.special_parent.clone().unwrap()} else {Digest::default()}
         )
     }
 }
