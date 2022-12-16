@@ -8,6 +8,7 @@ use config::{Committee, WorkerId, Stake};
 use crypto::{Digest, Hash, PublicKey, Signature, SignatureService, SecretKey};
 use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
+use log::debug;
 use serde::{Deserialize, Serialize};
 use std::cmp::max;
 use std::collections::{BTreeMap, BTreeSet, HashSet, HashMap};
@@ -568,7 +569,7 @@ impl Certificate {
     }
 
     pub fn is_special_valid(&self, committee: &Committee) -> bool {
-
+        debug!("Special_valid weight: {}", self.valid_weight(committee));
         self.valid_weight(committee) >= committee.quorum_threshold() 
     
     }

@@ -144,9 +144,10 @@ impl Committer {
 
                     // Print the committed sequence in the right order.
                     for certificate in sequence {
+                        
                         info!("Committed {}", certificate.header);
 
-                        #[cfg(feature = "benchmark")]
+                        // #[cfg(feature = "benchmark")]
                         for digest in certificate.header.payload.keys() {
                             // NOTE: This log entry is used to compute performance.
                             info!("Committed {} -> {:?}", certificate.header, digest);
@@ -154,7 +155,7 @@ impl Committer {
 
                          // Output the block to the top-level application.
                         if let Err(e) = self.tx_output.send(certificate.header).await {
-                            info!("Failed to send block through the output channel: {}", e);
+                            debug!("Failed to send block through the output channel: {}", e);
                         }
                     }
                 }
@@ -336,6 +337,7 @@ impl CertificateWaiter {
 
                      //Add a waiter for the special parent header.
                      if certificate.header.special_parent.is_some(){
+                        debug!("Waiting for special edge of {:?}", certificate);
                         let special_parent = certificate
                         .header
                         .special_parent

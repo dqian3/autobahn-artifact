@@ -225,11 +225,13 @@ impl Core {
                 (Some(special_parent_header), is_genesis) => { 
                   //TODO: FIXME: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
                    
+                  //TODO: Want to check that proposes round is justified by EITHER ticket or parents.
+                  debug!("special parent round: {}, header.special_parent_round: {}", special_parent_header.round, header.special_parent_round);
                   ensure!( //check that special parent round matches claimed round
-                        special_parent_header.round == header.special_parent_round && header.special_parent_round + 1 == header.round,  //FIXME: this is not true -> we might have skipped rounds
+                        special_parent_header.round == header.special_parent_round, // && header.special_parent_round + 1 == header.round,  //FIXME: this is not true -> we might have skipped rounds
                         DagError::MalformedHeader(header.id.clone())
                     );
-            
+                    debug!("special parent author: {}, header.author: {}. is_genesis {}", special_parent_header.author, header.author, is_genesis,);
                     ensure!( //check that special parent and special header have same parent //TODO: OR parent = genesis header.
                          special_parent_header.author == header.author || is_genesis,
                          DagError::MalformedHeader(header.id.clone())
@@ -248,13 +250,22 @@ impl Core {
             // Check the parent certificates. Ensure the parents form a quorum and are all from the previous round.
             //Note: Does not apply to special blocks who have a special edge -> if they skip rounds can have long edges.
         if !header.is_special || header.special_parent.is_none(){
+            debug!("Checking parent certificates");
+            let mut ticket_bound_round = false;
+            if header.is_special {
+                let ticket = header.ticket.as_ref().expect("special header must have ticket");
+                ticket_bound_round = header.round == ticket.round + 1;
+            }
+
             let mut stake = 0;
             for x in parents {
                 ensure!(
-                    x.round() + 1 == header.round,                                                                  
+                    x.round() + 1 == header.round || ticket_bound_round, // header.is_special, //FIXME: TODO: Want to check that proposed round is justified by EITHER ticket or parents.                                                                 
                     DagError::MalformedHeader(header.id.clone())
                 );
                 stake += self.committee.stake(&x.origin());
+
+                
             }
             
             ensure!(
@@ -410,10 +421,10 @@ impl Core {
     
     async fn try_upcall_process_special_certificate(&mut self, certificate: &Certificate){
 
-        
+        debug!("Try upcalling cert {:?}. Is_special: {}, Is_special_valid: {}", certificate, certificate.header.is_special, certificate.is_special_valid(&self.committee));
         //Only upcall if cert is special and valid. Don't upcall for invalid (Note: dummy certs are invalid by default, since valid_weight = 0)
         if certificate.header.is_special && certificate.is_special_valid(&self.committee){
-            println!("calling special upcall");
+            debug!("Success! Upcalling cert {:?}", certificate);
             if let Err(e) = self.tx_consensus.send(certificate.clone()).await {    //NOTE: Process_cert will be called after this, which will start DAG parent sync. committer.CertificateWaiter will wait for the DAG parents.
                 warn!("Failed to deliver certificate {} to the consensus: {}", certificate.header.id.clone(), e);
             }
@@ -432,7 +443,7 @@ impl Core {
 
     #[async_recursion]
     async fn process_certificate(&mut self, certificate: Certificate) -> DagResult<()> {
-        debug!("Processing {:?}", certificate);
+        debug!("Processing Cert: {:?}", certificate);
 
         //Try upcalling to Consensus layer.
         //Note: Calling this before parent sync could result in a duplicate call if sync puts us to sleep and re-execs ==> However, I took care that process_special_cert does not vote twice.

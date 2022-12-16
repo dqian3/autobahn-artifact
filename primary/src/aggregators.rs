@@ -70,7 +70,7 @@ impl VotesAggregator {
         //Note: 2f+1 invalid cert should always be able to form asynchronously for DAG progress
                 //Note: Even if we put the Dag Quorum behind a timer the DAG would be asynchronous -- albeit not responsive.
 
-        if normal_ready || special_ready || fast_ready {
+        if normal_ready || special_ready { //|| fast_ready {
             self.weight = 0; // Ensures normal quorum is only reached once. 
            
             if special_ready {

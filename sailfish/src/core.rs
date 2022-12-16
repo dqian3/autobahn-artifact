@@ -209,6 +209,8 @@ impl Core {
         };
         //Note: QC verification function verifies a fast QC by checking whether votes.size = 3f+1, and if so, generating and verifying the hash of a cert with special_valid = 1 
         
+        //TODO: Have header already. dont need to call process_commit: //==> Call process_qc, and call commit directly. //PROBLEM: Might not have started synchronization.
+        //FIX: Check whether synchronizer has header too, and if not, pass the header to DAG layer to call sync.
         // call handle_qc
         self.handle_qc(qc).await
     }
@@ -263,6 +265,9 @@ impl Core {
         if !self.synchronizer.deliver_parent_ticket(&header, &new_ticket).await? {
             return Ok(());
         }
+
+        //advance last round to ticket round.
+        self.round = max(self.round, new_ticket.round);
 
         if new_ticket.tc.is_some() { //don't commit it, just store it.
             // store the ticket.
@@ -629,7 +634,7 @@ impl Core {
         debug!("Processing {:?}", qc);
         self.advance_view(qc.view).await;
         self.update_high_qc(qc);
-        self.round = max(self.round, qc.view_round);
+        //self.round = max(self.round, qc.view_round); => was moved to commit
     }
 
     async fn process_ticket(&mut self, header: &Header, ticket: Ticket) -> ConsensusResult<()>{
@@ -669,6 +674,7 @@ impl Core {
                     ConsensusError::InvalidTicket
                 );
                  // ensure that consensus rounds are monotonic
+                debug!("Checking special header vs ticket round: header round {}, ticket qc round {}", header.round, ticket.qc.view_round);
                 ensure!(
                     header.round > ticket.qc.view_round,
                     ConsensusError::InvalidHeader
@@ -726,7 +732,8 @@ impl Core {
         //A) CHECK WHETHER HEADER IS CURRENT ==> If not, reply invalid   
 
                 //1) Check if we have already voted in this view > last prepared view
-                if self.last_prepared_view >= header.view {
+                if header.view <= self.last_prepared_view {
+                    debug!("Reject Special header {:?}. Already prepared view {}", header, self.last_prepared_view);
                     special_valid = 0;
                 }
                 /*ensure!(
@@ -735,7 +742,8 @@ impl Core {
                 );*/
                 
                 //2) If we have not voted, but have already committed higher view, vote invalid
-                if self.last_committed_view >= header.view {
+                if header.view <= self.last_committed_view {
+                    debug!("Reject Special header {:?}. Already committed view {}", header, self.last_committed_view);
                     special_valid = 0;
                 }
 
@@ -757,9 +765,8 @@ impl Core {
         //B) CHECK HEADER CORRECTNESS ==> If not, don't need to reply. Proposer must be byz
 
             //1) Header signature correct => If false, dont need to reply
-            if let Err(_) = header.verify(&self.committee){
-                return Err(ConsensusError::InvalidHeader);
-            } 
+            header.verify(&self.committee)?;
+               
 
             //2) Header author == view leader
             ensure!(
@@ -774,6 +781,7 @@ impl Core {
                         //     ConsensusError::InvalidTicket
                         // );
             if header.ticket.is_none() { //TODO: Could ignore ticket validation if we have header.consensus_parent (=ticket) in store already.
+                debug!("Reject Special header {:?}. No ticket", header);
                 special_valid = 0;
             }
             else{ //If there is a ticket attached
@@ -787,7 +795,9 @@ impl Core {
 
             //4) proposed round > last committed round
                 // Only process special header if the round number is increasing  // self.round >= ticket.qc.view_round since we process_qc first.
-                if header.round <= self.round {
+                
+                if !(header.round > self.round) {  //header.round <= self.round {
+                    debug!("Reject Special header {:?} with round {}. Already committed a ticket with a higher round {}", header, header.round, self.round);
                     special_valid = 0;
                 }
                 // ensure!(

@@ -129,19 +129,21 @@ impl Proposer {
 
     
     async fn make_header(&mut self, is_special: bool) {
-        if is_special {
-            println!("PROPOSER: make special block for view {}, round {} at replica? {}", self.view, self.round, self.name);
-        }
-        else {
-            println!("PROPOSER: make normal block for round {} at replica? {}", self.round, self.name);
-        }
-
+      
         let mut ticket = None;
         mem::swap(&mut self.ticket, &mut ticket); //Reset self.ticket; and move ticket (this just avoids copying)
         let mut ticket_digest = Digest::default();
         if is_special && ticket.is_some() { 
             ticket_digest = ticket.as_ref().unwrap().digest();
         }
+
+        if is_special {
+            debug!("PROPOSER: make special block for view {}, round {} at replica? {}. Ticket round: {}", self.view, self.round, self.name, ticket.as_ref().unwrap().round);
+        }
+        else {
+            debug!("PROPOSER: make normal block for round {} at replica? {}", self.round, self.name);
+        }
+
         //let mut prev_view_header = None;
         //mem::swap(&mut self.prev_view_header, &mut prev_view_header);  //TODO: Currently unused = just None. Need to pass a prev_view_header digest as part of ticket channel. (or include it inside ticket => preferred)
         // Make a new header.
@@ -170,7 +172,7 @@ impl Proposer {
 
         //Store reference to our own previous header -- used for special edge. Does not include a certificate (does not exist yet)
         self.last_header_id = header.digest();
-        self.last_header_round = self.round.clone();
+        self.last_header_round = header.round.clone(); ////self.round.clone();
       
         // Send the new header to the `Core` that will broadcast and process it.
         self.tx_core
@@ -204,7 +206,6 @@ impl Proposer {
 
             if timer_expired || enough_digests {
 
-                debug!("enough_digests. special? {:?}, last_parents? {:?}, enough parents? {:?}", self.propose_special, self.last_has_parents, enough_parents);
                 //Case A: Have Digests OR Timer: Receive Ticket Before parents. ==> next loop will start a special header
                 //Case B: Have Digests OR Timer: Receive Parents before ticket. ==> next loop will start a normal header
                 //Case C: Waiting for Digest AND Timer: Received both Ticket and Parent. ==> next loop will start a special header (with parents)
@@ -212,6 +213,7 @@ impl Proposer {
                 //Pass down round from last cert. Also pass down current parents EVEN if not full quorum: I.e. add a special flag to "process_cert" to not wait.
                 if self.propose_special && (self.last_has_parents || enough_parents) { //2nd clause: Special block must have, or extend block with n-f edges ==> cant have back to back special edges
                 
+                    debug!("enough_digests. special? {:?}, last_parents? {:?}, enough parents? {:?}", self.propose_special, self.last_has_parents, enough_parents);
                     //not waiting for n-f parent edges to create special block -- but will use them if available (Note, this will only happen in case C)
                     //Includes at least own parent as special edge.
 
@@ -241,6 +243,7 @@ impl Proposer {
                     proposing = true;
                 }
                 else if enough_parents {
+                    debug!("enough_digests. special? {:?}, last_parents? {:?}, enough parents? {:?}", self.propose_special, self.last_has_parents, enough_parents);
                     // If not special and enough parents available make a new normal header.
                     self.make_header(false).await;
                     self.last_has_parents = true;
@@ -265,7 +268,7 @@ impl Proposer {
                     if ticket.view < self.view {
                         continue; //Proposal for view already exists.
                     }
-                    if ticket.round > self.round { //catch up to last special block round --> to ensure special headers are monotonic in rounds
+                    if ticket.round >= self.round { //catch up to last special block round --> to ensure special headers are monotonic in rounds
                         self.round = ticket.round+1; 
                     }
                     else if self.last_header_round == self.round { //if last special block round is smaller then our current round, increment round normally. Only increment if we have not done so already (e.g. edges have been received)
