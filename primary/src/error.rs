@@ -4,7 +4,7 @@ use crypto::{CryptoError, Digest, PublicKey};
 use store::StoreError;
 use thiserror::Error;
 
-#[macro_export]
+#[macro_export(local_inner_macros)]
 macro_rules! bail {
     ($e:expr) => {
         return Err($e);

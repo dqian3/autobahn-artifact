@@ -7,11 +7,11 @@ use crypto::{Digest, PublicKey};
 use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
 use futures::future::try_join_all;
-use futures::stream::FuturesOrdered;
+use futures::stream::{FuturesOrdered, FuturesUnordered};
 use futures::stream::StreamExt as _;
 use log::{debug, error, info, log_enabled};
 use primary::Certificate;
-use primary::messages::Header;
+use primary::messages::{Header, Committment};
 use std::cmp::max;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
@@ -116,7 +116,7 @@ impl Committer {
                     );
                 },
                 Some(certificate) = self.rx_deliver.recv() => {
-                    debug!("Processing {:?}", certificate);
+                    debug!("Processing Delivered Commit {:?}", certificate);
 
                     // Ensure we didn't already order this certificate.
                     if let Some(r) = state.last_committed.get(&certificate.origin()) {
@@ -280,6 +280,8 @@ pub struct CertificateWaiter {
     rx_input: Receiver<Certificate>,
     /// Outputs the certificates once we have all its parents.
     tx_output: Sender<Certificate>,
+
+
 }
 
 impl CertificateWaiter {
@@ -306,21 +308,52 @@ impl CertificateWaiter {
             .map(|(x, y)| y.notify_read(x.to_vec()))
             .collect();
 
-        let deliver = try_join_all(waiting)
-            .await
-            .map(|_| deliver)
-            .map_err(ConsensusError::from);
-        debug!("Finished waiting, delivering");
-        deliver
+        let deliver_result = try_join_all(waiting)
+            .await?;
+        // let deliver_result = deliver_result
+        //     .iter_mut()
+        //     .map(|_| deliver.clone());
+            // .map_err(ConsensusError::from);
+        debug!("Finished waiting, delivering {:?}", deliver);
+        //deliver_result;
+        Ok(deliver)
+    }
+
+    async fn confirm_committment(&mut self, certificate: &Certificate){
+
+        debug!("committing view: {}", certificate.header.view);
+        let committment = Committment {commit_view : certificate.header.view };
+        let bytes = bincode::serialize(&committment).expect("Failed to serialize header");
+        self.store.write(committment.digest().to_vec(), bytes).await;
     }
 
     async fn run(&mut self) {
-        let mut waiting = FuturesOrdered::new();
+        let mut waiting =  FuturesUnordered::new(); //FuturesOrdered::new(); //
         loop {
             tokio::select! {
+                biased; // Try to commit waiting ones first.
+                Some(result) = waiting.next() => match result {
+                    // _ => { debug!{"Reaching branch"};},
+                    Ok(certificate) => {
+                        debug!("Got all the history of {:?}", certificate);
+                    
+                        self.confirm_committment(&certificate).await;
+
+                        self.tx_output.send(certificate).await.expect("Failed to send certificate");
+                    },
+                    Err(e) => {
+                        error!("{}", e);
+                        panic!("Storage failure: killing node.");
+                    }
+                   
+                },
                 Some(certificate) = self.rx_input.recv() => {
                     // Skip genesis' children.
                     if certificate.round() == 1 {
+                        debug!("Delivering cert with genesis parents. {:?}", certificate);
+
+                        self.confirm_committment(&certificate).await;
+
                         self.tx_output.send(certificate).await.expect("Failed to send certificate");
                         continue;
                     }
@@ -353,19 +386,17 @@ impl CertificateWaiter {
                         let special_wait_for = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
                         wait_for.push(  (special_wait_for.to_vec(), self.store.clone())  );
                      }
+
+                     //Add waiter for consensus parent
+                     if certificate.header.is_special {
+                        let prev_committment = Committment {commit_view : certificate.header.view-1 };
+                        wait_for.push( (prev_committment.digest().to_vec()   , self.store.clone()));
+                     }
+                   
                      debug!("Waiting for {} parents", wait_for.len());
                     let fut = Self::waiter(wait_for, certificate);
-                    waiting.push_back(fut);
-                }
-                Some(result) = waiting.next() => match result {
-                    Ok(certificate) => {
-                        debug!("Got all the history of {:?}", certificate);
-                        self.tx_output.send(certificate).await.expect("Failed to send certificate");
-                    },
-                    Err(e) => {
-                        error!("{}", e);
-                        panic!("Storage failure: killing node.");
-                    }
+                    waiting.push(fut);
+                    //waiting.push_back(fut);
                 },
             }
         }

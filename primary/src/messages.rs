@@ -1364,3 +1364,18 @@ impl fmt::Debug for TC {
         write!(f, "TC({}, {:?})", self.view, self.high_qc_views())
     }
 }
+
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct Committment {
+    //pub commit_round: Round,
+    pub commit_view: View
+}
+
+impl Hash for Committment {
+    fn digest(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(self.commit_view.to_le_bytes());
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+}
