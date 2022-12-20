@@ -535,7 +535,7 @@ impl Core {
         let ticket = self.generate_ticket_and_commit(qc.hash.clone(), None, Some(qc), None).await?;
     
          // Make a new special header if we are the next leader.
-         if self.name == self.leader_elector.get_leader(self.view) {
+        if self.name == self.leader_elector.get_leader(self.view) {
             self.generate_proposal(ticket).await;
         }
 
@@ -554,7 +554,7 @@ impl Core {
 
         // Handle the QC embedded in the timeout if present.
         if let Some(qc) = &timeout.high_qc {
-            self.handle_qc(qc.clone()).await;
+            let res = self.handle_qc(qc.clone()).await;
         }
        
         //TODO: NOTE: Don't view change just because we receive one timeout (could be from byz) ==> only accept view change once >= f+1 arrive. Waiting for TC to form (>= 2f+1) is also fine.
@@ -607,6 +607,7 @@ impl Core {
     #[async_recursion]
     async fn generate_proposal(&mut self, ticket: Ticket) {
 
+        debug!("Generate proposal for view {}", self.view);
         //Start new proposal: Pass down to proposer: 1) current view, 2) current Dag round, 3) latest ticket  
 
          //generate ticket to include Qc or TC 
@@ -617,6 +618,7 @@ impl Core {
 
         //Don't generate proposals for old views.
         if ticket.view == self.view - 1 {  //Note: view -1 since pur next proposal should be for self.view, and thus the associate ticket is from view-1
+            debug!("Sent ticket to proposer");
             self.tx_ticket
             //.send((self.view, ticket.round, ticket)) 
             .send(ticket) 

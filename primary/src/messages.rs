@@ -304,12 +304,13 @@ impl fmt::Debug for Header {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "{}: B{}({}, {}, special: {}, {:?}, {})",
+            "{}: B{}({}, {}, special: {}, view: {}, {:?}, {})",
             self.id,
             self.round,
             self.author,
             self.payload.keys().map(|x| x.size()).sum::<usize>(),
             self.is_special,
+            self.view,
             self
             .parents
             .iter()
@@ -613,7 +614,7 @@ impl fmt::Debug for Certificate {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "{}: C{}({}, {}, {:?}, {})",
+            "{}: C{}({}, {}, {:?}, {}, view: {})",
             self.digest(),
             self.round(),
             self.origin(),
@@ -623,7 +624,8 @@ impl fmt::Debug for Certificate {
                 .iter()
                 .map(|x| format!("{}", x))
                 .collect::<Vec<_>>(),
-            if self.header.special_parent.is_some() {self.header.special_parent.clone().unwrap()} else {Digest::default()}
+            if self.header.special_parent.is_some() {self.header.special_parent.clone().unwrap()} else {Digest::default()},
+            self.header.view,
         )
     }
 }

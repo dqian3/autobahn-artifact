@@ -164,9 +164,9 @@ impl Committer {
                         }
                         debug!("Finished Commit");
                          // Output the block to the top-level application.
-                        if let Err(e) = self.tx_output.send(certificate.header).await {
-                            debug!("Failed to send block through the output channel: {}", e);
-                        }
+                        // if let Err(e) = self.tx_output.send(certificate.header).await {
+                        //     debug!("Failed to send block through the output channel: {}", e);
+                        // }
                         debug!("Finish upcall");
                     }
                 }

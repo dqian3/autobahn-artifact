@@ -62,13 +62,15 @@ pub struct Proposer {
     use_special_parent: bool,
 
     ticket: Option<Ticket>,
+
+    committee: Committee,
 }
 
 impl Proposer {
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(
         name: PublicKey,
-        committee: &Committee,
+        committee: Committee,
         signature_service: SignatureService,
         header_size: usize,
         max_header_delay: u64,
@@ -77,7 +79,7 @@ impl Proposer {
         rx_ticket: Receiver<Ticket>,//Receiver<(View, Round, Ticket)>,
         tx_core: Sender<Header>,
     ) {
-        let genesis: Vec<Digest> = Certificate::genesis(committee)
+        let genesis: Vec<Digest> = Certificate::genesis(&committee)
             .iter()
             .map(|x| x.digest())
             .collect();
@@ -95,7 +97,7 @@ impl Proposer {
         //         ..Header::default()
         //     }.digest();
       
-        let genesis_parent: Digest = Header::genesis(committee).id;  //Note: This should never be necessary to use. 
+        let genesis_parent: Digest = Header::genesis(&committee).id;  //Note: This should never be necessary to use. 
                                                                         // Two cases: A) first header is special => it will use genesis_parents. B) special is not first header =>last_header_id references a previous proposal
 
         tokio::spawn(async move {
@@ -121,12 +123,19 @@ impl Proposer {
                 last_has_parents: true,
                 use_special_parent: false,
                 ticket: None,
+                committee,
             }
             .run()
             .await;
         });
     }
 
+    pub fn get_leader(&self, view: View) -> PublicKey {
+        let mut keys: Vec<_> = self.committee.authorities.keys().cloned().collect();
+        keys.sort();
+        //keys[view as usize % self.committee.size()]
+        keys[0]
+    }
     
     async fn make_header(&mut self, is_special: bool) {
       
@@ -250,6 +259,9 @@ impl Proposer {
 
                     proposing = true;
                 }
+                // else{
+                //     debug!("Cannot propose. Even though enough_digests/timer. special? {:?}, last_parents? {:?}, enough parents? {:?}", self.propose_special, self.last_has_parents, enough_parents);
+                // }
             }
           
             if proposing {
@@ -282,8 +294,10 @@ impl Proposer {
 
                     self.view = ticket.view+1;
                     self.prev_view_round = ticket.round;
-                    self.propose_special = true;
-                    self.ticket = Some(ticket);
+                    //if self.get_leader(self.view) == self.name {
+                        self.propose_special = true;
+                        self.ticket = Some(ticket);
+                   // }
                     debug!("Dag moved to round {}, and view {}. propose_special {}", self.round, self.view, self.propose_special);
     
                 }
