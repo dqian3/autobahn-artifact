@@ -40,6 +40,9 @@ pub enum DagError {
     #[error("Malformed header {0}")]
     MalformedHeader(Digest),
 
+    #[error("Malformed special header {0}")]
+    MalformedSpecialHeader(Digest),
+
     #[error("Received message from unknown authority {0}")]
     UnknownAuthority(PublicKey),
 

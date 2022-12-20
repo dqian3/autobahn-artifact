@@ -234,13 +234,21 @@ impl Core {
                   debug!("special parent round: {}, header.special_parent_round: {}", special_parent_header.round, header.special_parent_round);
                   ensure!( //check that special parent round matches claimed round
                         special_parent_header.round == header.special_parent_round, // && header.special_parent_round + 1 == header.round,  //FIXME: this is not true -> we might have skipped rounds
-                        DagError::MalformedHeader(header.id.clone())
+                        DagError::MalformedSpecialHeader(header.id.clone())
                     );
                     debug!("special parent author: {}, header.author: {}. is_genesis {}", special_parent_header.author, header.author, is_genesis,);
                     ensure!( //check that special parent and special header have same parent //TODO: OR parent = genesis header.
                          special_parent_header.author == header.author || is_genesis,
-                         DagError::MalformedHeader(header.id.clone())
+                         DagError::MalformedSpecialHeader(header.id.clone())
                     );
+
+                //Ensure that special edge rule was respected: I.e. special block or special parent must have n-f valid parents.
+                // ==> (currently) If current block has special edge, then it cannot have parents; Thus the special parent header must have parents == no special edge. //TODO: FIXME: If we add streaming, adjust this accordingly
+                   ensure!(
+                    special_parent_header.special_parent.is_none(),
+                    DagError::MalformedSpecialHeader(header.id.clone())
+                   )
+                   
                 }
                 
             };
@@ -254,7 +262,7 @@ impl Core {
 
             // Check the parent certificates. Ensure the parents form a quorum and are all from the previous round.
             //Note: Does not apply to special blocks who have a special edge -> if they skip rounds can have long edges.
-        if !header.is_special || header.special_parent.is_none(){
+        if !header.is_special || header.special_parent.is_none(){ 
             debug!("Checking parent certificates");
             let mut ticket_bound_round = false;
             if header.is_special {

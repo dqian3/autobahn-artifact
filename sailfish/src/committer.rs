@@ -13,7 +13,7 @@ use log::{debug, error, info, log_enabled};
 use primary::Certificate;
 use primary::messages::{Header, Committment};
 use std::cmp::max;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, BTreeSet};
 use std::convert::TryInto;
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -85,8 +85,16 @@ impl Committer {
     ) {
         let (tx_deliver, rx_deliver) = channel(CHANNEL_CAPACITY);
 
+      
+        let genesis = Certificate::genesis(&committee);
+
+        //special blocks from round >1 can also have genesis as parent!!! ==> Solution: Write genesis to store
+        //Alternatively, just store genesis digests and compare against
+        let genesis_digests = genesis.clone().iter().map(|x| x.digest()).collect();
+
+
         tokio::spawn(async move {
-            CertificateWaiter::spawn(store, rx_commit, tx_deliver);
+            CertificateWaiter::spawn(store, rx_commit, tx_deliver, genesis_digests);
         });
 
         tokio::spawn(async move {
@@ -95,7 +103,7 @@ impl Committer {
                 rx_mempool,
                 rx_deliver,
                 tx_output,
-                genesis: Certificate::genesis(&committee),
+                genesis,
             }
             .run()
             .await;
@@ -121,6 +129,7 @@ impl Committer {
                     // Ensure we didn't already order this certificate.
                     if let Some(r) = state.last_committed.get(&certificate.origin()) {
                         if r >= &certificate.round() {
+                            debug!("Already ordered certificate");
                             continue;
                         }
                     }
@@ -128,6 +137,7 @@ impl Committer {
                     // Flatten the sub-dag referenced by the certificate.
                     let mut sequence = Vec::new();
                     for x in self.order_dag(&certificate, &state) {
+                        debug!("updating Dag with: {:?}", x);
                         // Update and clean up internal state.
                         state.update(&x, self.gc_depth);
 
@@ -152,11 +162,12 @@ impl Committer {
                             // NOTE: This log entry is used to compute performance.
                             info!("Committed {} -> {:?}", certificate.header, digest);
                         }
-
+                        debug!("Finished Commit");
                          // Output the block to the top-level application.
                         if let Err(e) = self.tx_output.send(certificate.header).await {
                             debug!("Failed to send block through the output channel: {}", e);
                         }
+                        debug!("Finish upcall");
                     }
                 }
                 
@@ -185,6 +196,7 @@ impl Committer {
                 let round;
 
                 parent_digest = parent;
+                debug!("Trying to sequence normal Dag parent: {}", parent_digest);
                 round = x.round() -1;
 
                 let (digest, certificate) = match state
@@ -210,6 +222,7 @@ impl Committer {
                 if !skip {
                     buffer.push(certificate);
                     already_ordered.insert(digest);
+                    debug!("Adding Dag parent to sequence: {}", parent_digest);
                 }
                 
             }
@@ -218,12 +231,14 @@ impl Committer {
                 //Currently we can skip rounds. Header needs to include parent round to solve this.
                 //Note: process_header verifies that author and rounds are correct.
 
+                
                 //generate digest of dummy cert
                 let mut hasher = Sha512::new();
                 hasher.update(&x.header.special_parent.as_ref().unwrap()); //== parent_header.id
                 hasher.update(&x.header.special_parent_round.to_le_bytes()); 
                 hasher.update(&x.header.origin()); //parent_header.origin = child_header_origin
                 let parent_digest = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
+                debug!("Trying to sequence special parent header: {}, dummy cert digest {}", x.header.special_parent.as_ref().unwrap(), parent_digest);
 
                 let round = x.header.special_parent_round;
 
@@ -255,6 +270,7 @@ impl Committer {
                 if !skip {
                     buffer.push(certificate);
                     already_ordered.insert(digest);
+                    debug!("Adding special Dag parent to sequence: {}", parent_digest);
                 }
             }
 
@@ -281,16 +297,19 @@ pub struct CertificateWaiter {
     /// Outputs the certificates once we have all its parents.
     tx_output: Sender<Certificate>,
 
+    genesis_digests: BTreeSet<Digest>,
+
 
 }
 
 impl CertificateWaiter {
-    pub fn spawn(store: Store, rx_input: Receiver<Certificate>, tx_output: Sender<Certificate>) {
+    pub fn spawn(store: Store, rx_input: Receiver<Certificate>, tx_output: Sender<Certificate>, genesis_digests: BTreeSet<Digest>,) {
         tokio::spawn(async move {
             Self {
                 store,
                 rx_input,
                 tx_output,
+                genesis_digests
             }
             .run()
             .await
@@ -349,7 +368,8 @@ impl CertificateWaiter {
                 },
                 Some(certificate) = self.rx_input.recv() => {
                     // Skip genesis' children.
-                    if certificate.round() == 1 {
+                    //Note: Ideally only want to allow genesis parents for block in round 1 -- however, only a byz special block will be able to use them anyways. At which point coverage doesn't really matter
+                    if certificate.header.parents == self.genesis_digests { //|| certificate.round() == 1 {
                         debug!("Delivering cert with genesis parents. {:?}", certificate);
 
                         self.confirm_committment(&certificate).await;
@@ -369,31 +389,35 @@ impl CertificateWaiter {
                         .cloned()
                         .map(|x| (x.to_vec(), self.store.clone()))
                         .collect();
-
+                        
+                    debug!("Waiting for {} normal DAG parents", wait_for.len());
+                    
                      //Add a waiter for the special parent header.
                      if certificate.header.special_parent.is_some(){
                         let special_parent = certificate
                         .header
                         .special_parent
-                        .clone().unwrap();
-                        debug!("Waiting for special edge {} of {:?}", special_parent, certificate);
-
+                        .as_ref().unwrap();
+                       
                         //create dummy digest
                         let mut hasher = Sha512::new();
-                        hasher.update(&special_parent); //== parent_header.id
+                        hasher.update(special_parent); //== parent_header.id
                         hasher.update(&certificate.header.special_parent_round.to_le_bytes()); 
                         hasher.update(&certificate.header.origin()); //parent_header.origin = child_header_origin
                         let special_wait_for = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
                         wait_for.push(  (special_wait_for.to_vec(), self.store.clone())  );
+
+                        debug!("Waiting for special edge of {:?}. [header {}, cert {}]", certificate, special_parent, special_wait_for);
                      }
 
                      //Add waiter for consensus parent
                      if certificate.header.is_special {
                         let prev_committment = Committment {commit_view : certificate.header.view-1 };
                         wait_for.push( (prev_committment.digest().to_vec()   , self.store.clone()));
-                     }
+                        debug!("Waiting for view {} consensus parent", certificate.header.view-1);
+                    }
                    
-                     debug!("Waiting for {} parents", wait_for.len());
+                    
                     let fut = Self::waiter(wait_for, certificate);
                     waiting.push(fut);
                     //waiting.push_back(fut);

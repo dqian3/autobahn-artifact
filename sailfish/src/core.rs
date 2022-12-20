@@ -277,6 +277,7 @@ impl Core {
             return Ok(());
         }
     
+        //adopt header view
         self.last_committed_view = header.view.clone();
         
         self.processing_headers.retain(|k, _| k >= &header.view); //garbage collect
@@ -682,6 +683,7 @@ impl Core {
                 );
 
                 if ticket.qc.view > self.last_committed_view {
+                    debug!("Process ticket of Header {:?} invoked Handle QC of consensus parent", header);
                     self.handle_qc(ticket.qc).await?; //TODO: don't do this redundantly/check for duplicates 
                 }
             }
