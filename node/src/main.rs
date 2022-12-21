@@ -20,7 +20,7 @@ pub const CHANNEL_CAPACITY: usize = 1_000;
 async fn main() -> Result<()> {
     let matches = App::new(crate_name!())
         .version(crate_version!())
-        .about("A research implementation of Narwhal and Tusk.")
+        .about("A research implementation of Sailfish.")
         .args_from_usage("-v... 'Sets the level of verbosity'")
         .subcommand(
             SubCommand::with_name("generate_keys")
