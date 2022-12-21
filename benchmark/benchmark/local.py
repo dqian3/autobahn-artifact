@@ -41,7 +41,7 @@ class LocalBench:
 
         # Kill any previous testbed.
         self._kill_nodes()
-
+        
         try:
             Print.info('Setting up testbed...')
             nodes, rate = self.nodes[0], self.rate[0]
@@ -68,7 +68,7 @@ class LocalBench:
                 keys += [Key.from_file(filename)]
 
             names = [x.name for x in keys]
-            print('num workers', self.workers)
+            #print('num workers', self.workers)
             committee = LocalCommittee(names, self.BASE_PORT, self.workers)
             committee.print(PathMaker.committee_file())
 

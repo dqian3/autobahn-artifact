@@ -66,7 +66,7 @@ class Committee:
         port = base_port
         self.json = {'authorities': OrderedDict()}
 
-        print(addresses)
+        #print(addresses)
         for name, hosts in addresses.items():
             host = hosts.pop(0)
             consensus_addr = {
