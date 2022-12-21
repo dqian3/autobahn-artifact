@@ -347,7 +347,7 @@ impl CertificateWaiter {
     }
 
     async fn run(&mut self) {
-        let mut waiting =  FuturesUnordered::new(); //FuturesOrdered::new(); //
+        let mut waiting =  FuturesOrdered::new(); //FuturesUnordered::new(); //
         loop {
             tokio::select! {
                 biased; // Try to commit waiting ones first.
@@ -356,7 +356,7 @@ impl CertificateWaiter {
                     Ok(certificate) => {
                         debug!("Got all the history of {:?}", certificate);
                     
-                        self.confirm_committment(&certificate).await;
+                        //self.confirm_committment(&certificate).await;
 
                         self.tx_output.send(certificate).await.expect("Failed to send certificate");
                     },
@@ -372,7 +372,7 @@ impl CertificateWaiter {
                     if certificate.header.parents == self.genesis_digests { //|| certificate.round() == 1 {
                         debug!("Delivering cert with genesis parents. {:?}", certificate);
 
-                        self.confirm_committment(&certificate).await;
+                        //self.confirm_committment(&certificate).await;
 
                         self.tx_output.send(certificate).await.expect("Failed to send certificate");
                         continue;
@@ -411,16 +411,16 @@ impl CertificateWaiter {
                      }
 
                      //Add waiter for consensus parent
-                     if certificate.header.is_special {
-                        let prev_committment = Committment {commit_view : certificate.header.view-1 };
-                        wait_for.push( (prev_committment.digest().to_vec()   , self.store.clone()));
-                        debug!("Waiting for view {} consensus parent", certificate.header.view-1);
-                    }
+                    //  if certificate.header.is_special {
+                    //     let prev_committment = Committment {commit_view : certificate.header.view-1 };
+                    //     wait_for.push( (prev_committment.digest().to_vec()   , self.store.clone()));
+                    //     debug!("Waiting for view {} consensus parent", certificate.header.view-1);
+                    // }
                    
                     
                     let fut = Self::waiter(wait_for, certificate);
-                    waiting.push(fut);
-                    //waiting.push_back(fut);
+                    //waiting.push(fut);
+                    waiting.push_back(fut);
                 },
             }
         }
