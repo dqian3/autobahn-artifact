@@ -217,7 +217,7 @@ impl Proposer {
                 //Case C: Waiting for Digest AND Timer: Received both Ticket and Parent. ==> next loop will start a special header (with parents)
                
                 //Pass down round from last cert. Also pass down current parents EVEN if not full quorum: I.e. add a special flag to "process_cert" to not wait.
-                if self.propose_special && ((self.last_has_parents || false) || enough_parents) { //2nd clause: Special block must have, or extend block with n-f edges ==> cant have back to back special edges
+                if self.propose_special && ((self.last_has_parents && false) || enough_parents) { //2nd clause: Special block must have, or extend block with n-f edges ==> cant have back to back special edges
                 
                     debug!("enough_digests. special? {:?}, last_parents? {:?}, enough parents? {:?}", self.propose_special, self.last_has_parents, enough_parents);
                     //not waiting for n-f parent edges to create special block -- but will use them if available (Note, this will only happen in case C)
@@ -227,7 +227,7 @@ impl Proposer {
                         self.last_has_parents = true;
                     }
                     else{  
-                        //self.last_has_parents = false ;
+                        self.last_has_parents = false ;
                         self.use_special_parent = true; 
                         //self.last_parents.push(self.last_header_id.clone()); //Use last header as special edge. //TODO: Consensus should process parents. Distinguish whether n-f edges, or just 1 edge (special)
                                                                                                                     // If n-f: Do the same Synchronization/availability checks that the DAG does.
@@ -275,10 +275,10 @@ impl Proposer {
                     if ticket.view < self.view {
                         continue; //Proposal for view already exists.
                     }
-                    if false || ticket.round >= self.round { //catch up to last special block round --> to ensure special headers are monotonic in rounds
+                    if false && ticket.round >= self.round { //catch up to last special block round --> to ensure special headers are monotonic in rounds
                         self.round = ticket.round+1; 
                     }
-                    else if false || self.last_header_round == self.round { //if last special block round is smaller then our current round, increment round normally. Only increment if we have not done so already (e.g. edges have been received)
+                    else if false && self.last_header_round == self.round { //if last special block round is smaller then our current round, increment round normally. Only increment if we have not done so already (e.g. edges have been received)
                         self.round = self.round +1;
                     }
                     
@@ -290,9 +290,9 @@ impl Proposer {
                     self.view = ticket.view+1;
                     self.prev_view_round = ticket.round;
                     //if self.get_leader(self.view) == self.name {
-                    //if self.round > self.prev_view_round { //if we've caught up to special round.
+                    if self.round > self.prev_view_round { //if we've caught up to special round.
                         self.propose_special = true;
-                    //}
+                    }
                         self.ticket = Some(ticket);
                    // }
                     debug!("Dag moved to round {}, and view {}. propose_special {}, has_ticket {}", self.round, self.view, self.propose_special, self.ticket.is_some());
@@ -328,9 +328,9 @@ impl Proposer {
                         self.last_parents = parents;
                     }
 
-                    // if self.round > self.prev_view_round && self.ticket.is_some() { //if we've caught up to special round. (and haven't already used up ticket)
-                    //     self.propose_special = true;    
-                    // }
+                    if self.round > self.prev_view_round && self.ticket.is_some() { //if we've caught up to special round. (and haven't already used up ticket)
+                        self.propose_special = true;    
+                    }
                 }
                     
                 Some((digest, worker_id)) = self.rx_workers.recv() => {
