@@ -133,20 +133,17 @@ impl Proposer {
     pub fn get_leader(&self, view: View) -> PublicKey {
         let mut keys: Vec<_> = self.committee.authorities.keys().cloned().collect();
         keys.sort();
-        //keys[view as usize % self.committee.size()]
-        keys[0]
+        keys[view as usize % self.committee.size()]
+        //keys[0]
     }
     
     async fn make_header(&mut self, is_special: bool) {
       
         let mut ticket = None;
-        mem::swap(&mut self.ticket, &mut ticket); //Reset self.ticket; and move ticket (this just avoids copying)
         let mut ticket_digest = Digest::default();
-        if is_special && ticket.is_some() { 
+        if is_special && self.ticket.is_some() {
+            mem::swap(&mut self.ticket, &mut ticket); //Reset self.ticket; and move ticket (this just avoids copying)
             ticket_digest = ticket.as_ref().unwrap().digest();
-        }
-
-        if is_special {
             debug!("PROPOSER: make special block for view {}, round {} at replica? {}. Ticket round: {}", self.view, self.round, self.name, ticket.as_ref().unwrap().round);
         }
         else {
@@ -220,7 +217,7 @@ impl Proposer {
                 //Case C: Waiting for Digest AND Timer: Received both Ticket and Parent. ==> next loop will start a special header (with parents)
                
                 //Pass down round from last cert. Also pass down current parents EVEN if not full quorum: I.e. add a special flag to "process_cert" to not wait.
-                if self.propose_special && (self.last_has_parents || enough_parents) { //2nd clause: Special block must have, or extend block with n-f edges ==> cant have back to back special edges
+                if self.propose_special && ((self.last_has_parents || false) || enough_parents) { //2nd clause: Special block must have, or extend block with n-f edges ==> cant have back to back special edges
                 
                     debug!("enough_digests. special? {:?}, last_parents? {:?}, enough parents? {:?}", self.propose_special, self.last_has_parents, enough_parents);
                     //not waiting for n-f parent edges to create special block -- but will use them if available (Note, this will only happen in case C)
@@ -230,7 +227,7 @@ impl Proposer {
                         self.last_has_parents = true;
                     }
                     else{  
-                        self.last_has_parents = false ;
+                        //self.last_has_parents = false ;
                         self.use_special_parent = true; 
                         //self.last_parents.push(self.last_header_id.clone()); //Use last header as special edge. //TODO: Consensus should process parents. Distinguish whether n-f edges, or just 1 edge (special)
                                                                                                                     // If n-f: Do the same Synchronization/availability checks that the DAG does.
@@ -246,9 +243,7 @@ impl Proposer {
                     //reset
                     self.use_special_parent = false;
                     self.propose_special = false; 
-                    
-
-
+                
                     proposing = true;
                 }
                 else if enough_parents {
@@ -280,13 +275,13 @@ impl Proposer {
                     if ticket.view < self.view {
                         continue; //Proposal for view already exists.
                     }
-                    if ticket.round >= self.round { //catch up to last special block round --> to ensure special headers are monotonic in rounds
+                    if false || ticket.round >= self.round { //catch up to last special block round --> to ensure special headers are monotonic in rounds
                         self.round = ticket.round+1; 
                     }
-                    else if self.last_header_round == self.round { //if last special block round is smaller then our current round, increment round normally. Only increment if we have not done so already (e.g. edges have been received)
+                    else if false || self.last_header_round == self.round { //if last special block round is smaller then our current round, increment round normally. Only increment if we have not done so already (e.g. edges have been received)
                         self.round = self.round +1;
                     }
-                    //else round > last_header_round. Don't increase again.
+                    
                     
                     //TODO: Note: Need a defense mechanism to ensure Byz proposer cannot arbitrarily exhaust round space. Maybe reject voting on headers that are too far ahead (avoid forming ticket)
                     // ==> This is implicitly solved by requiring normal blocks to have n-f parents. Byz proposer cannot issue ticket for high round without n-f total replicas being in that round.
@@ -295,10 +290,12 @@ impl Proposer {
                     self.view = ticket.view+1;
                     self.prev_view_round = ticket.round;
                     //if self.get_leader(self.view) == self.name {
+                    //if self.round > self.prev_view_round { //if we've caught up to special round.
                         self.propose_special = true;
+                    //}
                         self.ticket = Some(ticket);
                    // }
-                    debug!("Dag moved to round {}, and view {}. propose_special {}", self.round, self.view, self.propose_special);
+                    debug!("Dag moved to round {}, and view {}. propose_special {}, has_ticket {}", self.round, self.view, self.propose_special, self.ticket.is_some());
     
                 }
 
@@ -330,8 +327,12 @@ impl Proposer {
                         // Signal that we have enough parent certificates to propose a new header.
                         self.last_parents = parents;
                     }
-                   
+
+                    // if self.round > self.prev_view_round && self.ticket.is_some() { //if we've caught up to special round. (and haven't already used up ticket)
+                    //     self.propose_special = true;    
+                    // }
                 }
+                    
                 Some((digest, worker_id)) = self.rx_workers.recv() => {
                     println!("   received payload from worker {}", worker_id);
                     self.payload_size += digest.size();

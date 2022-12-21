@@ -244,10 +244,10 @@ impl Core {
 
                 //Ensure that special edge rule was respected: I.e. special block or special parent must have n-f valid parents.
                 // ==> (currently) If current block has special edge, then it cannot have parents; Thus the special parent header must have parents == no special edge. //TODO: FIXME: If we add streaming, adjust this accordingly
-                   ensure!(
-                    special_parent_header.special_parent.is_none(),
-                    DagError::MalformedSpecialHeader(header.id.clone())
-                   )
+                //    ensure!(
+                //     special_parent_header.special_parent.is_none(),
+                //     DagError::MalformedSpecialHeader(header.id.clone())
+                //    )
                    
                 }
                 
