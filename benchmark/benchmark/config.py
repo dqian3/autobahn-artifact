@@ -65,6 +65,8 @@ class Committee:
 
         port = base_port
         self.json = {'authorities': OrderedDict()}
+
+        print(addresses)
         for name, hosts in addresses.items():
             host = hosts.pop(0)
             consensus_addr = {
@@ -169,7 +171,7 @@ class LocalCommittee(Committee):
         assert all(isinstance(x, str) for x in names)
         assert isinstance(port, int)
         assert isinstance(workers, int) and workers > 0
-        addresses = OrderedDict((x, ['127.0.0.1']*(2+workers)) for x in names)
+        addresses = OrderedDict((x, ['127.0.0.1']*(1+workers)) for x in names)
         super().__init__(addresses, port)
 
 
