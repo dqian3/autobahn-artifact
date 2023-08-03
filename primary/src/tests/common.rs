@@ -94,11 +94,12 @@ pub fn header() -> Header {
     let (author, secret) = keys().pop().unwrap();
     let header = Header {
         author,
-        round: 1,
-        parents: Certificate::genesis(&committee())
+        height: 1,
+        parent_cert: Certificate::genesis_cert(&committee()),//.get(keys().len()).unwrap().clone(),
+        /*parent_cert_digest: Certificate::genesis(&committee())
             .iter()
             .map(|x| x.digest())
-            .collect(),
+            .collect(),*/
         is_special: false,
         ..Header::default()
     };
@@ -116,14 +117,14 @@ pub fn special_header() -> Header {
     //let par = vec![Header::default().id];
     let header = Header {
         author,
-        round: 1,
+        height: 1,
         //parents: par.iter().cloned().collect(),
 
         is_special: true,
-        view: 1,
+        view: Some(1),
         //special parent
         special_parent: Some(Header::genesis(&committee()).id),
-        special_parent_round: 0,
+        special_parent_height: Some(0),
         //consensus parent
         ticket: Some(Ticket::genesis(&committee())),
         prev_view_round: 0,
@@ -146,11 +147,11 @@ pub fn headers() -> Vec<Header> {
         .map(|(author, secret)| {
             let header = Header {
                 author,
-                round: 1,
-                parents: Certificate::genesis(&committee())
-                    .iter()
+                height: 1,
+                parent_cert: Certificate::genesis(&committee()).get(0).unwrap().clone(),
+                    /*.iter()
                     .map(|x| x.digest())
-                    .collect(),
+                    .collect(),*/
 
                 is_special: false,
                 ..Header::default()
@@ -172,14 +173,14 @@ pub fn votes(header: &Header) -> Vec<Vote> {
         .map(|(author, secret)| {
             let vote = Vote {
                 id: header.id.clone(),
-                round: header.round,
+                height: header.height,
                 origin: header.author,
                 author,
                 signature: Signature::default(),
-                view: 1,
-                special_valid: 0u8,
-                qc: None,
-                tc: None,
+                view: Some(1),
+                special_valid: false,
+                //qc: None,
+                //tc: None,
             };
             Vote {
                 signature: Signature::new(&vote.digest(), &secret),
@@ -196,14 +197,14 @@ pub fn special_votes(header: &Header) -> Vec<Vote> {
         .map(|(author, secret)| {
             let vote = Vote {
                 id: header.id.clone(),
-                round: header.round,
+                height: header.height,
                 origin: header.author,
                 author,
                 signature: Signature::default(),
                 view: header.view,
-                special_valid: author.0[0] % 2, //make some valid, some invalid
-                qc: None,
-                tc: None,
+                special_valid: false, //author.0[0] % 2, //make some valid, some invalid
+                //qc: None,
+                //tc: None,
             };
             Vote {
                 signature: Signature::new(&vote.digest(), &secret),
@@ -216,8 +217,10 @@ pub fn special_votes(header: &Header) -> Vec<Vote> {
 // Fixture
 pub fn certificate(header: &Header) -> Certificate {
     Certificate {
-        header: header.clone(),
-        special_valids: vec![0u8, 0u8, 0u8],
+        header_digest: header.digest(),
+        height: header.height,
+        view: header.view,
+        special_valids: vec![false, false, false],
         votes: votes(&header)
             .into_iter()
             .map(|x| (x.author, x.signature))
@@ -228,7 +231,9 @@ pub fn certificate(header: &Header) -> Certificate {
 // Fixture
 pub fn special_certificate(header: &Header) -> Certificate {
     Certificate {
-        header: header.clone(),
+        header_digest: header.digest(),
+        height: header.height,
+        view: header.view,
         special_valids: special_votes(&header)
             .into_iter()
             .map(|x| x.special_valid)
@@ -314,14 +319,14 @@ pub fn fast_qc() -> QC {
 
     let vote = Vote {
         id: special_header().id, 
-        round: 1,
+        height: 1,
         origin: special_header().author,
         author: PublicKey::default(),
         signature: Signature::default(),
-        view: 1, 
-        special_valid: 1,
-        qc: None,
-        tc: None,
+        view: Some(1), 
+        special_valid: true,
+        //qc: None,
+        //tc: None,
     };
     let digest = vote.digest();
 

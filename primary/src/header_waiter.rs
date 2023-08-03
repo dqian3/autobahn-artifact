@@ -1,7 +1,7 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::{DagError, DagResult};
 use crate::messages::Header;
-use crate::primary::{PrimaryMessage, PrimaryWorkerMessage, Round};
+use crate::primary::{PrimaryMessage, PrimaryWorkerMessage, Height};
 use bytes::Bytes;
 use config::{Committee, WorkerId};
 use crypto::{Digest, PublicKey};
@@ -26,7 +26,7 @@ const TIMER_RESOLUTION: u64 = 1_000;
 #[derive(Debug)]
 pub enum WaiterMessage {
     SyncBatches(HashMap<Digest, WorkerId>, Header),
-    SyncParents(Vec<Digest>, Header),
+    SyncParent(Digest, Header),
     SyncSpecialParent(Digest, Header),
     SyncHeader(Digest),
 }
@@ -42,7 +42,7 @@ pub struct HeaderWaiter {
     /// The current consensus round (used for cleanup).
     consensus_round: Arc<AtomicU64>,
     /// The depth of the garbage collector.
-    gc_depth: Round,
+    gc_depth: Height,
     /// The delay to wait before re-trying sync requests.
     sync_retry_delay: u64,
     /// Determine with how many nodes to sync when re-trying to send sync-request.
@@ -58,15 +58,15 @@ pub struct HeaderWaiter {
 
     /// Keeps the digests of the all certificates for which we sent a sync request,
     /// along with a timestamp (`u128`) indicating when we sent the request.
-    parent_requests: HashMap<Digest, (Round, u128)>,
+    parent_requests: HashMap<Digest, (Height, u128)>,
     //same, but for special parents
-    header_requests: HashMap<Digest, (Round, u128)>, 
+    header_requests: HashMap<Digest, (Height, u128)>, 
     /// Keeps the digests of the all tx batches for which we sent a sync request,
     /// similarly to `header_requests`.
-    batch_requests: HashMap<Digest, Round>,
+    batch_requests: HashMap<Digest, Height>,
     /// List of digests (either certificates, headers or tx batch) that are waiting
     /// to be processed. Their processing will resume when we get all their dependencies.
-    pending: HashMap<Digest, (Round, Sender<()>)>,
+    pending: HashMap<Digest, (Height, Sender<()>)>,
 }
 
 impl HeaderWaiter {
@@ -76,7 +76,7 @@ impl HeaderWaiter {
         committee: Committee,
         store: Store,
         consensus_round: Arc<AtomicU64>,
-        gc_depth: Round,
+        gc_depth: Height,
         sync_retry_delay: u64,
         sync_retry_nodes: usize,
         rx_synchronizer: Receiver<WaiterMessage>,
@@ -123,9 +123,36 @@ impl HeaderWaiter {
         }
     }
 
+    /// Helper function. It waits for particular data to become available in the storage
+    /// and then delivers the specified header.
+    async fn parent_waiter(
+        missing: (Vec<u8>, Store),
+        deliver: Header,
+        mut handler: Receiver<()>,
+    ) -> DagResult<Option<Header>> {
+        /*let waiting: Vec<_> = missing
+            .iter_mut()
+            .map(|(x, y)| y.notify_read(x.to_vec()))
+            .collect();*/
+
+        let (digest, mut store) = missing;
+
+        tokio::select! {
+            waiting = store.notify_read(digest.to_vec()) => {
+                match waiting {
+                    Ok(_) => Ok(Some(deliver)),
+                    Err(e) => Err(DagError::from(e)),
+                }
+            },
+            _ = handler.recv() => Ok(None),
+        }
+    }
+
+
     /// Main loop listening to the `Synchronizer` messages.
     async fn run(&mut self) {
         let mut waiting = FuturesUnordered::new();
+        let mut parent_waiting = FuturesUnordered::new();
 
         let timer = sleep(Duration::from_millis(TIMER_RESOLUTION));
         tokio::pin!(timer);
@@ -137,7 +164,7 @@ impl HeaderWaiter {
                         WaiterMessage::SyncBatches(missing, header) => {
                             debug!("Synching the payload of {}", header);
                             let header_id = header.id.clone();
-                            let round = header.round;
+                            let round = header.height;
                             let author = header.author;
 
                             // Ensure we sync only once per header.
@@ -207,10 +234,10 @@ impl HeaderWaiter {
                         }
 
 
-                        WaiterMessage::SyncParents(missing, header) => {
+                        WaiterMessage::SyncParent(missing, header) => {
                             debug!("Synching the parents of {}", header);
                             let header_id = header.id.clone();
-                            let round = header.round;
+                            let height = header.height;
                             let author = header.author;
 
                             // Ensure we sync only once per header.
@@ -220,15 +247,17 @@ impl HeaderWaiter {
 
                             // Add the header to the waiter pool. The waiter will return it to us
                             // when all its parents are in the store.
-                            let wait_for = missing
+                            /*let wait_for = missing
                                 .iter()
                                 .cloned()
                                 .map(|x| (x.to_vec(), self.store.clone()))
-                                .collect();
+                                .collect();*/
+
+                            let wait_for = (missing.to_vec(), self.store.clone());
                             let (tx_cancel, rx_cancel) = channel(1);
-                            self.pending.insert(header_id, (round, tx_cancel));
-                            let fut = Self::waiter(wait_for, header, rx_cancel);
-                            waiting.push(fut);
+                            self.pending.insert(header_id, (height, tx_cancel));
+                            let fut = Self::parent_waiter(wait_for, header, rx_cancel);
+                            parent_waiting.push(fut);
 
                             // Ensure we didn't already sent a sync request for these parents.
                             // Optimistically send the sync request to the node that created the certificate.
@@ -238,12 +267,17 @@ impl HeaderWaiter {
                                 .expect("Failed to measure time")
                                 .as_millis();
                             let mut requires_sync = Vec::new();
-                            for missing in missing {
+                            /*for missing in missing {
                                 self.parent_requests.entry(missing.clone()).or_insert_with(|| {
                                     requires_sync.push(missing);
                                     (round, now)
                                 });
-                            }
+                            }*/
+                            self.parent_requests.entry(missing.clone()).or_insert_with(|| {
+                                requires_sync.push(missing);
+                                (height, now)
+                            });
+
                             if !requires_sync.is_empty() {
                                 let address = self.committee
                                     .primary(&author)
@@ -258,7 +292,7 @@ impl HeaderWaiter {
                         WaiterMessage::SyncSpecialParent(missing_parent, header) => {
                             debug!("Synching the parents of {}", header);
                             let header_id = header.id.clone();
-                            let round = header.round;
+                            let round = header.height;
                             let author = header.author;
 
                             // Ensure we sync only once per header.
@@ -310,9 +344,11 @@ impl HeaderWaiter {
                         for x in header.payload.keys() {
                             let _ = self.batch_requests.remove(x);
                         }
-                        for x in &header.parents {
+                        /*for x in &header.parent_cert_digest {
                             let _ = self.parent_requests.remove(x);
-                        }
+                        }*/
+                        let _ = self.parent_requests.remove(&header.parent_cert.header_digest);
+
                         if header.special_parent.is_some() {
                             let head_ref = &header.special_parent.as_ref().unwrap();
                             let _ = self.header_requests.remove(head_ref);
@@ -326,6 +362,34 @@ impl HeaderWaiter {
                         error!("{}", e);
                         panic!("Storage failure: killing node.");
                     }
+                },
+
+                Some(result) = parent_waiting.next() => match result {
+                    Ok(Some(header)) => {
+                        debug!("Finished synching {:?}", header);
+                        let _ = self.pending.remove(&header.id);
+                        for x in header.payload.keys() {
+                            let _ = self.batch_requests.remove(x);
+                        }
+                        /*for x in &header.parent_cert_digest {
+                            let _ = self.parent_requests.remove(x);
+                        }*/
+                        let _ = self.parent_requests.remove(&header.parent_cert.header_digest);
+
+                        if header.special_parent.is_some() {
+                            let head_ref = &header.special_parent.as_ref().unwrap();
+                            let _ = self.header_requests.remove(head_ref);
+                        }
+                        self.tx_core.send(header).await.expect("Failed to send header"); 
+                    },
+                    Ok(None) => {
+                        // This request has been canceled.
+                    },
+                    Err(e) => {
+                        error!("{}", e);
+                        panic!("Storage failure: killing node.");
+                    }
+
                 },
 
                 () = &mut timer => {

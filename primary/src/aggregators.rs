@@ -1,11 +1,11 @@
-use crate::Round;
+//use crate::primary::Height;
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::{DagError, DagResult};
 use crate::messages::{Certificate, Header, Vote};
 use config::{Committee, Stake};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, Signature};
-use core::panic;
+//use core::panic;
 use std::collections::HashSet;
 
 /// Aggregates votes for a particular header into a certificate.
@@ -13,7 +13,7 @@ pub struct VotesAggregator {
     weight: Stake,
     valid_weight: Stake,
     fast_weight: Stake,
-    pub special_valids: Vec<u8>,
+    pub special_valids: Vec<bool>,
     pub votes: Vec<(PublicKey, Signature)>,
     used: HashSet<PublicKey>,
     // first_quorum: bool,
@@ -78,7 +78,9 @@ impl VotesAggregator {
             }
             
             let cert = Certificate {
-                    header: header.clone(),
+                    header_digest: header.digest(),
+                    height: header.height(),
+                    view: header.view,
                     special_valids: self.special_valids.clone(),
                     votes: self.votes.clone(),
              };
@@ -134,7 +136,7 @@ impl CertificatesAggregator {
         certificate: Certificate,
         committee: &Committee,
     ) -> DagResult<Option<Vec<Digest>>> {
-        let origin = certificate.origin();
+        //let origin = certificate.origin();
 
         // Ensure we don't count dummy certs towards parent quorum  //NOTE: Parent Quorum won't ever be used anyways since, by def of existance of dummy cert, it must be for an older round
         if certificate.votes.is_empty() {
@@ -142,7 +144,7 @@ impl CertificatesAggregator {
         }
 
         // Ensure it is the first time this authority votes.
-        if !self.used.insert(origin) {
+        /*if !self.used.insert(origin) {
             return Ok(None);
         }
 
@@ -151,7 +153,7 @@ impl CertificatesAggregator {
         if self.weight >= committee.quorum_threshold() {
             self.weight = 0; // Ensures quorum is only reached once.
             return Ok(Some(self.certificates.drain(..).collect()));    //drain empties certificates, but keeps allocated memory (drain consumes values in collection vs into_iter that consumes the whole collection)
-        }
+        }*/
 
         
         Ok(None)

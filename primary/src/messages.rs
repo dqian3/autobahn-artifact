@@ -2,7 +2,7 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::{DagError, DagResult, ConsensusError, ConsensusResult};
 //use sailfish::error::{DagError, DagResult, ConsensusError, ConsensusResult};
-use crate::primary::{Round, View};
+use crate::primary::{Height, View};
 //use crate::config::{Committee};
 use config::{Committee, WorkerId, Stake};
 use crypto::{Digest, Hash, PublicKey, Signature, SignatureService, SecretKey};
@@ -11,7 +11,7 @@ use ed25519_dalek::Sha512;
 use log::debug;
 use serde::{Deserialize, Serialize};
 use std::cmp::max;
-use std::collections::{BTreeMap, BTreeSet, HashSet, HashMap};
+use std::collections::{BTreeMap, HashSet, HashMap};
 use std::convert::TryInto;
 use std::fmt;
 //use crate::messages_consensus::{QC, TC};
@@ -28,14 +28,14 @@ pub struct Ticket {
     //The Header that is endorsed by the QC/TC
     pub hash: Digest, 
     pub view: View,
-    pub round: Round, 
+    pub round: Height, 
 }
 
 impl Ticket {
     pub async fn new(
         hash: Digest, 
         view: View,
-        round: Round, 
+        round: Height, 
         qc: QC,
         tc: Option<TC>,
     ) -> Self {
@@ -100,21 +100,24 @@ impl fmt::Display for Ticket {
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Header {
     pub author: PublicKey,
-    pub round: Round,
+    pub height: Height,
     pub payload: BTreeMap<Digest, WorkerId>,
-    pub parents: BTreeSet<Digest>,
+    pub parent_cert: Certificate,
     pub id: Digest,
     pub signature: Signature,
     
     pub is_special: bool,
-    pub view: View,
+    pub view: Option<View>,
+    pub ticket: Option<Ticket>, 
+    pub proposals: Option<BTreeMap<PublicKey, Digest>>,
+
     //edges within DAG
     pub special_parent: Option<Digest>, //Digest of the header of the special parent.
-    pub special_parent_round: Round, //round of the parent we have special edge to (only used to re-construct parent cert digest in committer)
+    pub special_parent_height: Option<Height>, //round of the parent we have special edge to (only used to re-construct parent cert digest in committer)
     
     //Consensus parent
-    pub ticket: Option<Ticket>, 
-    pub prev_view_round: Round, //round that was proposed by the last view.
+    //pub ticket: Option<Ticket>, 
+    pub prev_view_round: Height, //round that was proposed by the last view.
     pub consensus_parent: Option<Digest>, //Digest of the ticket that was committed in the last view
     
 
@@ -125,31 +128,33 @@ pub struct Header {
 impl Header {
     pub async fn new(
         author: PublicKey,
-        round: Round,
+        height: Height,
         payload: BTreeMap<Digest, WorkerId>,
-        parents: BTreeSet<Digest>,
+        parent_cert: Certificate,
         signature_service: &mut SignatureService,
         is_special: bool,
-        view: View,
+        view: Option<View>,
         special_parent: Option<Digest>,
-        special_parent_round: Round,
+        special_parent_height: Option<Height>,
         ticket: Option<Ticket>,
-        prev_view_round: Round,
+        proposals: Option<BTreeMap<PublicKey, Digest>>,
+        prev_view_round: Height,
         consensus_parent: Option<Digest>,
 
     ) -> Self {
         let header = Self {
             author,
-            round,
+            height,
             payload,
-            parents,
+            parent_cert,
             id: Digest::default(),
             signature: Signature::default(),
             is_special,
             view,
             special_parent,
-            special_parent_round,
+            special_parent_height,
             ticket,
+            proposals,
             prev_view_round,
             consensus_parent,
         };
@@ -195,8 +200,8 @@ impl Header {
             .map_err(DagError::from)
     }
 
-    pub fn round(&self) -> Round {
-        self.round
+    pub fn height(&self) -> Height {
+        self.height
     }
 
     pub fn origin(&self) -> PublicKey {
@@ -206,25 +211,25 @@ impl Header {
     pub fn cert_lookup(&self) -> Digest {
         let mut hasher = Sha512::new();
         hasher.update(&self.author);
-        hasher.update(self.round.to_le_bytes());
+        hasher.update(self.height.to_le_bytes());
         for (x, y) in &self.payload {
             hasher.update(x);
             hasher.update(y.to_le_bytes());
         }
-        for x in &self.parents {
+        /*for x in &self.parent_cert {
             hasher.update(x);
-        }
+        }*/
 
         let f: u8 = if self.is_special { 1u8 } else { 0u8 };
         hasher.update(f.to_le_bytes());
-        hasher.update(&self.view.to_le_bytes());
+        //hasher.update(&self.view.to_le_bytes());
 
 
         match &self.special_parent {
             Some(parent) => hasher.update(parent),
             None => {},
         }
-        hasher.update(&self.special_parent_round.to_le_bytes());
+        //hasher.update(&self.special_parent_height.to_le_bytes());
 
         hasher.update(&self.prev_view_round.to_le_bytes());
         match &self.consensus_parent {
@@ -240,16 +245,16 @@ impl Header {
     pub fn new_from_key(
         author: PublicKey,
         view: View,
-        round: Round,
+        round: Height,
         secret: &SecretKey,
         committee: &Committee,
     ) -> Header {
         let header = Header {
             author,
-            round,
+            height: round,
             signature: Signature::default(),
             is_special: true,
-            view,
+            view: Some(view),
             //ticket: Some(Ticket::genesis(committee)),
             consensus_parent: Some(Ticket::genesis(committee).digest()),
            ..Header::default()
@@ -264,25 +269,25 @@ impl Hash for Header {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
         hasher.update(&self.author);
-        hasher.update(self.round.to_le_bytes());
+        hasher.update(self.height.to_le_bytes());
         for (x, y) in &self.payload {
             hasher.update(x);
             hasher.update(y.to_le_bytes());
         }
-        for x in &self.parents {
+        /*for x in &self.parent_cert {
             hasher.update(x);
-        }
+        }*/
 
         let f: u8 = if self.is_special { 1u8 } else { 0u8 };
         hasher.update(f.to_le_bytes());
-        hasher.update(&self.view.to_le_bytes());
+        //hasher.update(&self.view.to_le_bytes());
         
     
         match &self.special_parent {
             Some(parent) => hasher.update(parent),
             None => {},
         }
-        hasher.update(&self.special_parent_round.to_le_bytes());
+        //hasher.update(&self.special_parent_height.to_le_bytes());
 
         hasher.update(&self.prev_view_round.to_le_bytes());
         match &self.consensus_parent {
@@ -304,26 +309,26 @@ impl fmt::Debug for Header {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "{}: B{}({}, {}, special: {}, view: {}, {:?}, {})",
+            "{}: B{}({},, special:, view:, {:?}, {})",
             self.id,
-            self.round,
+            self.height,
             self.author,
             self.payload.keys().map(|x| x.size()).sum::<usize>(),
             self.is_special,
-            self.view,
-            self
-            .parents
+            //self.view,
+            /*self
+            .parent_cert
             .iter()
             .map(|x| format!("{}", x))
             .collect::<Vec<_>>(),
-        if self.special_parent.is_some() {self.special_parent.clone().unwrap()} else {Digest::default()}
+        if self.special_parent.is_some() {self.special_parent.clone().unwrap()} else {Digest::default()}*/
         )
     }
 }
 
 impl fmt::Display for Header {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "B{}({})", self.round, self.author)
+        write!(f, "B{}({})", self.height, self.author)
     }
 }
 
@@ -331,16 +336,16 @@ impl fmt::Display for Header {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Vote {
     pub id: Digest,  //the header we are voting for.
-    pub round: Round,
+    pub height: Height,
     pub origin: PublicKey,
     pub author: PublicKey,
     pub signature: Signature,
-    pub view: View, //FIXME: is this necessary? Given that the header specifies the view. If so, needs to be added to hash.
+    pub view: Option<View>, //FIXME: is this necessary? Given that the header specifies the view. If so, needs to be added to hash.
 
     //pub is_special: bool, ==> Changed: Just check against "current header" (can confirm id matches) for specialness, view, round view, etc.
-    pub special_valid: u8,
-    pub qc: Option<QC>,
-    pub tc: Option<TC>,
+    pub special_valid: bool,
+    //pub qc: Option<QC>,
+    //pub tc: Option<TC>,
 }
 
 impl Vote {
@@ -348,22 +353,17 @@ impl Vote {
         header: &Header,
         author: &PublicKey,
         signature_service: &mut SignatureService,
-        special_valid: u8, 
-        qc: Option<QC>, //Note, these do not need to be signed; they are proof themselves.
-        tc: Option<TC>,
-
+        special_valid: bool, 
     ) -> Self {
         let vote = Self {
             id: header.id.clone(),
-            round: header.round,
+            height: header.height,
             origin: header.author,
             author: *author,
             signature: Signature::default(),
-            view: 1,
+            view: None,
             //is_special: header.is_special, 
             special_valid,
-            qc,
-            tc, 
         };
         let signature = signature_service.request_signature(vote.digest()).await;
         Self { signature, ..vote }
@@ -401,9 +401,9 @@ impl Hash for Vote {
         // hasher.update(&self.id);
         // hasher.update(self.view.to_le_bytes());
         hasher.update(&self.id);
-        hasher.update(self.round.to_le_bytes());
-        hasher.update(&self.origin);
-        hasher.update(self.special_valid.to_le_bytes());
+        hasher.update(self.height.to_le_bytes());
+        //hasher.update(&self.origin);
+        //hasher.update(self.special_valid.to_le_bytes());
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
@@ -414,7 +414,7 @@ impl fmt::Debug for Vote {
             f,
             "{}: V{}({}, {})",
             self.digest(),
-            self.round,
+            self.height,
             self.author,
             self.id
         )
@@ -422,17 +422,17 @@ impl fmt::Debug for Vote {
 }
 
 impl Vote {
-    pub fn new_from_key(id: Digest, round: Round, origin: PublicKey, author: PublicKey, secret: &SecretKey) -> Self {
+    pub fn new_from_key(id: Digest, height: Height, origin: PublicKey, author: PublicKey, secret: &SecretKey) -> Self {
         let vote = Vote {
             id: id.clone(),
-            round,
+            height,
             origin,
             author,
             signature: Signature::default(),
-            view: round,
-            special_valid: 1,
-            qc: None,
-            tc: None,
+            view: None,
+            special_valid: false,
+            //qc: None,
+            //tc: None,
         };
         let signature = Signature::new(&vote.digest(), &secret);
         Self { signature, ..vote }
@@ -448,8 +448,10 @@ impl PartialEq for Vote {
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Certificate {
-    pub header: Header,
-    pub special_valids: Vec<u8>,
+    pub header_digest: Digest,
+    pub height: Height,
+    pub view: Option<View>,
+    pub special_valids: Vec<bool>,
     pub votes: Vec<(PublicKey, Signature)>,
 }
 
@@ -459,11 +461,11 @@ impl Certificate {
             .authorities
             .keys()
             .map(|name| Self {
-                header: Header {
+                header_digest: Header {
                     author: *name,
                     ..Header::genesis(committee)
                     //..Header::default()
-                },
+                }.digest(),
                 ..Self::default()
             })
             .collect()
@@ -471,7 +473,7 @@ impl Certificate {
 
     pub fn genesis_cert(committee: &Committee) -> Self {
          Self {
-                header : Header::genesis(committee),
+                header_digest : Header::genesis(committee).digest(),
                 ..Self::default()
         }
     }
@@ -482,7 +484,7 @@ impl Certificate {
             return Ok(());
         }
         // Check the embedded header.
-        self.header.verify(committee)?;
+        //self.header_digest.verify(committee)?;
 
         // Ensure the certificate has a quorum.
         let mut weight = 0;
@@ -499,10 +501,11 @@ impl Certificate {
             DagError::CertificateRequiresQuorum
         );
 
+
         // Check the signatures.
 
         //If all votes were special_valid or invalid ==> compute single vote digest and verify it (since it is the same for all)
-        if matching_valids(&self.special_valids) {
+        if false {//matching_valids(&self.special_valids) {
             //DEBUG
             // println!("verifiable digest: {:?}", &self.verifiable_digest());
             // for (key, sig) in &self.votes {
@@ -514,14 +517,14 @@ impl Certificate {
         else{ //compute all the individual vote digests and verify them  (TODO: Since there are only 2 possible types, 0 and 1 ==> Could compute 2 digests, and then insert them in the correct order)
                                                                             //E.g. could re-order Votes to be first all for 0, then all for 1. And call verify_batch separately twice
             let mut digests = Vec::new();
-            for (i, _) in self.votes.iter().enumerate() {
+            for (_i, _) in self.votes.iter().enumerate() {
                 
                 digests.push({ 
                     let mut hasher = Sha512::new();
-                    hasher.update(&self.header.id);
-                    hasher.update(self.round().to_le_bytes());
-                    hasher.update(&self.origin());
-                    hasher.update(self.special_valids[i].to_le_bytes());
+                    hasher.update(&self.header_digest);
+                    hasher.update(self.height().to_le_bytes());
+                    //hasher.update(&self.origin());
+                    //hasher.update(self.special_valids[i].to_le_bytes());
                     Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
                 }
                 )
@@ -534,33 +537,33 @@ impl Certificate {
        
     }
 
-    pub fn round(&self) -> Round {
-        self.header.round
+    pub fn height(&self) -> Height {
+        self.height
     }
 
-    pub fn origin(&self) -> PublicKey {
-        self.header.author
-    }
+    /*pub fn origin(&self) -> PublicKey {
+        self.author
+    }*/
 
     pub fn verifiable_digest(&self) -> Digest {
-        if matching_valids(&self.special_valids) {
+        if false { //matching_valids(&self.special_valids) {
             let mut hasher = Sha512::new();
-            hasher.update(&self.header.id);
-            hasher.update(self.round().to_le_bytes());
-            hasher.update(&self.origin());
-            hasher.update(&self.special_valids[0].to_le_bytes());
+            hasher.update(&self.header_digest);
+            hasher.update(self.height().to_le_bytes());
+            //hasher.update(&self.origin());
+            //hasher.update(&self.special_valids[0].to_le_bytes());
             Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
         }
         else{
             panic!("This verfiable digest branch should never be used");
-            let mut hasher = Sha512::new();
+            /*let mut hasher = Sha512::new();
             hasher.update(&self.header.id);
             hasher.update(self.round().to_le_bytes());
-            hasher.update(&self.origin());
-            for i in &self.special_valids {
+            hasher.update(&self.origin());*/
+            /*for i in &self.special_valids {
                 hasher.update(i.to_le_bytes());
-            }
-            Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+            }*/
+            //Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
         }
     
     }
@@ -569,8 +572,8 @@ impl Certificate {
         self.votes
             .iter()
             .enumerate()
-            .map(|(i, (author, _))| {
-                committee.stake(&author) * (self.special_valids[i] as Stake)
+            .map(|(_i, (author, _))| {
+                committee.stake(&author) * (1 /*self.special_valids[i]*/ as Stake)
                  })
             .sum()
     }
@@ -599,9 +602,9 @@ impl Hash for Certificate {
     fn digest(&self) -> Digest {
        
             let mut hasher = Sha512::new();
-            hasher.update(&self.header.id);
-            hasher.update(self.round().to_le_bytes());
-            hasher.update(&self.origin());
+            hasher.update(&self.header_digest);
+            hasher.update(self.height().to_le_bytes());
+            //hasher.update(&self.origin());
            
             Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
 
@@ -614,27 +617,27 @@ impl fmt::Debug for Certificate {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "{}: C{}({}, {}, {:?}, {}, view: {})",
+            "{}: C{}({},,,, view: )",
             self.digest(),
-            self.round(),
-            self.origin(),
-            self.header.id,
-            self.header
-                .parents
+            self.height(),
+            //self.origin(),
+            self.header_digest,
+            /*self.header
+                .parent_cert
                 .iter()
                 .map(|x| format!("{}", x))
                 .collect::<Vec<_>>(),
             if self.header.special_parent.is_some() {self.header.special_parent.clone().unwrap()} else {Digest::default()},
-            self.header.view,
+            self.header.view,*/
         )
     }
 }
 
 impl PartialEq for Certificate {
     fn eq(&self, other: &Self) -> bool {
-        let mut ret = self.header.id == other.header.id;
-        ret &= self.round() == other.round();
-        ret &= self.origin() == other.origin();
+        let mut ret = self.header_digest == other.header_digest;
+        ret &= self.height() == other.height();
+        //ret &= self.origin() == other.origin();
         ret
     }
 }
@@ -770,7 +773,7 @@ impl Block {
 pub struct AcceptVote {
     pub hash: Digest,
     pub view: View,
-    pub view_round: Round,
+    pub view_round: Height,
     pub author: PublicKey,
     pub signature: Signature,
 }
@@ -783,8 +786,8 @@ impl AcceptVote {
     ) -> Self {
         let vote = Self {
             hash: header.id.clone(),
-            view: header.view,
-            view_round: header.round,
+            view: header.view.unwrap(),
+            view_round: header.height,
             author,
             signature: Signature::default(),
         };
@@ -806,7 +809,7 @@ impl AcceptVote {
 }
 
 impl AcceptVote {
-    pub fn new_from_key(id: Digest, view: View, round: Round, author: PublicKey, secret: &SecretKey) -> Self {
+    pub fn new_from_key(id: Digest, view: View, round: Height, author: PublicKey, secret: &SecretKey) -> Self {
         let vote = AcceptVote {
             hash: id.clone(),
             view: view,
@@ -846,7 +849,7 @@ impl fmt::Debug for AcceptVote {
 pub struct QC {
     pub hash: Digest,
     pub view: View,
-    pub view_round: Round,
+    pub view_round: Height,
     pub votes: Vec<(PublicKey, Signature)>,
 
     pub origin: PublicKey, //Author that issued Header; Necessary only for FastQC to simulate Certificate. (Alternatively, could remove it from Cert?)
@@ -860,8 +863,8 @@ impl QC {
         let genesis_header = Header::genesis(committee);
         QC {
             hash: genesis_header.id,
-            view: genesis_header.view,
-            view_round: genesis_header.round,
+            view: genesis_header.view.unwrap(),
+            view_round: genesis_header.height,
             origin: genesis_header.author,
             ..QC::default()
         }
@@ -981,12 +984,12 @@ impl Timeout {
             vote_high_qc: None,
         };
         // Add the unique identifying information for proposals: TC can thus verify just based on this, without including actual proposal (Header/Cert/QC) for all but the winning proposal
-        if let Some(header) = timeout.high_prepare.as_ref() {
+        /*if let Some(header) = timeout.high_prepare.as_ref() {
             timeout.vote_high_prepare = Some((header.id.clone(), header.view.clone()));
         }
         if let Some(cert) = timeout.high_accept.as_ref() {
             timeout.vote_high_accept = Some(cert.header.view.clone());
-        }
+        }*/
         if let Some(qc) = timeout.high_qc.as_ref() {
             timeout.vote_high_qc = Some(qc.view.clone());
         }
@@ -1016,7 +1019,7 @@ impl Timeout {
             //Ensure it matches vote
             let (dig, view) = self.vote_high_prepare.as_ref().expect("Invalid Prepare Vote");
             ensure!(
-                *dig == high_prepare.id && *view == high_prepare.view, 
+                *dig == high_prepare.id && *view == high_prepare.view.unwrap(), 
                 ConsensusError::InvalidTimeout(self.clone())
             );
             high_prepare.verify(committee)?;
@@ -1026,7 +1029,7 @@ impl Timeout {
             //Ensure it matches vote
             let view = self.vote_high_accept.as_ref().expect("Invalid Accept Vote");
             ensure!(
-                *view == high_accept.header.view, 
+                *view == high_accept.view.unwrap(), 
                 ConsensusError::InvalidTimeout(self.clone())
             );
             high_accept.verify(committee)?;
@@ -1109,7 +1112,7 @@ pub struct TC {
     pub view: View,
     pub votes: Vec<Timeout>,
     pub winning_proposal: Box<(Option<Header>, Option<Certificate>, Option<QC>)>, //TODO: Make this an any type? ==> cast down to Header/Cert/QC
-    pub view_round: Round, //Round of the winning proposal
+    pub view_round: Height, //Round of the winning proposal
     //pub votes: Vec<(PublicKey, Signature, View)>,
 }
 
@@ -1135,7 +1138,7 @@ impl TC {
         let genesis_header = Header::genesis(committee);
         TC {
             //hash: genesis_header.id,
-            view: genesis_header.view,
+            view: genesis_header.view.unwrap(),
             winning_proposal: Box::new((Some(genesis_header), None, None)),
             //view_round: genesis_header.round,
             ..TC::default()
@@ -1160,7 +1163,7 @@ impl TC {
                 }
             } 
             if let Some(cert) = &timeout.high_accept {
-                if cert.header.view >= high_accept.header.view {
+                if cert.view >= high_accept.view {
                     high_accept = cert;
                 }
             }
@@ -1179,20 +1182,20 @@ impl TC {
 
         let mut winner: u32 = 2; //2 = qc wins, 1 cert wins, 0 header wins
 
-        if high_accept.header.view > high_qc.view {
+        if high_accept.view.unwrap() > high_qc.view {
             winner = 1;
         }
-        if high_prepare.view > max(high_accept.header.view, high_qc.view) {
+        if high_prepare.view.unwrap() > max(high_accept.view.unwrap(), high_qc.view) {
             winner = 0;
         }
 
         if winner == 0 {
             header = Some(high_prepare.clone());
-            self.view_round = high_prepare.round;
+            self.view_round = high_prepare.height;
         }
         if winner == 1 {
             cert = Some(high_accept.clone());
-            self.view_round = high_accept.header.round;
+            self.view_round = high_accept.height;
         }
         if winner == 2 {
             qc = Some(high_qc.clone());
@@ -1283,7 +1286,7 @@ impl TC {
         if winner == 0 { //==> High_Prepare won
             let winning_prepare: &Header = self.winning_proposal.0.as_ref().expect("Invalid winning proposal");
             ensure!(
-                winning_prepare.id == *high_prepare_meta.0 && winning_prepare.view == high_prepare_meta.1 && self.view_round == winning_prepare.round,
+                winning_prepare.id == *high_prepare_meta.0 && winning_prepare.view.unwrap() == high_prepare_meta.1 && self.view_round == winning_prepare.height,
                 ConsensusError::InvalidTC(self.clone())
             );
             //verify correctness of winning header
@@ -1293,7 +1296,7 @@ impl TC {
         else if winner == 1 { // ==> High_Accept won
             let winning_cert: &Certificate = self.winning_proposal.1.as_ref().expect("Invalid winning proposal");
             ensure!(
-                winning_cert.header.view == high_accept_view && self.view_round == winning_cert.header.round,
+                winning_cert.view.unwrap() == high_accept_view && self.view_round == winning_cert.height,
                 ConsensusError::InvalidTC(self.clone())
             );
             //verify correctness of winning cert

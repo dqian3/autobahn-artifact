@@ -27,7 +27,7 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 pub const CHANNEL_CAPACITY: usize = 1_000;
 
 /// The round number.
-pub type Round = u64;
+pub type Height = u64;
 /// The view number (of consensus)
 pub type View = u64;
 
@@ -46,7 +46,7 @@ pub enum PrimaryWorkerMessage {
     /// The primary indicates that the worker need to sync the target missing batches.
     Synchronize(Vec<Digest>, /* target */ PublicKey),
     /// The primary indicates a round update.
-    Cleanup(Round),
+    Cleanup(Height),
 }
 
 /// The messages sent by the workers to their primary.

@@ -1,5 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::{primary::{Round, View}, messages::{QC, TC, Timeout}};
+use crate::{primary::{Height, View}, messages::{QC, TC, Timeout}};
 use crypto::{CryptoError, Digest, PublicKey};
 use store::StoreError;
 use thiserror::Error;
@@ -59,13 +59,13 @@ pub enum DagError {
     HeaderRequiresQuorum(Digest),
 
     #[error("Header {0} (round {1}) too old")]
-    HeaderTooOld(Digest, Round),
+    HeaderTooOld(Digest, Height),
 
     #[error("Vote {0} (round {1}) too old")]
-    VoteTooOld(Digest, Round),
+    VoteTooOld(Digest, Height),
 
     #[error("Certificate {0} (round {1}) too old")]
-    CertificateTooOld(Digest, Round),
+    CertificateTooOld(Digest, Height),
 
     #[error("Invalid vote invalidation")]
     InvalidVoteInvalidation,
@@ -133,7 +133,7 @@ pub enum ConsensusError {
     WrongProposer,
 
     #[error("Received block for round {0} smaller than current_round {1}")]
-    NonMonotonicRounds(Round, Round),
+    NonMonotonicRounds(Height, Height),
 
     #[error("Header proposer provided invalid Header")]
     InvalidHeader,

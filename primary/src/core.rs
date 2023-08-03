@@ -2,8 +2,8 @@
 use crate::aggregators::{CertificatesAggregator, VotesAggregator};
 //use crate::common::special_header;
 use crate::error::{DagError, DagResult};
-use crate::messages::{Certificate, Header, Vote, QC, TC, matching_valids};
-use crate::primary::{PrimaryMessage, Round};
+use crate::messages::{Certificate, Header, Vote, QC, TC};
+use crate::primary::{PrimaryMessage, Height};
 use crate::synchronizer::Synchronizer;
 use async_recursion::async_recursion;
 use bytes::Bytes;
@@ -19,7 +19,7 @@ use std::sync::Arc;
 //use std::task::Poll;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::time::{sleep, Duration, Instant};
+//use tokio::time::{sleep, Duration, Instant};
 
 
 //use crate::messages_consensus::{QC, TC};
@@ -42,7 +42,7 @@ pub struct Core {
     /// The current consensus round (used for cleanup).
     consensus_round: Arc<AtomicU64>,
     /// The depth of the garbage collector.
-    gc_depth: Round,
+    gc_depth: Height,
 
     /// Receiver for dag messages (headers, votes, certificates).
     rx_primaries: Receiver<PrimaryMessage>,
@@ -58,7 +58,7 @@ pub struct Core {
     tx_committer: Sender<Certificate>,
 
     /// Send valid a quorum of certificates' ids to the `Proposer` (along with their round).
-    tx_proposer: Sender<(Vec<Digest>, Round)>,
+    tx_proposer: Sender<Certificate>,
     // Receives validated special Headers & proof from the consensus layer.
     rx_validation: Receiver<(Header, u8, Option<QC>, Option<TC>)>,
     tx_special: Sender<Header>,
@@ -68,30 +68,31 @@ pub struct Core {
     rx_request_header_sync: Receiver<Digest>, 
 
     /// The last garbage collected round.
-    gc_round: Round,
+    gc_round: Height,
 
     /// The authors of the last voted headers. (Ensures only voting for one header per round)
-    last_voted: HashMap<Round, HashSet<PublicKey>>,
+    last_voted: HashMap<Height, HashSet<PublicKey>>,
     // /// The set of headers we are currently processing.
-    processing: HashMap<Round, HashSet<Digest>>, //NOTE: Keep processing separate from current_headers ==> to allow us to process multiple headers from same replica (e.g. in case we first got a header that isnt the one that creates a cert)
+    processing: HashMap<Height, HashSet<Digest>>, //NOTE: Keep processing separate from current_headers ==> to allow us to process multiple headers from same replica (e.g. in case we first got a header that isnt the one that creates a cert)
     /// The last header we proposed (for which we are waiting votes).
     // current_header: Header,
+    current_tips: HashMap<PublicKey, Header>,
 
     // Keeps track of current headers
     //TODO: Merge current_headers && processing.
-    current_headers: HashMap<Round, HashMap<Digest, Header>>, ///HashMap<Digest, Header>, //Note, re-factored this map to do GC cleaner. 
+    current_headers: HashMap<Height, HashMap<PublicKey, Header>>, ///HashMap<Digest, Header>, //Note, re-factored this map to do GC cleaner. 
     // Hashmap containing votes aggregators
-    vote_aggregators: HashMap<Round, HashMap<Digest, Box<VotesAggregator>>>,  //HashMap<Digest, VotesAggregator>,
+    vote_aggregators: HashMap<Height, HashMap<Digest, Box<VotesAggregator>>>,  //HashMap<Digest, VotesAggregator>,
     // /// Aggregates votes into a certificate.
     // votes_aggregator: VotesAggregator,
 
     //votes_aggregators: HashMap<Round, VotesAggregator>, //TODO: To accomodate all to all, the map should be map<round, map<publickey, VotesAggreagtor>>
     /// Aggregates certificates to use as parents for new headers.
-    certificates_aggregators: HashMap<Round, Box<CertificatesAggregator>>, //Keep the Set of Certs = Edges for multiple rounds. //TODO: for all-to-all need to store CertAggregators per node.
+    certificates_aggregators: HashMap<Height, Box<CertificatesAggregator>>, //Keep the Set of Certs = Edges for multiple rounds. //TODO: for all-to-all need to store CertAggregators per node.
     /// A network sender to send the batches to the other workers.
     network: ReliableSender,
     /// Keeps the cancel handlers of the messages we sent.
-    cancel_handlers: HashMap<Round, Vec<CancelHandler>>,
+    cancel_handlers: HashMap<Height, Vec<CancelHandler>>,
 
    
     // GC the vote aggregators and current headers
@@ -107,14 +108,14 @@ impl Core {
         synchronizer: Synchronizer,
         signature_service: SignatureService,
         consensus_round: Arc<AtomicU64>,
-        gc_depth: Round,
+        gc_depth: Height,
         rx_primaries: Receiver<PrimaryMessage>,
         rx_header_waiter: Receiver<Header>,
         rx_certificate_waiter: Receiver<Certificate>,
         rx_proposer: Receiver<Header>,
         tx_consensus: Sender<Certificate>,
         tx_committer: Sender<Certificate>,
-        tx_proposer: Sender<(Vec<Digest>, Round)>,
+        tx_proposer: Sender<Certificate>,
         rx_validation: Receiver<(Header, u8, Option<QC>, Option<TC>)>,
         tx_special: Sender<Header>,
         rx_pushdown_cert: Receiver<Certificate>,
@@ -146,6 +147,7 @@ impl Core {
                 processing: HashMap::with_capacity(2 * gc_depth as usize),
                 //current_header: Header::default(),
                 current_headers: HashMap::with_capacity(2 * gc_depth as usize),
+                current_tips: HashMap::with_capacity(2 * gc_depth as usize),
                 //votes_aggregator: VotesAggregator::new(),
                 vote_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 certificates_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
@@ -165,16 +167,22 @@ impl Core {
         // self.current_header = header.clone();
         // self.votes_aggregator = VotesAggregator::new();
 
+        /*let current_own_tip = self.tips.get(&self.name);
+
+        if current_own_tip.is_none() || (header.height > current_own_tip.unwrap().height) {
+            self.tips.insert(self.name, header.clone());
+        }*/
+
         //TODO: for all-to-all: Don't let other replicas insert into current_headers twice.
 
         self.current_headers
-            .entry(header.round)
+            .entry(header.height)
             .or_insert_with(HashMap::new)
-            .entry(header.id.clone())
+            .entry(header.author)
             .or_insert(header.clone());
 
         self.processing
-        .entry(header.round)
+        .entry(header.height)
         .or_insert_with(HashSet::new)
         .insert(header.id.clone());
 
@@ -190,7 +198,7 @@ impl Core {
             .expect("Failed to serialize our own header");
         let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
         self.cancel_handlers
-            .entry(header.round)
+            .entry(header.height)
             .or_insert_with(Vec::new)
             .extend(handlers);
 
@@ -201,11 +209,20 @@ impl Core {
     #[async_recursion]
     async fn process_header(&mut self, header: Header) -> DagResult<()> {
         debug!("Processing Header {:?}", header);
+        println!("Processing the header");
+
+        let current_tip = self.current_tips.get(&header.origin());
+
+        if current_tip.is_none() || (header.height > current_tip.unwrap().height) {
+            self.current_tips.insert(header.author, header.clone());
+        }
+
+
         // Indicate that we are processing this header.
-        self.processing
-            .entry(header.round)
+        /*self.processing
+            .entry(header.height)
             .or_insert_with(HashSet::new)
-            .insert(header.id.clone());
+            .insert(header.id.clone());*/
 
         
         // Ensure we have the parents. If at least one parent is missing, the synchronizer returns an empty
@@ -214,7 +231,7 @@ impl Core {
 
         //TODO: Modify so we don't have to wait for parent cert if the block is special -- but need to wait for parent.
 
-        if header.is_special && header.special_parent.is_some() {
+        /*if header.is_special && header.special_parent.is_some() {
             debug!("syncing on special parent header");
 
             //Check that parent header has been received. // IF so, then when a cert for this special block forms, also form a dummy cert of the parent.
@@ -231,9 +248,9 @@ impl Core {
                   //TODO: FIXME: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
                    
                   //TODO: Want to check that proposes round is justified by EITHER ticket or parents.
-                  debug!("special parent round: {}, header.special_parent_round: {}", special_parent_header.round, header.special_parent_round);
+                  debug!("special parent round: {}, header.special_parent_round: {}", special_parent_header.height, header.special_parent_round);
                   ensure!( //check that special parent round matches claimed round
-                        special_parent_header.round == header.special_parent_round, // && header.special_parent_round + 1 == header.round,  //FIXME: this is not true -> we might have skipped rounds
+                        special_parent_header.height == header.special_parent_round, // && header.special_parent_round + 1 == header.round,  //FIXME: this is not true -> we might have skipped rounds
                         DagError::MalformedSpecialHeader(header.id.clone())
                     );
                     debug!("special parent author: {}, header.author: {}. is_genesis {}", special_parent_header.author, header.author, is_genesis,);
@@ -252,28 +269,49 @@ impl Core {
                 }
                 
             };
-        }
+        }*/
         
-        let (parents, is_missing_parents) = self.synchronizer.get_parents(&header).await?;
+        let (_parent, is_missing_parents) = self.synchronizer.get_parent(&header).await?;
         if is_missing_parents {
             debug!("Processing of {} suspended: missing parent(s)", header.id);
             return Ok(());
         }
 
+        // Normal header validity checks
+        /*if !header.is_special {
+            ensure!(header.height == parent.clone().unwrap().height+1, DagError::MalformedHeader(header.id));
+        }*/
+
+        /*let prev_height = header.height() - 1;
+        let current_tip = self.current_headers.get(&prev_height).unwrap().get(&header.origin());
+
+        if current_tip.is_none() || (header.height > current_tip.unwrap().height) {
+            self.current_headers
+                .entry(header.height)
+                .or_insert_with(HashMap::new)
+                .entry(header.author)
+                .or_insert(header.clone());
+
+            //self.tips.insert(header.author, header.clone());
+            //self.process_certificate(header.parent_cert.clone());
+            //self.parallel_chains.insert(header.author, parent.unwrap().clone());
+        }*/
+
+
             // Check the parent certificates. Ensure the parents form a quorum and are all from the previous round.
             //Note: Does not apply to special blocks who have a special edge -> if they skip rounds can have long edges.
-        if !header.is_special || header.special_parent.is_none(){ 
+        /*if !header.is_special || header.special_parent.is_none(){ 
             debug!("Checking parent certificates");
             let mut ticket_bound_round = false;
             if header.is_special {
                 let ticket = header.ticket.as_ref().expect("special header must have ticket");
-                ticket_bound_round = header.round == ticket.round + 1;
+                ticket_bound_round = header.height == ticket.round + 1;
             }
 
             let mut stake = 0;
             for x in parents {
                 ensure!(
-                    x.round() + 1 == header.round || ticket_bound_round, // header.is_special, //FIXME: TODO: Want to check that proposed round is justified by EITHER ticket or parents.                                                                 
+                    x.round() + 1 == header.height || ticket_bound_round, // header.is_special, //FIXME: TODO: Want to check that proposed round is justified by EITHER ticket or parents.                                                                 
                     DagError::MalformedHeader(header.id.clone())
                 );
                 stake += self.committee.stake(&x.origin());
@@ -285,7 +323,7 @@ impl Core {
                 stake >= self.committee.quorum_threshold() || (header.is_special && header.special_parent.is_some()), 
                 DagError::HeaderRequiresQuorum(header.id.clone())
             );
-        }
+        }*/
       
             
     
@@ -297,7 +335,6 @@ impl Core {
             return Ok(());
         }
 
-
         // Store the header.
         let bytes = bincode::serialize(&header).expect("Failed to serialize header");
         self.store.write(header.id.to_vec(), bytes).await;
@@ -305,14 +342,36 @@ impl Core {
         // Check if we can vote for this header.
         if self
             .last_voted
-            .entry(header.round)
+            .entry(header.height)
             .or_insert_with(HashSet::new)
             .insert(header.author)  //checks that we have not already voted.
         {
+
+            let vote = Vote::new(&header, &self.name, &mut self.signature_service, false).await;
+
+            debug!("Created {:?}", vote);
+            if vote.origin == self.name {
+                self.process_vote(vote)
+                    .await
+                    .expect("Failed to process our own vote");
+            } else {
+                let address = self
+                    .committee
+                    .primary(&header.author)
+                    .expect("Author of valid header is not in the committee")
+                    .primary_to_primary;
+                let bytes = bincode::serialize(&PrimaryMessage::Vote(vote))
+                    .expect("Failed to serialize our own vote");
+                let handler = self.network.send(address, Bytes::from(bytes)).await;
+                self.cancel_handlers
+                    .entry(header.height)
+                    .or_insert_with(Vec::new)
+                    .push(handler);
+            }
         
            // println!("Processing Last voted.  vote for origin: {}, header id {}, round {}. Called on replica {}", header.author.clone(), header.id.clone(), header.round.clone(), self.name.clone());
            //  For special headers: Upcall to consensus layer to confirm whether the special header is valid for consensus
-            if header.is_special {
+            /*if header.is_special {
                 self.tx_special
                 .send(header)
                 .await
@@ -322,23 +381,23 @@ impl Core {
                  // Make a vote and send it to the header's creator.
                  
                 return self.create_vote(header, 0, None, None).await;
-            }
+            }*/
         }
-        else{
-            debug!("have already voted for header from author {} in round {}", header.author, header.round);
-        }
+        /*else{
+            debug!("have already voted for header from author {} in round {}", header.author, header.height);
+        }*/
            
         Ok(())
     }
 
     #[async_recursion]
-    async fn create_vote(&mut self, header: Header, special_valid: u8, qc: Option<QC>, tc: Option<TC>) -> DagResult<()>{ 
+    async fn create_vote(&mut self, header: Header, special_valid: bool, _qc: Option<QC>, _tc: Option<TC>) -> DagResult<()>{ 
         //Argument "special_valid" confirms whether a special header should be considered for consensus or not. Invalid votes must contain a TC or QC proving the view is outdated. (All of this should be passed down by the consensus layer)
         //Note: Normal headers have special_valid = 0, and no QC/TC
         
          // Make a vote and send it to the header's creator.
 
-         let vote = Vote::new(&header, &self.name, &mut self.signature_service, special_valid, qc, tc).await;
+         let vote = Vote::new(&header, &self.name, &mut self.signature_service, special_valid).await;
          debug!("Created Vote {:?}", vote);
 
          if vote.origin == self.name {
@@ -356,7 +415,7 @@ impl Core {
                  .expect("Failed to serialize our own vote");
              let handler = self.network.send(address, Bytes::from(bytes)).await;    // TODO: For special block: May want to use all to all broadcast for replies.
              self.cancel_handlers
-                 .entry(header.round)
+                 .entry(header.height)
                  .or_insert_with(Vec::new)
                  .push(handler);
          }
@@ -366,35 +425,41 @@ impl Core {
     #[async_recursion]
     async fn process_vote(&mut self, vote: Vote) -> DagResult<()> {
         debug!("Processing Vote {:?}", vote);
+        //let current_header = self.current_headers.get(&vote.height).unwrap().get(&vote.origin);
+        let current_header = self.current_tips.get(&self.name).unwrap();
 
+        if current_header.digest() != vote.id {
+            return Ok(());
+        }
+        
         //TODO: For all to all communication: curr_header might exist --> must add to current_headers inside process_header, and require a sync here on current_header being in store.
-       let current_header = self.current_headers
-        .entry(vote.round)
+       /*let current_header = self.current_headers
+        .entry(vote.height)
         .or_insert_with(HashMap::new)
-        .get(&vote.id);
+        .get(&vote.id);*/
 
         //println!("Processing vote for origin: {}, header id {}, round {}. Vote sent by replica {}", vote.origin.clone(), vote.id.clone(), vote.round.clone(), vote.author.clone());
 
-        if current_header == None {
+        /*if current_header == None {
             panic!("Currently should only receive votes for our own headers -- which are the only ones in current_header for now. Not yet logged");
-            return Ok(());
-        }
+            //return Ok(());
+        }*/
 
-        let current_header = current_header.unwrap();
+        //let current_header = current_header.unwrap();
    
         let vote_aggregator = self
             .vote_aggregators
-            .entry(current_header.round)
+            .entry(vote.height)
             .or_insert_with(HashMap::new)
-            .entry(current_header.id.clone())
+            .entry(vote.id.clone())
             .or_insert_with(|| Box::new(VotesAggregator::new()));
 
-        if let (Some(certificate), special_ready) = vote_aggregator.append(vote, &self.committee, current_header)?
-        { 
+        if let (Some(certificate), _special_ready) = vote_aggregator.append(vote, &self.committee, current_header)? { 
             //Only broadcast and process_cert upon generation of initial cert, and first valid cert (Note: these might be the same). //TODO: broadcast again for Fast-Cert
             //Note: Is it fine for process_cert to be called multiple times?
             // ==> should be. Just replaces cert in all data structures. Sync won't be triggered redundantly. CertAggregator won't add twice
             debug!("Assembled {:?}", certificate);
+            self.tx_proposer.send(certificate).await;
 
             // if current_header.is_special {
             //      //If current_header == special && whole quorum is valid ==> pass forward to consensus layer  
@@ -406,7 +471,7 @@ impl Core {
             // }
            
             // Broadcast the certificate.  ==> Note: This will re-broadcast if a special_cert gets formed later.
-            let addresses = self
+            /*let addresses = self
                    .committee
                    .others_primaries(&self.name)
                    .iter()
@@ -424,7 +489,7 @@ impl Core {
             //Process the new certificate.
             self.process_certificate(certificate)
                    .await
-                   .expect("Failed to process valid certificate");
+                   .expect("Failed to process valid certificate");*/
            
         }
 
@@ -432,7 +497,7 @@ impl Core {
     }
 
     
-    async fn try_upcall_process_special_certificate(&mut self, certificate: &Certificate){
+    /*async fn try_upcall_process_special_certificate(&mut self, certificate: &Certificate){
 
         debug!("Try upcalling cert {:?}. Is_special: {}, Is_special_valid: {}", certificate, certificate.header.is_special, certificate.is_special_valid(&self.committee));
         //Only upcall if cert is special and valid. Don't upcall for invalid (Note: dummy certs are invalid by default, since valid_weight = 0)
@@ -442,7 +507,7 @@ impl Core {
                 warn!("Failed to deliver certificate {} to the consensus: {}", certificate.header.id.clone(), e);
             }
         }
-    }
+    }*/
 
     // #[async_recursion]
     // async fn receive_certificate(&mut self, certificate: Certificate) -> DagResult<()> {
@@ -460,7 +525,7 @@ impl Core {
 
         //Try upcalling to Consensus layer.
         //Note: Calling this before parent sync could result in a duplicate call if sync puts us to sleep and re-execs ==> However, I took care that process_special_cert does not vote twice.
-        self.try_upcall_process_special_certificate(&certificate).await; 
+        //self.try_upcall_process_special_certificate(&certificate).await; 
 
     
         // Process the header embedded in the certificate if we haven't already voted for it (if we already
@@ -469,26 +534,26 @@ impl Core {
         // processing of the certificate even if we don't have them in store right now.
         if !self
             .processing
-            .get(&certificate.header.round)
-            .map_or_else(|| false, |x| x.contains(&certificate.header.id))
+            .get(&certificate.height)
+            .map_or_else(|| false, |x| x.contains(&certificate.header_digest))
         {
             // This function may still throw an error if the storage fails.
-            self.process_header(certificate.header.clone()).await?;
+            //self.process_header(certificate.header_digest.clone()).await?;
         }
         
         // Ensure we have all the DAG ancestors of this certificate yet. If we don't, the synchronizer will gather
         // them and trigger re-processing of this certificate.
-        if !self.synchronizer.deliver_certificate(&certificate).await? {
+        /*if !self.synchronizer.deliver_certificate(&certificate).await? {
             debug!(
                 "Processing of {:?} suspended: missing ancestors",
                  certificate
             );
             return Ok(());
-        }
+        }*/
 
          //Additional special block processing
          // //Note: If it is a special block, then don't need to wait for the special edge parent. ==> generate a special cert for the parent to pass to the DAG
-        if certificate.header.is_special && certificate.header.special_parent.is_some() {
+        /*if certificate.header.is_special && certificate.header.special_parent.is_some() {
             let sync_if_missing = true;
             match self.synchronizer.deliver_special_certificate(&certificate, sync_if_missing).await? {
                 //If we have parent cert => do nothing
@@ -499,7 +564,7 @@ impl Core {
                     //This should not be necessary ==> process_own_header should be called in order.
                     if special_parent_dummy_cert.header.author == self.name {
                         let parent_header = special_parent_dummy_cert.header.clone();
-                        if None == self.current_headers.entry(parent_header.round).or_insert_with(HashMap::new).get(&parent_header.id) {
+                        if None == self.current_headers.entry(parent_header.height).or_insert_with(HashMap::new).get(&parent_header.id) {
                             panic!("This should never happen --> process_own_header should occur in order!");
                         }
                     }
@@ -521,28 +586,38 @@ impl Core {
                 // If we don't have parent => create a waiter. (or just return -- since process_header should have added it.)
                 _ => return Ok(())
             }
-        }
+        }*/
        
         // Store the certificate.
         let bytes = bincode::serialize(&certificate).expect("Failed to serialize certificate");
         self.store.write(certificate.digest().to_vec(), bytes).await;
 
+        /*match self.parallel_chains.get(&certificate.header_digest.author) {
+            Some(chain) => {
+                if certificate.height > chain.height {
+                    self.parallel_chains.insert(certificate.header_digest.author, certificate);
+                }
+            },
+            None => {}
+        };*/
+
+
         // Check if we have enough certificates to enter a new dag round and propose a header.
         //TODO: Change this into streaming certs. And let the proposer determine when n-f have been collected.
-        if let Some(parents) = self
+        /*if let Some(_parents) = self
             .certificates_aggregators
             .entry(certificate.round())
             .or_insert_with(|| Box::new(CertificatesAggregator::new()))
             .append(certificate.clone(), &self.committee)?
-        {
+        {*/
             //panic!("made it here");
             // Send it to the `Proposer`.
-            self.tx_proposer
+            /*self.tx_proposer
                 .send((parents, certificate.round().clone()))
                 .await
-                .expect("Failed to send certificate");
+                .expect("Failed to send certificate");*/
 
-        }
+        //}
 
 
         //Committer Invariant: In order to commit, must have stored all parent certs
@@ -566,8 +641,8 @@ impl Core {
 
     fn sanitize_header(&mut self, header: &Header) -> DagResult<()> {
         ensure!(
-            self.gc_round <= header.round,
-            DagError::HeaderTooOld(header.id.clone(), header.round)
+            self.gc_round <= header.height,
+            DagError::HeaderTooOld(header.id.clone(), header.height)
         );
 
         // Verify the header's signature.
@@ -581,21 +656,21 @@ impl Core {
     fn sanitize_vote(&mut self, vote: &Vote) -> DagResult<()> {
 
         //println!("Received vote for origin: {}, header id {}, round {}. Vote sent by replica {}", vote.origin.clone(), vote.id.clone(), vote.round.clone(), vote.author.clone());
-        ensure!(
-            self.current_headers.get(&vote.round) != None,
-            DagError::VoteTooOld(vote.digest(), vote.round)
-        );
+        /*ensure!(
+            self.current_headers.get(&vote.height) != None,
+            DagError::VoteTooOld(vote.digest(), vote.height)
+        );*/
         // ensure!(
         //     self.current_header.round <= vote.round,
         //     DagError::VoteTooOld(vote.digest(), vote.round)
         // );
        
         // Ensure we receive a vote on the expected header.
-        let current_header = self.current_headers.entry(vote.round).or_insert_with(HashMap::new).get(&vote.id);
+        /*let current_header = self.current_headers.entry(vote.height).or_insert_with(HashMap::new).get(&vote.author);
         ensure!(
             current_header != None && current_header.unwrap().author == vote.origin,
             DagError::UnexpectedVote(vote.id.clone())
-        );
+        );*/
         // ensure!(
         //     vote.id == self.current_header.id
         //         && vote.origin == self.current_header.author
@@ -642,9 +717,11 @@ impl Core {
 
     fn sanitize_certificate(&mut self, certificate: &Certificate) -> DagResult<()> {
         ensure!(
-            self.gc_round <= certificate.round(),
-            DagError::CertificateTooOld(certificate.digest(), certificate.round())
+            self.gc_round <= certificate.height(),
+            DagError::CertificateTooOld(certificate.digest(), certificate.height())
         );
+
+        println!("Past first ensure");
         
         // Verify the certificate (and the embedded header).
         certificate.verify(&self.committee).map_err(DagError::from)
@@ -657,7 +734,11 @@ impl Core {
         // self.store.write(Header::default().id.to_vec(), bytes).await;
         //
         let genesis_header = Header::genesis(&self.committee);
-        self.current_headers.entry(0).or_insert_with(HashMap::new).insert(genesis_header.id.clone(), genesis_header);
+        self.current_headers.entry(0).or_insert_with(HashMap::new).insert(genesis_header.author.clone(), genesis_header);
+        //self.tips.insert(self.name, genesis_header);
+        for (name, _) in self.committee.authorities.iter() {
+            self.current_tips.insert(*name, Header {author: *name, ..Header::default()});
+        }
 
         loop {
             let result = tokio::select! {
@@ -673,14 +754,20 @@ impl Core {
                         },
                         PrimaryMessage::Vote(vote) => {
                             match self.sanitize_vote(&vote) {
-                                Ok(()) => self.process_vote(vote).await,
-                                error => error
+                                Ok(()) => {
+                                    self.process_vote(vote).await
+                                },
+                                error => {
+                                    error
+                                }
                             }
                         },
                         PrimaryMessage::Certificate(certificate) => {
                             match self.sanitize_certificate(&certificate) {
                                 Ok(()) => self.process_certificate(certificate).await, //self.receive_certificate(certificate).await, 
-                                error => error
+                                error => {
+                                    error
+                                }
                             }
                         },
                         _ => panic!("Unexpected core message")
@@ -695,7 +782,7 @@ impl Core {
                 Some(header) = self.rx_header_waiter.recv() => self.process_header(header).await,
 
                 //Loopback for special headers that were validated by consensus layer.
-                Some((header, special_valid, qc, tc)) = self.rx_validation.recv() => self.create_vote(header, special_valid, qc, tc).await,               
+                Some((header, _special_valid, qc, tc)) = self.rx_validation.recv() => self.create_vote(header, true, qc, tc).await,               
                 //i.e. core requests validation from consensus (check if ticket valid; wait to receive ticket if we don't have it yet -- should arrive: using all to all or forwarding)
 
                 Some(header_digest) = self.rx_request_header_sync.recv() => self.synchronizer.fetch_header(header_digest).await,

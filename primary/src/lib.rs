@@ -19,4 +19,4 @@ mod common;
 
 pub use crate::error::DagError;
 pub use crate::messages::{Certificate, Header};
-pub use crate::primary::{Primary, PrimaryWorkerMessage, Round, WorkerPrimaryMessage};
+pub use crate::primary::{Primary, PrimaryWorkerMessage, Height, WorkerPrimaryMessage};

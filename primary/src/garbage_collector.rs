@@ -78,7 +78,7 @@ impl GarbageCollector {
             }
 
             // Cleanup all the modules.
-            let round = certificate.round();
+            let round = certificate.height();
             if round > last_committed_round {
                 last_committed_round = round;
 

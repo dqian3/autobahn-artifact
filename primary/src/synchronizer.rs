@@ -127,14 +127,17 @@ impl Synchronizer {
     /// Returns the parents of a header if we have them all. If at least one parent is missing,
     /// we return an empty vector, synchronize with other nodes, and re-schedule processing
     /// of the header for when we will have all the parents.
-    pub async fn get_parents(&mut self, header: &Header) -> DagResult<(Vec<Certificate>, bool)> {
+    pub async fn get_parent(&mut self, header: &Header) -> DagResult<(Option<Header>, bool)> {
 
-        let mut missing = Vec::new();
-        let mut parents = Vec::new();
+        /*let mut missing = Vec::new();
+        let mut parents = Vec::new();*/
 
-        if *header == self.genesis_header { return Ok((parents, true))} //Just for unit testing...
+        let mut missing = None;
+        let mut parent = None;
 
-        for digest in &header.parents {
+        //if *header == self.genesis_header { return Ok((parents, true))} //Just for unit testing...
+
+        /*for digest in &header.parent_cert_digest {
             if let Some(genesis) = self
                 .genesis
                 .iter()
@@ -149,23 +152,44 @@ impl Synchronizer {
                 Some(certificate) => parents.push(bincode::deserialize(&certificate)?),
                 None => missing.push(digest.clone()),
             };
+        }*/
+
+        let parent_digest = &header.parent_cert.header_digest;
+
+        if header.parent_cert.header_digest == self.genesis_header.digest() {
+            println!("Parent is genesis");
+            return Ok((parent, false));
         }
 
-        if missing.is_empty() {
-            return Ok((parents, false));
+        /*if let Some(_genesis) = self
+                .genesis
+                .iter()
+                .find(|(x, _)| x == parent_digest)
+                .map(|(_, x)| x)
+        {
+            parent = Some(self.genesis_header.clone());
+        }*/
+
+        match self.store.read(parent_digest.to_vec()).await? {
+            Some(parent_header) => parent = bincode::deserialize(&parent_header)?,
+            None => missing = Some(parent_digest.clone()),
+        };
+
+        if missing.is_none() {
+            return Ok((parent, false));
         }
 
         self.tx_header_waiter
-            .send(WaiterMessage::SyncParents(missing, header.clone()))
+            .send(WaiterMessage::SyncParent(missing.unwrap(), header.clone()))
             .await
             .expect("Failed to send sync parents request");
-        Ok((Vec::new(), true))
+        Ok((None, true))
     }
 
     /// Check whether we have all the ancestors of the certificate. If we don't, send the certificate to
     /// the `CertificateWaiter` which will trigger re-processing once we have all the missing data.
     pub async fn deliver_certificate(&mut self, certificate: &Certificate) -> DagResult<bool> {
-        for digest in &certificate.header.parents {
+        /*for digest in &certificate.header.parent_cert_digest {
             if self.genesis.iter().any(|(x, _)| x == digest) {
                 continue;
             }
@@ -177,7 +201,20 @@ impl Synchronizer {
                     .expect("Failed to send sync certificate request");
                 return Ok(false);
             };
+        }*/
+
+        if self.genesis.iter().any(|(x, _)| x == &certificate.header_digest) {
+            return Ok(true);
         }
+
+        if self.store.read(certificate.header_digest.to_vec()).await?.is_none() {
+            self.tx_certificate_waiter
+                .send(certificate.clone())
+                .await
+                .expect("Failed to send sync certificate request");
+            return Ok(false);
+        };
+
         Ok(true)
     }
 
@@ -188,14 +225,14 @@ impl Synchronizer {
     
     pub async fn deliver_special_certificate(&mut self, certificate: &Certificate, sync: bool) -> DagResult<(Option<Certificate>, bool)> { //bool value indicates that we have real_cert. No sync or error necessary
 
-        let digest = certificate.header.special_parent.as_ref().unwrap();//header.parents.iter().next().unwrap().clone();
+        let digest = certificate.header_digest.clone();//.as_ref().unwrap();//header.parents.iter().next().unwrap().clone();
 
-        if digest == &self.genesis_header.id {  //Note: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
+        if digest == self.genesis_header.digest() {  //Note: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
             //parents.push(self.genesis_header.clone());
             //let dummy_parent_genesis_cert = Certificate::genesis_cert(&self.committee);
             //TODO: alternativey: pick first cert from genesis == genesis_cert
             let dummy_parent_cert = Certificate {
-                header: self.genesis_header.clone(),
+                header_digest: self.genesis_header.digest(),
                 ..Certificate::default()
             };
             return Ok((Some(dummy_parent_cert), true));
@@ -205,7 +242,7 @@ impl Synchronizer {
                 Some(special_parent_header) => {
                     //Create dummy cert for parent 
                     let dummy_parent_cert = Certificate {
-                        header: bincode::deserialize(&special_parent_header)?,
+                        header_digest: bincode::deserialize(&special_parent_header)?,
                         ..Certificate::default()
                     };
 

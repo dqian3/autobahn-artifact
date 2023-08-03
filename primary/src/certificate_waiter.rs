@@ -53,6 +53,52 @@ impl CertificateWaiter {
             .map_err(DagError::from)
     }
 
+    /// Helper function. It waits for particular data to become available in the storage
+    /// and then delivers the specified header.
+    /*async fn parent_waiter(
+        mut missing: (Vec<u8>, Store),
+        deliver: Certificate,
+    ) -> DagResult<Certificate> {
+        let waiting: Vec<_> = missing
+            .iter_mut()
+            .map(|(x, y)| y.notify_read(x.to_vec()))
+            .collect();
+
+        try_join_all(waiting)
+            .await
+            .map(|_| deliver)
+            .map_err(DagError::from)
+    }*/
+
+    /// Helper function. It waits for particular data to become available in the storage
+    /// and then delivers the specified header.
+    async fn parent_waiter(
+        missing: (Vec<u8>, Store),
+        deliver: Certificate,
+    ) -> DagResult<Certificate> {
+        /*let waiting: Vec<_> = missing
+            .iter_mut()
+            .map(|(x, y)| y.notify_read(x.to_vec()))
+            .collect();*/
+
+        let (digest, mut store) = missing;
+        tokio::select! {
+            result = store.notify_read(digest.to_vec()) => {
+                match result {
+                    Ok(_) => Ok(deliver),
+                    Err(e) => Err(DagError::from(e)),
+                }
+            },
+            /*result = try_join_all(waiting) => {
+                result.map(|_| Some(deliver)).map_err(DagError::from)
+            }*/
+            //_ = handler.recv() => Ok(None),
+        }
+    }
+
+
+
+
     async fn run(&mut self) {
         let mut waiting = FuturesUnordered::new();
 
@@ -61,25 +107,28 @@ impl CertificateWaiter {
                 Some(certificate) = self.rx_synchronizer.recv() => {
                     // Add the certificate to the waiter pool. The waiter will return it to us
                     // when all its parents are in the store.
-                    let mut wait_for: Vec<(Vec<u8>, Store)> = certificate
+                    /*let mut wait_for: Vec<(Vec<u8>, Store)> = certificate
                         .header
-                        .parents
+                        .parent_cert_digest
                         .iter()
                         .cloned()
                         .map(|x| (x.to_vec(), self.store.clone()))
-                        .collect();
+                        .collect();*/
+
+                    let wait_for = (certificate.header_digest.to_vec(), self.store.clone());
 
                     //Add a waiter for the special parent header.
-                    if certificate.header.special_parent.is_some(){
+                    /*if certificate.header.special_parent.is_some(){
                         let special_wait_for = certificate
                         .header
                         .special_parent
                         .clone();
                         wait_for.push(  (special_wait_for.unwrap().to_vec(), self.store.clone())  );
-                     }
+                     }*/
                     
 
-                    let fut = Self::waiter(wait_for, certificate);
+                    //let fut = Self::waiter(wait_for, certificate);
+                    let fut = Self::parent_waiter(wait_for, certificate);
                     waiting.push(fut);
                 }
                 Some(result) = waiting.next() => match result {
