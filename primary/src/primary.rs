@@ -30,6 +30,8 @@ pub const CHANNEL_CAPACITY: usize = 1_000;
 pub type Height = u64;
 /// The view number (of consensus)
 pub type View = u64;
+// The slot (sequence) number of consensus
+pub type Slot = u64;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum PrimaryMessage {

@@ -1,7 +1,8 @@
+use std::collections::BTreeMap;
 use std::mem;
 
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::messages::{Certificate, Header, Ticket};
+use crate::messages::{Certificate, Header, Ticket, ConsensusInfo, ConsensusProposal};
 use crate::primary::{Height, View};
 use config::{Committee, WorkerId};
 use crypto::Hash as _;
@@ -33,6 +34,8 @@ pub struct Proposer {
     rx_workers: Receiver<(Digest, WorkerId)>,
     // Receives new view from the Consensus engine
     rx_ticket: Receiver<Ticket>, //Receiver<(View, Round, Ticket)>,
+    // Receives certificates from core to determine parallel chain growth
+    rx_certs: Receiver<Certificate>,
     /// Sends newly created headers to the `Core`.
     tx_core: Sender<Header>,
    
@@ -41,9 +44,19 @@ pub struct Proposer {
     // Holds the header id of the last header issued.
     last_header_id: Digest,
     last_header_round: Height,
+    // Whether the last header was special
+    is_last_header_special: bool,
+    // Whether the proposer received a ticket
+    has_received_ticket: bool,
 
-    /// Holds the certificates' ids waiting to be included in the next header.
-    last_parent: Certificate,
+    /// Holds the last parent certificate used to propose header
+    last_parent: Option<Certificate>,
+    // Holds the consensus info for the last special header
+    last_consensus_info: ConsensusInfo,
+    // Holds the last consensus proposal info
+    last_consensus_proposal: ConsensusProposal,
+    // Most recent certificates used for consensus proposals
+    current_certs: BTreeMap<PublicKey, Certificate>,
     /// Holds the batches' digests waiting to be included in the next header.
     digests: Vec<(Digest, WorkerId)>,
     /// Keeps track of the size (in bytes) of batches' digests that we received so far.
@@ -55,7 +68,7 @@ pub struct Proposer {
     //prev_view_header: Option<Digest>,
 
     // Whether to propose special block
-    propose_special: bool,
+    consensus_propose_special: bool,
     // Whether the previous block had enough parents. If yes, can issue special block without. If not, then special block must wait for parents.
     last_has_parents: bool,
     // Whether to include special edge or not.
@@ -77,6 +90,7 @@ impl Proposer {
         rx_core: Receiver<Certificate>,
         rx_workers: Receiver<(Digest, WorkerId)>,
         rx_ticket: Receiver<Ticket>,//Receiver<(View, Round, Ticket)>,
+        rx_certs: Receiver<Certificate>,
         tx_core: Sender<Header>,
     ) {
         /*let genesis: Vec<Digest> = Certificate::genesis(&committee)
@@ -111,9 +125,14 @@ impl Proposer {
                 rx_core,
                 rx_workers,
                 rx_ticket,
+                rx_certs,
                 tx_core,
                 height: 1,
-                last_parent: genesis,
+                last_parent: Some(genesis),
+                last_consensus_info: ConsensusInfo { slot: 0, view: 0 },
+                last_consensus_proposal: ConsensusProposal { ticket: genesis.digest(), proposals: BTreeMap::new() },
+                current_certs: BTreeMap::new(),
+                is_last_header_special: false,
                 last_header_id: genesis_parent, //Digest::default(),
                 last_header_round: 0,
                 digests: Vec::with_capacity(2 * header_size),
@@ -121,9 +140,10 @@ impl Proposer {
                 view: 0,
                 prev_view_round: 0,
                 //prev_view_header: None,
-                propose_special: false,
+                consensus_propose_special: false,
                 last_has_parents: true,
                 use_special_parent: false,
+                has_received_ticket: false,
                 ticket: None,
                 committee,
             }
@@ -139,17 +159,29 @@ impl Proposer {
         //keys[0]
     }
     
-    async fn make_header(&mut self, is_special: bool) {
+    async fn make_header(&mut self, is_special_propose: bool, is_special_consensus: bool) {
       
         let mut ticket = None;
         let mut ticket_digest = Digest::default();
-        if is_special && self.ticket.is_some() {
+        if is_special_propose && self.ticket.is_some() {
             mem::swap(&mut self.ticket, &mut ticket); //Reset self.ticket; and move ticket (this just avoids copying)
             ticket_digest = ticket.as_ref().unwrap().digest();
             debug!("PROPOSER: make special block for view {}, round {} at replica? {}. Ticket round: {}", self.view, self.height, self.name, ticket.as_ref().unwrap().round);
         }
         else {
             debug!("PROPOSER: make normal block for round {} at replica? {}", self.height, self.name);
+        }
+
+        let mut consensus_propose_info: Option<ConsensusProposal> = None;
+        let mut consensus_info: Option<ConsensusInfo> = None;
+
+        if is_special_propose {
+            consensus_propose_info = Some(ConsensusProposal { ticket: ticket_digest, proposals: self.current_certs.clone() });
+            consensus_info = Some(ConsensusInfo { slot: self.last_consensus_info.slot+1, view: 1 });
+        }
+
+        if is_special_consensus {
+            consensus_info = Some(self.last_consensus_info.clone());
         }
 
         //let mut prev_view_header = None;
@@ -159,16 +191,18 @@ impl Proposer {
                 self.name,
                 self.height,
                 self.digests.drain(..).collect(),
-                self.last_parent.clone(),
+                self.last_parent.clone().unwrap(),
                 &mut self.signature_service,
-                is_special,
+                is_special_propose,
+                consensus_info,
+                consensus_propose_info,
                 Some(self.view),
                 if self.use_special_parent {Some(self.last_header_id.clone())} else {None},
                 Some(self.last_header_round),
                 ticket,
                 None,
                 self.prev_view_round,
-                if is_special {Some(ticket_digest)} else {None},//prev_view_header,
+                if is_special_propose {Some(ticket_digest)} else {None},//prev_view_header,
             ).await;
 
         debug!("Created {:?}", header);
@@ -182,6 +216,9 @@ impl Proposer {
         //Store reference to our own previous header -- used for special edge. Does not include a certificate (does not exist yet)
         self.last_header_id = header.digest();
         self.last_header_round = header.height.clone(); ////self.round.clone();
+       
+        // Reset last parent
+        self.last_parent = None;
       
         // Send the new header to the `Core` that will broadcast and process it.
         self.tx_core
@@ -208,20 +245,47 @@ impl Proposer {
             // For both normal blocks and special blocks, delegate the actual sending to the consensus module
             // in other words core should not be disseminating headers
             //let enough_parents = !self.last_parent.is_empty();
-            let enough_parents = self.last_has_parents;
+            let enough_parents = self.last_parent.is_some();
             let enough_digests = self.payload_size >= self.header_size;
             let timer_expired = timer.is_elapsed();
 
-            let mut proposing = false;
+            // We will always propose a header (special propose, special, or normal) when we have a
+            // certificate from previous height and a batch ready/timeout
+            if (timer_expired || enough_digests) && enough_parents {
+                let mut special_consensus_proposals = false;
 
-            if timer_expired || enough_digests {
+                if self.has_received_ticket {
+                    // Propose special header with proposals
+                    let mut num_increase_growth = 0;
+                    for (pub_key, certificate) in self.current_certs.iter() {
+                        if certificate.height > self.last_consensus_proposal.proposals.get(pub_key).unwrap().height {
+                            num_increase_growth += 1;
+                        }
+                    }
+
+                    special_consensus_proposals = num_increase_growth >= self.committee.quorum_threshold();
+                } 
+
+                // Consensus header (without proposals) contains a prepare/commit certificate
+                let special_consensus = self.last_parent.clone().unwrap().special_valids.iter().all(|x| *x);
+
+                self.height += 1;
+                // Make new header (special is depending on whether we have a ticket)
+                self.make_header(special_consensus_proposals, special_consensus).await;
+                self.payload_size = 0;
+
+                // Reschedule the timer
+                let deadline = Instant::now() + Duration::from_millis(self.max_header_delay);
+                timer.as_mut().reset(deadline);
+
 
                 //Case A: Have Digests OR Timer: Receive Ticket Before parents. ==> next loop will start a special header
                 //Case B: Have Digests OR Timer: Receive Parents before ticket. ==> next loop will start a normal header
                 //Case C: Waiting for Digest AND Timer: Received both Ticket and Parent. ==> next loop will start a special header (with parents)
+
                
                 //Pass down round from last cert. Also pass down current parents EVEN if not full quorum: I.e. add a special flag to "process_cert" to not wait.
-                if self.propose_special && ((self.last_has_parents && false) || enough_parents) { //2nd clause: Special block must have, or extend block with n-f edges ==> cant have back to back special edges
+                /*if self.propose_special && self.last_has_parents { //2nd clause: Special block must have, or extend block with n-f edges ==> cant have back to back special edges
                 
                     debug!("enough_digests. special? {:?}, last_parents? {:?}, enough parents? {:?}", self.propose_special, self.last_has_parents, enough_parents);
                     //not waiting for n-f parent edges to create special block -- but will use them if available (Note, this will only happen in case C)
@@ -244,6 +308,8 @@ impl Proposer {
                     // ==> Conclusion: If we have enough parents, and we receive a ticket for a view that is skipping ahead, then those parents must be for a round >= than our last header. Thus we should use them.
 
                     self.make_header(true).await;
+                    // Update that the last header was special
+                    self.is_last_header_special = true;
                     //reset
                     self.use_special_parent = false;
                     self.propose_special = false; 
@@ -260,15 +326,15 @@ impl Proposer {
                 }
                 // else{
                 //     debug!("Cannot propose. Even though enough_digests/timer. special? {:?}, last_parents? {:?}, enough parents? {:?}", self.propose_special, self.last_has_parents, enough_parents);
-                // }
+                // }*/
             }
           
-            if proposing {
+            /*if proposing {
                 self.payload_size = 0;
                 // Reschedule the timer.
                 let deadline = Instant::now() + Duration::from_millis(self.max_header_delay);
                 timer.as_mut().reset(deadline);
-            }
+            }*/
            
 
             tokio::select! {
@@ -295,50 +361,37 @@ impl Proposer {
                     self.prev_view_round = ticket.round;
                     //if self.get_leader(self.view) == self.name {
                     if self.height > self.prev_view_round { //if we've caught up to special round.
-                        self.propose_special = true;
+                        self.consensus_propose_special = true;
                     }
                         self.ticket = Some(ticket);
                    // }
-                    debug!("Dag moved to round {}, and view {}. propose_special {}, has_ticket {}", self.height, self.view, self.propose_special, self.ticket.is_some());
+                    debug!("Dag moved to round {}, and view {}. propose_special {}, has_ticket {}", self.height, self.view, self.consensus_propose_special, self.ticket.is_some());
     
                 }
 
+                // Receive a ticket from consensus to propose a new special header with proposals
+
+                // Receive own certificate from core (we are the author)
                 Some(parent) = self.rx_core.recv() => {
-                    debug!("   received parents from round {:?}", parent.height);
-                    if self.propose_special { //&& !self.last_has_parents {   // If we are trying to propose a special block, but cannot because not enough parents are ready, and we've already exhausted last_parent_header rule
-                        //Also use the parents if we are proposing a special parent but are currently waiting for digests.
+                    debug!("   received parents from height {:?}", parent.height);
 
-                        /*if round < self.last_header_round { // i.e. these are parents for a round that we already issued.
-                            continue;
-                        }
-                        //else, still accept parents (even though they are not from round >= self.round )
-                        self.last_parent = parent;
-                        if round >= self.round {
-                            self.round = round + 1; // ==> special round must be bigger than parent round
-                        }*/
-                        //Note: If round = last_header round, then this logic is equivalent to the normal case below; but if we skipped rounds, then its possible that round > last_header_round; in which case we do want to use the parents.
+                    if parent.height < self.height {
+                        continue;
                     }
 
-                    else{ //normal case
-                        if parent.height < self.height {
-                            continue;
-                        }
+                    // Signal that we have enough parent certificates to propose a new header.
+                    self.last_parent = Some(parent.clone());
+                    self.current_certs.insert(parent.origin(), parent);
+                }
 
-                        // Advance to the next round.
-                        self.height = self.height + 1;
-                        debug!("Dag moved to round {}", self.height);
-
-                        println!("new height is {:?}", self.height);
-
-    
-                        // Signal that we have enough parent certificates to propose a new header.
-                        self.last_parent = parent;
-                    }
-
-                    if self.height > self.prev_view_round && self.ticket.is_some() { //if we've caught up to special round. (and haven't already used up ticket)
-                        self.propose_special = true;    
+                // Receive certificate with a different author
+                Some(cert) = self.rx_certs.recv() => {
+                    debug!("   received certificate from height {:?}", cert.height);
+                    if cert.height > self.current_certs.get(&cert.origin()).unwrap().height {
+                        self.current_certs.insert(cert.origin(), cert.clone());
                     }
                 }
+
                     
                 Some((digest, worker_id)) = self.rx_workers.recv() => {
                     println!("   received payload from worker {}", worker_id);

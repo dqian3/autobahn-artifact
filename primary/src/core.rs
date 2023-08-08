@@ -60,7 +60,7 @@ pub struct Core {
     /// Send valid a quorum of certificates' ids to the `Proposer` (along with their round).
     tx_proposer: Sender<Certificate>,
     // Receives validated special Headers & proof from the consensus layer.
-    rx_validation: Receiver<(Header, u8, Option<QC>, Option<TC>)>,
+    rx_validation: Receiver<(Header, bool)>,
     tx_special: Sender<Header>,
 
     rx_pushdown_cert: Receiver<Certificate>,
@@ -116,7 +116,7 @@ impl Core {
         tx_consensus: Sender<Certificate>,
         tx_committer: Sender<Certificate>,
         tx_proposer: Sender<Certificate>,
-        rx_validation: Receiver<(Header, u8, Option<QC>, Option<TC>)>,
+        rx_validation: Receiver<(Header, bool)>,
         tx_special: Sender<Header>,
         rx_pushdown_cert: Receiver<Certificate>,
         rx_request_header_sync: Receiver<Digest>,
@@ -391,13 +391,13 @@ impl Core {
     }
 
     #[async_recursion]
-    async fn create_vote(&mut self, header: Header, special_valid: bool, _qc: Option<QC>, _tc: Option<TC>) -> DagResult<()>{ 
+    async fn create_vote(&mut self, header: Header, valid_consensus: bool) -> DagResult<()>{ 
         //Argument "special_valid" confirms whether a special header should be considered for consensus or not. Invalid votes must contain a TC or QC proving the view is outdated. (All of this should be passed down by the consensus layer)
         //Note: Normal headers have special_valid = 0, and no QC/TC
         
          // Make a vote and send it to the header's creator.
 
-         let vote = Vote::new(&header, &self.name, &mut self.signature_service, special_valid).await;
+         let vote = Vote::new(&header, &self.name, &mut self.signature_service, valid_consensus).await;
          debug!("Created Vote {:?}", vote);
 
          if vote.origin == self.name {
@@ -782,7 +782,7 @@ impl Core {
                 Some(header) = self.rx_header_waiter.recv() => self.process_header(header).await,
 
                 //Loopback for special headers that were validated by consensus layer.
-                Some((header, _special_valid, qc, tc)) = self.rx_validation.recv() => self.create_vote(header, true, qc, tc).await,               
+                Some((header, valid_consensus)) = self.rx_validation.recv() => self.create_vote(header, valid_consensus).await,               
                 //i.e. core requests validation from consensus (check if ticket valid; wait to receive ticket if we don't have it yet -- should arrive: using all to all or forwarding)
 
                 Some(header_digest) = self.rx_request_header_sync.recv() => self.synchronizer.fetch_header(header_digest).await,

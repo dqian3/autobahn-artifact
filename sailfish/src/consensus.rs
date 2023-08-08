@@ -31,6 +31,8 @@ pub const CHANNEL_CAPACITY: usize = 1_000;
 pub type View= u64;
 /// The Dag round number.
 pub type Round= u64;
+// The consensus slot (sequence) number
+pub type Slot= u64;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ConsensusMessage {

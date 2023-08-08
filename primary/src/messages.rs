@@ -2,7 +2,7 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::{DagError, DagResult, ConsensusError, ConsensusResult};
 //use sailfish::error::{DagError, DagResult, ConsensusError, ConsensusResult};
-use crate::primary::{Height, View};
+use crate::primary::{Height, View, Slot};
 //use crate::config::{Committee};
 use config::{Committee, WorkerId, Stake};
 use crypto::{Digest, Hash, PublicKey, Signature, SignatureService, SecretKey};
@@ -29,6 +29,13 @@ pub struct Ticket {
     pub hash: Digest, 
     pub view: View,
     pub round: Height, 
+
+    //pub prev_slot: Slot,
+    //pub prev_proposals: BTreeMap<PublicKey, Digest>,
+    //pub prev_author_sig: Signature,
+
+    // The special header info from the previous slot
+    //pub prev_author_sig: Signature,
 }
 
 impl Ticket {
@@ -96,6 +103,20 @@ impl fmt::Display for Ticket {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct ConsensusInfo {
+    // The slot in the log
+    pub slot: Slot,
+    // The view of the header
+    pub view: View,
+}
+
+pub struct ConsensusProposal {
+    // The digest of the previous consensus proposal header
+    pub ticket: Digest,
+    pub proposals: BTreeMap<PublicKey, Certificate>,
+}
+
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Header {
@@ -105,11 +126,14 @@ pub struct Header {
     pub parent_cert: Certificate,
     pub id: Digest,
     pub signature: Signature,
+
+    pub consensus_info: Option<ConsensusInfo>,
+    pub consensus_proposal: Option<ConsensusProposal>,
     
-    pub is_special: bool,
+    /*pub is_special: bool,
     pub view: Option<View>,
     pub ticket: Option<Ticket>, 
-    pub proposals: Option<BTreeMap<PublicKey, Digest>>,
+    pub proposals: Option<BTreeMap<PublicKey, Digest>>,*/
 
     //edges within DAG
     pub special_parent: Option<Digest>, //Digest of the header of the special parent.
@@ -133,6 +157,8 @@ impl Header {
         parent_cert: Certificate,
         signature_service: &mut SignatureService,
         is_special: bool,
+        consensus_info: Option<ConsensusInfo>,
+        consensus_proposal: Option<ConsensusProposal>,
         view: Option<View>,
         special_parent: Option<Digest>,
         special_parent_height: Option<Height>,
@@ -149,12 +175,14 @@ impl Header {
             parent_cert,
             id: Digest::default(),
             signature: Signature::default(),
-            is_special,
-            view,
+            consensus_info,
+            consensus_proposal,
+            //is_special,
+            //view,
             special_parent,
             special_parent_height,
-            ticket,
-            proposals,
+            //ticket,
+            //proposals,
             prev_view_round,
             consensus_parent,
         };
@@ -220,7 +248,7 @@ impl Header {
             hasher.update(x);
         }*/
 
-        let f: u8 = if self.is_special { 1u8 } else { 0u8 };
+        let f: u8 = if self.consensus_info.is_some() { 1u8 } else { 0u8 };
         hasher.update(f.to_le_bytes());
         //hasher.update(&self.view.to_le_bytes());
 
@@ -253,8 +281,8 @@ impl Header {
             author,
             height: round,
             signature: Signature::default(),
-            is_special: true,
-            view: Some(view),
+            //is_special: true,
+            //view: Some(view),
             //ticket: Some(Ticket::genesis(committee)),
             consensus_parent: Some(Ticket::genesis(committee).digest()),
            ..Header::default()
@@ -278,7 +306,7 @@ impl Hash for Header {
             hasher.update(x);
         }*/
 
-        let f: u8 = if self.is_special { 1u8 } else { 0u8 };
+        let f: u8 = if self.consensus_info.is_some() { 1u8 } else { 0u8 };
         hasher.update(f.to_le_bytes());
         //hasher.update(&self.view.to_le_bytes());
         
@@ -314,7 +342,7 @@ impl fmt::Debug for Header {
             self.height,
             self.author,
             self.payload.keys().map(|x| x.size()).sum::<usize>(),
-            self.is_special,
+            self.consensus_info.is_some(),
             //self.view,
             /*self
             .parent_cert
@@ -448,6 +476,7 @@ impl PartialEq for Vote {
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Certificate {
+    pub author: PublicKey,
     pub header_digest: Digest,
     pub height: Height,
     pub view: Option<View>,
@@ -541,9 +570,9 @@ impl Certificate {
         self.height
     }
 
-    /*pub fn origin(&self) -> PublicKey {
+    pub fn origin(&self) -> PublicKey {
         self.author
-    }*/
+    }
 
     pub fn verifiable_digest(&self) -> Digest {
         if false { //matching_valids(&self.special_valids) {
@@ -786,7 +815,7 @@ impl AcceptVote {
     ) -> Self {
         let vote = Self {
             hash: header.id.clone(),
-            view: header.view.unwrap(),
+            view: header.consensus_info.clone().unwrap().view,
             view_round: header.height,
             author,
             signature: Signature::default(),
@@ -863,7 +892,7 @@ impl QC {
         let genesis_header = Header::genesis(committee);
         QC {
             hash: genesis_header.id,
-            view: genesis_header.view.unwrap(),
+            view: genesis_header.consensus_info.clone().unwrap().view,
             view_round: genesis_header.height,
             origin: genesis_header.author,
             ..QC::default()
@@ -1019,7 +1048,7 @@ impl Timeout {
             //Ensure it matches vote
             let (dig, view) = self.vote_high_prepare.as_ref().expect("Invalid Prepare Vote");
             ensure!(
-                *dig == high_prepare.id && *view == high_prepare.view.unwrap(), 
+                *dig == high_prepare.id && *view == high_prepare.consensus_info.clone().unwrap().view,
                 ConsensusError::InvalidTimeout(self.clone())
             );
             high_prepare.verify(committee)?;
@@ -1138,7 +1167,7 @@ impl TC {
         let genesis_header = Header::genesis(committee);
         TC {
             //hash: genesis_header.id,
-            view: genesis_header.view.unwrap(),
+            view: genesis_header.consensus_info.unwrap().view,
             winning_proposal: Box::new((Some(genesis_header), None, None)),
             //view_round: genesis_header.round,
             ..TC::default()
@@ -1158,7 +1187,7 @@ impl TC {
         for timeout in &self.votes {
             if let Some(header) = &timeout.high_prepare {
                 *high_prepares.entry(header.id.to_owned()).or_default() += 1;
-                if high_prepares.get(&header.id).unwrap() == &committee.validity_threshold() && header.view >= high_prepare.view {
+                if high_prepares.get(&header.id).unwrap() == &committee.validity_threshold() && header.consensus_info.clone().unwrap().view >= high_prepare.consensus_info.clone().unwrap().view {
                     high_prepare = header;
                 }
             } 
@@ -1185,7 +1214,7 @@ impl TC {
         if high_accept.view.unwrap() > high_qc.view {
             winner = 1;
         }
-        if high_prepare.view.unwrap() > max(high_accept.view.unwrap(), high_qc.view) {
+        if high_prepare.consensus_info.clone().unwrap().view > max(high_accept.view.unwrap(), high_qc.view) {
             winner = 0;
         }
 
@@ -1286,7 +1315,7 @@ impl TC {
         if winner == 0 { //==> High_Prepare won
             let winning_prepare: &Header = self.winning_proposal.0.as_ref().expect("Invalid winning proposal");
             ensure!(
-                winning_prepare.id == *high_prepare_meta.0 && winning_prepare.view.unwrap() == high_prepare_meta.1 && self.view_round == winning_prepare.height,
+                winning_prepare.id == *high_prepare_meta.0 && winning_prepare.consensus_info.clone().unwrap().view == high_prepare_meta.1 && self.view_round == winning_prepare.height,
                 ConsensusError::InvalidTC(self.clone())
             );
             //verify correctness of winning header

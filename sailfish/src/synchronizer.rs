@@ -10,7 +10,7 @@ use futures::stream::futures_unordered::FuturesUnordered;
 use futures::stream::StreamExt as _;
 use log::{debug, error};
 use network::SimpleSender;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, BTreeMap};
 use std::time::{SystemTime, UNIX_EPOCH};
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -34,6 +34,7 @@ pub struct Synchronizer {
 
     inner_channel_header: Sender<(Digest, Ticket)>,
     inner_channel_ticket: Sender<(Header, Ticket)>,
+    inner_channel_prev_special: Sender<(Header, Digest)>,
     //tx_dag_request_header_sync: Sender<Digest>,
     tx_loopback_commit: Sender<(Header, Ticket)>,
 }
@@ -48,6 +49,11 @@ impl Synchronizer {
     async fn ticket_commit_waiter(mut store: Store, wait_on: Digest, header: Header, ticket: Ticket) -> ConsensusResult<(Header, Ticket)> {
         let _ = store.notify_read(wait_on.to_vec()).await?;
         Ok((header, ticket))
+    }
+
+    async fn prev_special_waiter(mut store: Store, wait_on: Digest, deliver: Header) -> ConsensusResult<(Header, Ticket)> {
+        let _ = store.notify_read(wait_on.to_vec()).await?;
+        Ok((deliver, wait_on))
     }
 
     async fn header_waiter(mut store: Store, wait_on: Digest, deliver: Header) -> ConsensusResult<(Header, Digest)> {
@@ -80,6 +86,8 @@ impl Synchronizer {
         let (tx_cert, mut rx_cert): (_, Receiver<Certificate>) = channel(CHANNEL_CAPACITY);
         let (tx_header, mut rx_header): (_, Receiver<(Digest, Ticket)>) = channel(CHANNEL_CAPACITY);
         let (tx_ticket, mut rx_ticket): (_, Receiver<(Header, Ticket)>) = channel(CHANNEL_CAPACITY);
+        let (tx_prev_special, mut rx_prev_special): (_, Receiver<(Header, Digest)>) = channel(CHANNEL_CAPACITY);
+
 
         let tx_loopback_commit_copy = tx_loopback_commit.clone();
         let store_copy = store.clone();
@@ -89,6 +97,7 @@ impl Synchronizer {
             let mut waiting_headers = FuturesUnordered::new();
             let mut waiting_certs = FuturesUnordered::new();
             let mut waiting_tickets = FuturesUnordered::new();
+            let mut waiting_prev_special = FuturesUnordered::new();
             let mut waiting_commit_headers = FuturesUnordered::new();
 
             let mut pending = HashSet::new();
@@ -139,6 +148,12 @@ impl Synchronizer {
                         Err(e) => error!("{}", e)
                     },
 
+                    Some((header, ticket)) = rx_prev_special.recv() => {
+                        //let consensus_parent = header.consensus_parent.clone().unwrap();
+                        //start waiter.
+                        let fut = Self::prev_special_waiter(store_copy.clone(), header.clone(), ticket.clone());
+                        waiting_prev_special.push(fut);
+                    },
 
 
                     ////////////////////// UNUSED/DEPRECATED below
@@ -357,6 +372,98 @@ impl Synchronizer {
        
         Ok(false)
     }
+
+    pub async fn get_prev_special_header(&mut self, header: &Header, ticket: Digest) -> ConsensusResult<Option<Header>>{
+
+        if ticket == Ticket::genesis(&self.committee).digest(){
+            //return Ok(Header::genesis(&self.committee));
+            return Ok(None);
+        }
+
+        match self.store.read(ticket.to_vec()).await? {
+            None => {
+                panic!{"Should have previous special header by now"}
+                return Err(ConsensusError::UncommittedParentTicket);
+            }
+            Some(bytes) => {
+                let prev_special_header: Header = bincode::deserialize(&bytes)?;
+
+                /*match self.store.read(ticket.digest().to_vec()).await? {
+                    None => {
+                        panic!{"Should have header of the parent ticket by now"}
+                        return Err(ConsensusError::MissingParentTicketHeader);
+                    }
+                    Some(bytes) => {
+                        Ok(Some(bincode::deserialize(&bytes)?))
+                    }
+                }*/ 
+                Ok(Some(prev_special_header))
+            }
+        }
+    }
+
+    pub async fn get_proposals(&mut self, header: &Header) -> ConsensusResult<BTreeMap<PublicKey, Certificate>> {
+        if header.consensus_info.is_none() {
+            return Ok(BTreeMap::new());
+        }
+        
+        let proposal_digests: BTreeMap<PublicKey, Digest> = header.consensus_info.unwrap().proposals;
+
+        let mut missing: Vec<Digest> = Vec::new();
+        let mut proposals: BTreeMap<PublicKey, Certificate> = BTreeMap::new();
+
+        for (pub_key, digest) in proposal_digests.iter() {
+            if let Some(genesis) = Certificate::genesis(&self.committee)
+                .iter()
+                .find(|(x, _)| x == digest)
+                .map(|(_, x)| x)
+            {
+                proposals.insert(pub_key, genesis.clone());
+                continue;
+            }
+
+            match self.store.read(digest.to_vec()).await? {
+                Some(certificate) => proposals.insert(pub_key, bincode::deserialize(&certificate)?),
+                None => missing.push(digest.clone()),
+            };
+        }
+
+        if missing.is_empty() {
+            return Ok(proposals);
+        }
+
+        Ok(BTreeMap::new())
+
+         //if ticket == genesis, return empty ==> Don't need to commit genesis
+        /*if parent == Ticket::genesis(&self.committee).digest(){
+            //return Ok(Header::genesis(&self.committee));
+            return Ok(None);
+        }
+
+        match self.store.read(parent.to_vec()).await? {
+            None => {
+                panic!{"Should have parent ticket by now"}
+                return Err(ConsensusError::UncommittedParentTicket);
+            }
+            Some(bytes) => {
+                let ticket:Ticket = bincode::deserialize(&bytes)?;
+
+                match self.store.read(ticket.digest().to_vec()).await? {
+                    None => {
+                        panic!{"Should have header of the parent ticket by now"}
+                        return Err(ConsensusError::MissingParentTicketHeader);
+                    }
+                    Some(bytes) => {
+                        Ok(Some(bincode::deserialize(&bytes)?))
+                    }
+                }
+
+            }
+        }*/
+    }
+
+
+
 
     //
     pub async fn get_parent_header(&mut self, header: &Header) -> ConsensusResult<Option<Header>> {
