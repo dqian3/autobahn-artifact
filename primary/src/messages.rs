@@ -21,67 +21,64 @@ use std::fmt;
 pub mod messages_tests;
 
 ///////////
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Copy, Serialize, Deserialize, Default)]
 pub struct Ticket {
-    pub qc: QC,
+    // The special header from prior slot
+    pub header: Option<Header>,
+    // Or a TC from the prior slot
     pub tc: Option<TC>,
-    //The Header that is endorsed by the QC/TC
-    pub hash: Digest, 
-    pub view: View,
-    pub round: Height, 
-
-    //pub prev_slot: Slot,
-    //pub prev_proposals: BTreeMap<PublicKey, Digest>,
-    //pub prev_author_sig: Signature,
-
-    // The special header info from the previous slot
-    //pub prev_author_sig: Signature,
+    // The slot the ticket is for
+    pub slot: Slot,
+    // Proposals from the previous slot
+    pub proposals: BTreeMap<PublicKey, Certificate>,
 }
 
 impl Ticket {
     pub async fn new(
-        hash: Digest, 
-        view: View,
-        round: Height, 
-        qc: QC,
+        header: Option<Header>, 
         tc: Option<TC>,
+        slot: Slot,
+        proposals: BTreeMap<PublicKey, Certificate>,
     ) -> Self {
         let ticket = Self {
-            hash,
-            view,
-            round, 
-            qc,
+            header,
             tc,
-        
+            slot,
+            proposals,
         };
         ticket
     }
     pub fn genesis(committee: &Committee) -> Self {
-        let genesis_qc = QC::genesis(committee);
         Ticket {
-            qc: genesis_qc.clone(), 
+            header: None,
             tc: None, 
-            hash: genesis_qc.hash,
-            view: genesis_qc.view,
-            round: genesis_qc.view_round,
+            slot: 0,
+            proposals: Certificate::genesis_certs(committee),
         }
-        
     }
 }
 
 impl Hash for Ticket {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
-         hasher.update(&self.hash);
-         hasher.update(&self.view.to_le_bytes());
-         hasher.update(&self.round.to_le_bytes());
+        match self.header {
+            Some(header) => hasher.update(&header),
+            None => {}
+        }
+
+        match self.tc {
+            Some(tc) => hasher.update(&tc),
+            None => {}
+        }
+        hasher.update(&self.slot.to_le_bytes());
+        hasher.update(&self.proposals);
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
 
 impl PartialEq for Ticket {
     fn eq(&self, other: &Self) -> bool {
-        self.hash == other.hash && self.view == other.view && self.round == other.round
+        self.slot == other.slot
     }
 }
 
@@ -90,17 +87,25 @@ impl fmt::Debug for Ticket {
         write!(
             f,
             "T{})",
-            self.view,
-            // self.qc,
-            // self.tc,
+            self.slot,
         )
     }
 }
 
 impl fmt::Display for Ticket {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "T{}", self.view)
+        write!(f, "T{}", self.slot)
     }
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct Info {
+    // The slot and view info
+    pub consensus_info: ConsensusInfo,
+    // Prepare info
+    pub prepare_info: Option<PrepareInfo>,
+    // Confirm info
+    pub confirm_info: Option<ConfirmInfo>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -111,12 +116,20 @@ pub struct ConsensusInfo {
     pub view: View,
 }
 
-pub struct ConsensusProposal {
-    // The digest of the previous consensus proposal header
-    pub ticket: Digest,
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct PrepareInfo {
+    // The ticket needed to send prepare message
+    pub ticket: Ticket,
+    // The certificates that are proposed
     pub proposals: BTreeMap<PublicKey, Certificate>,
 }
 
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct ConfirmInfo {
+    // The prepare/commit QC that was formed previously
+    pub qc: Certificate,
+}
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Header {
@@ -127,24 +140,10 @@ pub struct Header {
     pub id: Digest,
     pub signature: Signature,
 
-    pub consensus_info: Option<ConsensusInfo>,
-    pub consensus_proposal: Option<ConsensusProposal>,
-    
-    /*pub is_special: bool,
-    pub view: Option<View>,
-    pub ticket: Option<Ticket>, 
-    pub proposals: Option<BTreeMap<PublicKey, Digest>>,*/
+    pub info_list: Vec<Info>,
 
-    //edges within DAG
-    pub special_parent: Option<Digest>, //Digest of the header of the special parent.
-    pub special_parent_height: Option<Height>, //round of the parent we have special edge to (only used to re-construct parent cert digest in committer)
-    
-    //Consensus parent
-    //pub ticket: Option<Ticket>, 
-    pub prev_view_round: Height, //round that was proposed by the last view.
-    pub consensus_parent: Option<Digest>, //Digest of the ticket that was committed in the last view
-    
-
+    // special parent header
+    pub special_parent: Option<Certificate>, //Digest of the header of the special parent.
 }
 
 //NOTE: A header is special if "is_special = true". It contains a view, prev_view_round, and its parents may be just a single edge -- a Digest of its parent header (notably not of a Cert)
@@ -156,17 +155,8 @@ impl Header {
         payload: BTreeMap<Digest, WorkerId>,
         parent_cert: Certificate,
         signature_service: &mut SignatureService,
-        is_special: bool,
-        consensus_info: Option<ConsensusInfo>,
-        consensus_proposal: Option<ConsensusProposal>,
-        view: Option<View>,
-        special_parent: Option<Digest>,
-        special_parent_height: Option<Height>,
-        ticket: Option<Ticket>,
-        proposals: Option<BTreeMap<PublicKey, Digest>>,
-        prev_view_round: Height,
-        consensus_parent: Option<Digest>,
-
+        info_list: Vec<Info>,
+        special_parent: Option<Certificate>,
     ) -> Self {
         let header = Self {
             author,
@@ -175,16 +165,8 @@ impl Header {
             parent_cert,
             id: Digest::default(),
             signature: Signature::default(),
-            consensus_info,
-            consensus_proposal,
-            //is_special,
-            //view,
+            info_list,
             special_parent,
-            special_parent_height,
-            //ticket,
-            //proposals,
-            prev_view_round,
-            consensus_parent,
         };
         let id = header.digest();
         let signature = signature_service.request_signature(id.clone()).await;
@@ -236,40 +218,6 @@ impl Header {
         self.author
     }
 
-    pub fn cert_lookup(&self) -> Digest {
-        let mut hasher = Sha512::new();
-        hasher.update(&self.author);
-        hasher.update(self.height.to_le_bytes());
-        for (x, y) in &self.payload {
-            hasher.update(x);
-            hasher.update(y.to_le_bytes());
-        }
-        /*for x in &self.parent_cert {
-            hasher.update(x);
-        }*/
-
-        let f: u8 = if self.consensus_info.is_some() { 1u8 } else { 0u8 };
-        hasher.update(f.to_le_bytes());
-        //hasher.update(&self.view.to_le_bytes());
-
-
-        match &self.special_parent {
-            Some(parent) => hasher.update(parent),
-            None => {},
-        }
-        //hasher.update(&self.special_parent_height.to_le_bytes());
-
-        hasher.update(&self.prev_view_round.to_le_bytes());
-        match &self.consensus_parent {
-            Some(parent) => hasher.update(parent),
-            None => {},
-        }
-
-        hasher.update("cert".as_bytes());
-
-        Digest(hasher.finalize().as_slice()[..].try_into().unwrap())
-    }
-
     pub fn new_from_key(
         author: PublicKey,
         view: View,
@@ -281,10 +229,6 @@ impl Header {
             author,
             height: round,
             signature: Signature::default(),
-            //is_special: true,
-            //view: Some(view),
-            //ticket: Some(Ticket::genesis(committee)),
-            consensus_parent: Some(Ticket::genesis(committee).digest()),
            ..Header::default()
         };
         let id = header.digest();
@@ -302,23 +246,30 @@ impl Hash for Header {
             hasher.update(x);
             hasher.update(y.to_le_bytes());
         }
-        /*for x in &self.parent_cert {
-            hasher.update(x);
-        }*/
+        hasher.update(&self.parent_cert);
 
-        let f: u8 = if self.consensus_info.is_some() { 1u8 } else { 0u8 };
-        hasher.update(f.to_le_bytes());
-        //hasher.update(&self.view.to_le_bytes());
-        
+        for info in &self.info_list {
+            hasher.update(&info.consensus_info.slot.to_le_bytes());
+            hasher.update(&info.consensus_info.view.to_le_bytes());
+            match &info.prepare_info {
+                Some(prepare_info) => {
+                    hasher.update(&prepare_info.ticket);
+                    for (x, y) in &prepare_info.proposals {
+                        hasher.update(x);
+                        hasher.update(y);
+                    }
+                }
+                None => {}
+            }
+            match &info.confirm_info {
+                Some(confirm_info) => {
+                    hasher.update(&confirm_info.qc);
+                }
+                None => {}
+            }
+        }
     
         match &self.special_parent {
-            Some(parent) => hasher.update(parent),
-            None => {},
-        }
-        //hasher.update(&self.special_parent_height.to_le_bytes());
-
-        hasher.update(&self.prev_view_round.to_le_bytes());
-        match &self.consensus_parent {
             Some(parent) => hasher.update(parent),
             None => {},
         }
@@ -342,14 +293,6 @@ impl fmt::Debug for Header {
             self.height,
             self.author,
             self.payload.keys().map(|x| x.size()).sum::<usize>(),
-            self.consensus_info.is_some(),
-            //self.view,
-            /*self
-            .parent_cert
-            .iter()
-            .map(|x| format!("{}", x))
-            .collect::<Vec<_>>(),
-        if self.special_parent.is_some() {self.special_parent.clone().unwrap()} else {Digest::default()}*/
         )
     }
 }
@@ -368,12 +311,9 @@ pub struct Vote {
     pub origin: PublicKey,
     pub author: PublicKey,
     pub signature: Signature,
-    pub view: Option<View>, //FIXME: is this necessary? Given that the header specifies the view. If so, needs to be added to hash.
+    pub consensus_info: Option<ConsensusInfo>,
 
-    //pub is_special: bool, ==> Changed: Just check against "current header" (can confirm id matches) for specialness, view, round view, etc.
     pub special_valid: bool,
-    //pub qc: Option<QC>,
-    //pub tc: Option<TC>,
 }
 
 impl Vote {
@@ -381,6 +321,7 @@ impl Vote {
         header: &Header,
         author: &PublicKey,
         signature_service: &mut SignatureService,
+        consensus_info: Option<ConsensusInfo>,
         special_valid: bool, 
     ) -> Self {
         let vote = Self {
@@ -389,8 +330,7 @@ impl Vote {
             origin: header.author,
             author: *author,
             signature: Signature::default(),
-            view: None,
-            //is_special: header.is_special, 
+            consensus_info,
             special_valid,
         };
         let signature = signature_service.request_signature(vote.digest()).await;
@@ -403,18 +343,6 @@ impl Vote {
             committee.stake(&self.author) > 0,
             DagError::UnknownAuthority(self.author)
         );
-
-        // if &self.is_special && !&self.special_valid{
-        //     match qc {
-        //         Some(x) => { }//TODO: Check QC larger than proposed view/prev_view_round. //FIXME: ... must include view... Verify QC sigs }, 
-        //         None => { 
-        //             match qc {
-        //                 Some(x) => {  }, 
-        //                 None => { DagError::InvalidSpecialInvalidation}
-        //             }
-        //         }, 
-        //     }
-        // } 
 
         // Check the signature.
         self.signature
@@ -457,10 +385,8 @@ impl Vote {
             origin,
             author,
             signature: Signature::default(),
-            view: None,
+            consensus_info: None,
             special_valid: false,
-            //qc: None,
-            //tc: None,
         };
         let signature = Signature::new(&vote.digest(), &secret);
         Self { signature, ..vote }
@@ -473,15 +399,23 @@ impl PartialEq for Vote {
     }
 }
 
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub enum CertType {
+    #[default]
+    Normal,
+    Prepare,
+    Commit,
+}
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Certificate {
     pub author: PublicKey,
     pub header_digest: Digest,
     pub height: Height,
-    pub view: Option<View>,
     pub special_valids: Vec<bool>,
     pub votes: Vec<(PublicKey, Signature)>,
+    pub consensus_info: Option<ConsensusInfo>,
+    pub cert_type: CertType,
 }
 
 impl Certificate {
@@ -505,6 +439,21 @@ impl Certificate {
                 header_digest : Header::genesis(committee).digest(),
                 ..Self::default()
         }
+    }
+
+    pub fn genesis_certs(committee: &Committee) -> BTreeMap<PublicKey, Self> {
+        committee
+            .authorities
+            .keys()
+            .map(|name| name, Self {
+                header_digest: Header {
+                    author: *name,
+                    ..Header::genesis(committee)
+                    //..Header::default()
+                }.digest(),
+                ..Self::default()
+            })
+            .collect()
     }
 
     pub fn verify(&self, committee: &Committee) -> DagResult<()> {
@@ -671,7 +620,7 @@ impl PartialEq for Certificate {
     }
 }
 
-#[derive(Serialize, Deserialize, Default, Clone)]
+/*#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Block {
     pub qc: QC, // QC is equivalent to Commit Certificate in our terminology. Certificate is equivalent to Vote-QC in our terminology
     pub tc: Option<TC>,
@@ -968,60 +917,32 @@ impl PartialEq for QC {
     fn eq(&self, other: &Self) -> bool {
         self.hash == other.hash && self.view == other.view
     }
-}
+}*/
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Timeout {
-    //Note, if we accepted a previous TC's proposal, and it is not committed yet, then that TC'proposal must be the local high_prepare/high_accept.
+    // The slot and view the timeout is for
+    pub consensus_info: ConsensusInfo,
+    // The highest qc the replica has for its state
+    pub high_qc: Certificate,
 
-    //Highest header we have Voted on ==> For FP must recover if f+1 are highest (since fast QC could exist)
-    pub high_prepare: Option<Header>,  //TODO: Send full header, or just digest?   //If f+1 vouch for this header, then TC can include just digest; if just 1, and there are no conflicts, then send Header
-    pub vote_high_prepare: Option<(Digest, View)>, //TODO: FIXME: Does this need the Round too? Don't think so, as the view is only used to compare against high_accept/high_qc.
-    
-    //Highest cert we have Accepted (AcceptVote) ==> For SP must recover if 1 is highest (since slow QC could exist)
-    pub high_accept: Option<Certificate>, 
-    pub vote_high_accept: Option<View>,   //Note: Does not need digest. Since only one cert can exist per view, this is unique
-
-    //Highest qc we have committed ==> Forward to confirm commit for view was successful
-    pub high_qc: Option<QC>,  
-    pub vote_high_qc: Option<View>, //Note: Does not need digest. Since only one qc can exist per view, this is unique
-
-    
-    pub view: View,
     pub author: PublicKey,
     pub signature: Signature,
 }
 
 impl Timeout {
     pub async fn new(
-        high_prepare: Option<Header>,
-        high_accept: Option<Certificate>,
-        high_qc: Option<QC>,
-        view: View,
+        consensus_info: ConsensusInfo,
+        high_qc: Certificate,
         author: PublicKey,
         mut signature_service: SignatureService,
     ) -> Self {
-        let mut timeout = Self {
-            high_prepare,
-            high_accept,
+        let timeout = Self {
+            consensus_info,
             high_qc,
-            view,
             author,
             signature: Signature::default(),
-            vote_high_prepare: None,
-            vote_high_accept: None,
-            vote_high_qc: None,
         };
-        // Add the unique identifying information for proposals: TC can thus verify just based on this, without including actual proposal (Header/Cert/QC) for all but the winning proposal
-        /*if let Some(header) = timeout.high_prepare.as_ref() {
-            timeout.vote_high_prepare = Some((header.id.clone(), header.view.clone()));
-        }
-        if let Some(cert) = timeout.high_accept.as_ref() {
-            timeout.vote_high_accept = Some(cert.header.view.clone());
-        }*/
-        if let Some(qc) = timeout.high_qc.as_ref() {
-            timeout.vote_high_qc = Some(qc.view.clone());
-        }
 
         let signature = signature_service.request_signature(timeout.digest()).await;
         Self {
@@ -1044,33 +965,9 @@ impl Timeout {
         //NOTE: When verifying TC, we have purged all vote contents besides the winner --> so this step is skipped. Verification is only necessary for the winning proposal
 
         //Check the validity of embedded proposals
-        if let Some(high_prepare) = &self.high_prepare {
-            //Ensure it matches vote
-            let (dig, view) = self.vote_high_prepare.as_ref().expect("Invalid Prepare Vote");
-            ensure!(
-                *dig == high_prepare.id && *view == high_prepare.consensus_info.clone().unwrap().view,
-                ConsensusError::InvalidTimeout(self.clone())
-            );
-            high_prepare.verify(committee)?;
-        }
-        if let Some(high_accept) = &self.high_accept {
-            //Ensure it matches vote
-            //Ensure it matches vote
-            let view = self.vote_high_accept.as_ref().expect("Invalid Accept Vote");
-            ensure!(
-                *view == high_accept.view.unwrap(), 
-                ConsensusError::InvalidTimeout(self.clone())
-            );
-            high_accept.verify(committee)?;
-        }
         if let Some(high_qc) = &self.high_qc {
             // Check the embedded QC.
             if *high_qc != QC::genesis(committee) {
-                let view = self.vote_high_qc.as_ref().expect("Invalid QC Vote");
-                ensure!(
-                    *view == high_qc.view, 
-                    ConsensusError::InvalidTimeout(self.clone())
-                );
                 high_qc.verify(committee)?;
             }
         }
@@ -1083,14 +980,6 @@ impl Hash for Timeout {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
         hasher.update(self.view.to_le_bytes());
-        if let Some((hp_dig, hp_view)) = self.vote_high_prepare.as_ref() {
-            hasher.update(hp_dig);
-            hasher.update(hp_view.to_le_bytes());
-        }
-        if let Some(ha_view) = self.vote_high_accept {
-            //hasher.update(ha_dig);                               
-            hasher.update(ha_view.to_le_bytes());
-        }
         if let Some(qc_view) = self.vote_high_qc {
             hasher.update(qc_view.to_le_bytes());
         }
@@ -1106,15 +995,10 @@ impl fmt::Debug for Timeout {
 }
 
 impl Timeout {
-    pub fn new_from_key(high_qc: QC, view: View, author: PublicKey, secret: &SecretKey) -> Self {
+    pub fn new_from_key(high_qc: Certificate, consensus_info: ConsensusInfo, author: PublicKey, secret: &SecretKey) -> Self {
         let timeout = Timeout {
-            high_prepare: None,
-            vote_high_prepare: None,
-            high_accept: None, 
-            vote_high_accept: None,
-            vote_high_qc: Some(high_qc.view.clone()),
             high_qc: Some(high_qc),
-            view,
+            consensus_info,
             author,
             signature: Signature::default(),
 
@@ -1136,30 +1020,25 @@ impl PartialEq for Timeout {
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct TC {
-   
-    //pub hash: Digest,
-    pub view: View,
-    pub votes: Vec<Timeout>,
-    pub winning_proposal: Box<(Option<Header>, Option<Certificate>, Option<QC>)>, //TODO: Make this an any type? ==> cast down to Header/Cert/QC
-    pub view_round: Height, //Round of the winning proposal
-    //pub votes: Vec<(PublicKey, Signature, View)>,
+    pub consensus_info: ConsensusInfo,
+    pub timeouts: Vec<Timeout>,
 }
 
 impl PartialEq for TC {
     fn eq(&self, other: &Self) -> bool {
         //self.hash == other.hash && self.view == other.view
-        *self.winning_proposal == *other.winning_proposal
+        //*self.winning_proposal == *other.winning_proposal
     }
 }
 
 impl TC {
-    pub fn new(committee: &Committee, view: View, votes: Vec<Timeout>) -> Self {
+    pub fn new(committee: &Committee, consensus_info: ConsensusInfo, timeouts: Vec<Timeout>) -> Self {
         let tc = TC {
-            view,
-            votes,
-            ..Self::default()
+            consensus_info,
+            timeouts,
         };
-        tc.determine_winning_proposal(committee)
+        tc
+        //tc.determine_winning_proposal(committee)
     }
 
     pub fn genesis(committee: &Committee) -> Self {
@@ -1167,181 +1046,22 @@ impl TC {
         let genesis_header = Header::genesis(committee);
         TC {
             //hash: genesis_header.id,
-            view: genesis_header.consensus_info.unwrap().view,
-            winning_proposal: Box::new((Some(genesis_header), None, None)),
+            //view: genesis_header.consensus_info.unwrap().view,
+            //winning_proposal: Box::new((Some(genesis_header), None, None)),
             //view_round: genesis_header.round,
             ..TC::default()
         }
     }
 
-    pub fn determine_winning_proposal(mut self, committee: &Committee) -> Self { //returns the header_digest to be used for TC proposal (I.e. ticket proposal)
-        
-        //1) keep track of highest prepare
-        let mut high_prepare = &Header::default();
-        let mut high_prepares: HashMap<Digest, u32> = HashMap::with_capacity(committee.size()); //count appearances, need f+1
-        //2) keep track of highest accept
-        let mut high_accept = &Certificate::default();
-        //3) keep track of highest qc
-        let mut high_qc = &QC::default();
-
-        for timeout in &self.votes {
-            if let Some(header) = &timeout.high_prepare {
-                *high_prepares.entry(header.id.to_owned()).or_default() += 1;
-                if high_prepares.get(&header.id).unwrap() == &committee.validity_threshold() && header.consensus_info.clone().unwrap().view >= high_prepare.consensus_info.clone().unwrap().view {
-                    high_prepare = header;
-                }
-            } 
-            if let Some(cert) = &timeout.high_accept {
-                if cert.view >= high_accept.view {
-                    high_accept = cert;
-                }
-            }
-            if let Some(qc) = &timeout.high_qc {
-                if qc.view >= high_qc.view {
-                    high_qc = qc;
-                }
-            }
-        }
-        
-        // pick the highest proposal. Break ties by qc > cert > header
-        let mut header: Option<Header> = None;
-        let mut cert: Option<Certificate> = None;
-        let mut qc: Option<QC> = None;
-        //let max_cert_qc_view;
-
-        let mut winner: u32 = 2; //2 = qc wins, 1 cert wins, 0 header wins
-
-        if high_accept.view.unwrap() > high_qc.view {
-            winner = 1;
-        }
-        if high_prepare.consensus_info.clone().unwrap().view > max(high_accept.view.unwrap(), high_qc.view) {
-            winner = 0;
-        }
-
-        if winner == 0 {
-            header = Some(high_prepare.clone());
-            self.view_round = high_prepare.height;
-        }
-        if winner == 1 {
-            cert = Some(high_accept.clone());
-            self.view_round = high_accept.height;
-        }
-        if winner == 2 {
-            qc = Some(high_qc.clone());
-            self.view_round = high_qc.view_round;
-        }
-
-        // This version is cleaner, but incurs one copy more.
-        // if high_accept.header.view > high_qc.view {
-        //     max_cert_qc_view = high_accept.header.view;
-        //     cert = Some(high_accept.clone());
-
-        // }
-        // else{
-        //     max_cert_qc_view = high_qc.view;
-        //     qc = Some(high_qc.clone());
-        // }
-        // if high_prepare.view > max_cert_qc_view {
-        //     header = Some(high_prepare.clone());
-        //     cert = None;
-        //     qc = None;
-        // }
-        //Note: 
-        // If the header is from a higher view than high_accept, and high_accept did commit, then header must extend it. If header does not extend it, then high_accept did not commit so we can ignore.
-        self.set_winning_proposal(header, cert, qc)
+    pub fn determine_winning_proposal(mut self, committee: &Committee) -> Self {
+        self
     }
 
-    pub fn set_winning_proposal(mut self, header: Option<Header>, cert: Option<Certificate>, qc: Option<QC>) -> Self{
-        
-        //Clear the contents of all timeouts 
-        //TC only needs to include votes + winning proposal 
-        self.votes = self.votes.into_iter().map(|mut timeout| {
-            timeout.high_prepare = None;
-            timeout.high_accept = None;
-            timeout.high_qc = None;
-            timeout
-        }).collect();
-
-        //set winning proposal
-        self.winning_proposal = Box::new((header, cert, qc));
-        
+    pub fn set_winning_proposal(mut self, header: Option<Header>, cert: Option<Certificate>, qc: Option<Certificate>) -> Self{
         self
     }
 
     pub fn validate_winning_proposal(&self, committee: &Committee) -> ConsensusResult<()> {
-       
-        // count votes to confirm winner.
-
-        //1) keep track of highest prepare
-        let mut high_prepare_meta: (&Digest, View) = (&Digest::default(), 0);
-        let mut high_prepares: HashMap<Digest, u32> = HashMap::with_capacity(committee.size()); //count appearances, need f+1
-        //2) keep track of highest accept
-        let mut high_accept_view: View = 0;
-        //3) keep track of highest qc
-        let mut high_qc_view: View = 0;
-
-        for timeout in &self.votes {
-            //Note: If there is multiple headers in the same view with f+1 tie break arbitrarily, but deterministically -- using the order of timeouts. 
-            // In theory, 2 headers with f+1 implies no FP happened, so we can even discard the high_prepare. But using it is maximally efficient for progress.
-            if let Some((header_dig, header_view)) = &timeout.vote_high_prepare {
-                *high_prepares.entry(header_dig.to_owned()).or_default() += 1;
-                if high_prepares.get(&header_dig).unwrap() == &committee.validity_threshold() && *header_view >= high_prepare_meta.1 {
-                    high_prepare_meta = (header_dig, *header_view);
-                }
-            } 
-            if let Some(cert_view) = timeout.vote_high_accept {
-                if cert_view >= high_accept_view {
-                    high_accept_view = cert_view;
-                }
-            }
-            if let Some(qc_view) = timeout.vote_high_qc {
-                if qc_view >= high_qc_view {
-                    high_qc_view = qc_view;
-                }
-            }
-        }
-        
-        // pick the winning proposal based on the timeout votes. Break ties by qc > cert > header
-        let mut winner: u32 = 2; //2 = qc wins, 1 cert wins, 0 header wins
-
-        if high_accept_view > high_qc_view {
-            winner = 1;
-        }
-        if high_prepare_meta.1 > max(high_accept_view, high_qc_view) {
-            winner = 0;
-        }
-
-        //check that the determinded winning proposal matches the winning proposal included by the TC
-        if winner == 0 { //==> High_Prepare won
-            let winning_prepare: &Header = self.winning_proposal.0.as_ref().expect("Invalid winning proposal");
-            ensure!(
-                winning_prepare.id == *high_prepare_meta.0 && winning_prepare.consensus_info.clone().unwrap().view == high_prepare_meta.1 && self.view_round == winning_prepare.height,
-                ConsensusError::InvalidTC(self.clone())
-            );
-            //verify correctness of winning header
-            winning_prepare.verify(committee)?;
-            //Ok((Some(winning_prepare.clone()), None, None)) 
-        }
-        else if winner == 1 { // ==> High_Accept won
-            let winning_cert: &Certificate = self.winning_proposal.1.as_ref().expect("Invalid winning proposal");
-            ensure!(
-                winning_cert.view.unwrap() == high_accept_view && self.view_round == winning_cert.height,
-                ConsensusError::InvalidTC(self.clone())
-            );
-            //verify correctness of winning cert
-            winning_cert.verify(committee)?;
-            //Ok((None, Some(winning_cert.clone()), None)) 
-        }
-        else { //winner == 2 ==> High_QC won
-            let winning_qc: &QC = self.winning_proposal.2.as_ref().expect("Invalid winning proposal"); 
-            ensure!(
-                winning_qc.view == high_qc_view && self.view_round == winning_qc.view_round,
-                ConsensusError::InvalidTC(self.clone())
-            );
-            //verify correctness of winning qc
-            winning_qc.verify(committee)?;
-            //Ok((None, None, Some(winning_qc.clone()))) 
-        }    
         Ok(())
     }
 
@@ -1355,7 +1075,7 @@ impl TC {
         // Ensure the QC has a quorum.
         let mut weight = 0;
         let mut used = HashSet::new();
-        for timeout in self.votes.iter() {
+        for timeout in self.timeouts.iter() {
             let name = &timeout.author;
             ensure!(!used.contains(name), ConsensusError::AuthorityReuse(*name));
             let voting_rights = committee.stake(name);
@@ -1369,7 +1089,7 @@ impl TC {
         );
 
         //Verify each vote
-        for timeout in &self.votes {
+        for timeout in &self.timeouts {
             //timeout.signature.verify(&timeout.digest(), &timeout.author)?; // Check the signatures. (Note: these are only the signatures for the timeout votes, not the signatures for the proposals. We check those in determine/validate winner)
             timeout.verify(committee)?;
         }

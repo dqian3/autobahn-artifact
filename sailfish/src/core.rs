@@ -1,7 +1,7 @@
 use std::convert::TryInto;
 use std::net::SocketAddr;
 use crate::aggregator::Aggregator;
-use crate::consensus::{ConsensusMessage, View, Round};
+use crate::consensus::{ConsensusMessage, View, Round, Slot};
 //use crate::error::{ConsensusError, ConsensusResult};
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
@@ -18,11 +18,11 @@ use futures::FutureExt;
 use log::{debug, error, warn};
 use network::SimpleSender;
 use primary::ensure;
-use primary::messages::{Header, Certificate, Timeout, AcceptVote, QC, TC, Ticket, Vote};
+use primary::messages::{Header, Certificate, Timeout, AcceptVote, QC, TC, Ticket, Vote, Info, CertType, PrepareInfo};
 use primary::{error::{ConsensusError, ConsensusResult}};
 //use primary::messages::AcceptVote;
 use std::cmp::max;
-use std::collections::{VecDeque, HashSet};
+use std::collections::{VecDeque, HashSet, BTreeMap};
 use std::collections::HashMap;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -68,7 +68,18 @@ pub struct Core {
     timer: Timer,
     aggregator: Aggregator,
     network: SimpleSender,
-    round: Round, 
+    round: Round,
+   
+    tips: BTreeMap<PublicKey, Header>,
+    current_certs: BTreeMap<PublicKey, Certificate>,
+    views: BTreeMap<Slot, View>,
+    timers: BTreeMap<Slot, Timer>,
+    qcs: BTreeMap<Slot, Certificate>,
+    tcs: Vec<Slot, TC>,
+    ticket: Ticket,
+    already_proposed_slots: Vec<Slot>,
+    committed: BTreeMap<Slot, Info>,
+
 
     processing_headers: HashMap<View, HashSet<Digest>>,
     processing_certs: HashMap<View, HashSet<Digest>>,
@@ -716,6 +727,55 @@ impl Core {
              // (Committed Headers should be monotonic. Since consensus is sequential, should suffice to update it then?)
     }
 
+    // TODO: Add actual validity checks
+    async fn is_prepare_valid(&mut self, info: Info) -> bool {
+        info.prepare_info.is_some()
+    }
+
+    // TODO: Add actual validity checks
+    async fn is_confirm_valid(&mut self, info: Info) -> bool {
+        info.confirm_info.is_some()
+    }
+
+    async fn process_prepare_info(&mut self, header: Header, info: Info) {
+        let prepare_valid = self.is_prepare_valid(info);
+        if prepare_valid {
+            self.views[info.consensus_info.slot] = info.consensus_info.view;
+            //self.timers[info.consensus_info.slot] = Timer::new(5);
+            let has_proposed = self.already_proposed_slots.contains(info.consensus_info.slot);
+            if self.leader_elector.get_leader(info.consensus_info.slot + 1, 1) && has_proposed {
+                self.ticket = header.clone();
+                if self.enough_coverage(&self.ticket, self.current_certs) {
+                    let new_prepare_info: PrepareInfo = PrepareInfo { ticket: self.ticket, proposals: self.current_certs };
+                }
+            }
+        }
+    }
+
+
+    async fn process_confirm_info(&mut self, header: Header, info: Info) {
+        let confirm_valid = self.is_confirm_valid(info);
+        if confirm_valid {
+            let cert_info = header.parent_cert.consensus_info.unwrap();
+            let qc_info = self.qcs.get(cert_info.slot).unwrap().consensus_info.unwrap();
+            if cert_info.view > qc_info.view {
+                self.qcs[info.consensus_info.slot] = header.parent_cert;
+            }
+
+            if header.parent_cert.cert_type == CertType::Commit {
+                self.committed.insert(info.consensus_info.slot, info.clone());
+            }
+        }
+    }
+
+    async fn enough_coverage(&mut self, ticket: &Ticket, current_certs: HashMap<PublicKey, Certificate>) -> bool {
+        let new_tips: HashMap<&PublicKey, &Certificate> = current_certs.iter()
+            .filter(|(pk, cert)| cert.height() > ticket.proposals.get(&pk).unwrap().height())
+            .collect();
+        
+        new_tips.len() as u32 >= self.committee.quorum_threshold()
+    }
+
     //Call process_special_header upon receiving upcall from Dag layer.
     #[async_recursion]
     async fn process_special_header(&mut self, header: Header) -> ConsensusResult<()> {
@@ -810,60 +870,30 @@ impl Core {
                 //     ConsensusError::NonMonotonicRounds(header.round, self.round)
                 // );
         
-    
-        //C) PROCESS CORRECT SPECIAL HEADER
-        self.process_prepare(&header, false).await;
-     
-        //D) SEND REPLY TO THE DAG
+   
+        let special_valids: BTreeMap<Info, bool> = BTreeMap::new();
+        for info in header.info_list {
+            let prepare_valid = false;
+            let confirm_valid = false;
 
-        //DEPRECATED. Dummy proofs ==> Currently are NOT using proofs, but using timeouts.
-        let qc: Option<QC> = None;
-        let tc: Option<TC> = None;
+            if (info.prepare_info.is_some()) {
+                self.process_prepare_info(header, info);
+                prepare_valid = true;
+            } else if (info.confirm_info.is_some()) {
+                self.process_confirm_info(header, info);
+                confirm_valid = true;
+            }
 
+            special_valids.insert(info, prepare_valid || confirm_valid);
+        }
 
-        // Loopback to RB, confirming that special block is valid.
         self.tx_validation
-            .send((header, special_valid, qc, tc))
+            .send((header, special_valids))
             .await
             .expect("Failed to send payload");
-
+     
          
         Ok(())
-    }
-
-    //NOTE: Deprecated, not used.
-    #[async_recursion]
-    async fn process_sync_cert(&mut self, certificate: Certificate) -> ConsensusResult<()> {
-        //call down to Dag layer.
-        //self.tx_pushdown_cert.send(certificate).await.expect("Failed to pushdown certificate to Dag layer");
-        //TODO: or should sync itself call down to Dag layer, and let consensus only registers a waiter. --> this would avoid redundantly syncing on the same cert twice. ==> Note: This is what we do now, but we sync on headers.
-        //For now don't optimize -- this only affects consensus parents
-        // Flow: 
-        //       1. Register waiter but send no SyncRequest
-        //       2. Downcall sync request to Dag  (change pushdown_cert to request_cert_sync(Digest))
-        //       3. Have Dag call synchonizer.sync_consensus_parent
-        //       4. this should call header_waiter::SyncParents (but modify to not include header and not start a waiter) . Check parent_requests (this avoids duplicates)
-        //       5. Send Cert request, Receive reply, process_cert ==> this will wake waiter 
-
-        Ok(())
-    }
-
-    fn update_high_accept(&mut self, cert: &Certificate, tc_force: bool) {
-        if tc_force || cert.header.view > self.high_accept.header.view {
-            self.high_accept = cert.clone();
-        }
-    }
-
-    async fn process_accept(&mut self, cert: &Certificate, tc_force: bool) {
-        debug!("Processing {:?}", cert);
-         //Catchup view if we're behind. Note: This should never be necessary: process_ticket will have caught us up...
-         self.view = max(self.view, cert.header.view);
-
-         //Update latest prepared. Update latest_prepared_view.
-        self.increase_last_voted_view(cert.header.view);
-        self.update_high_accept(cert, tc_force); // If this is the decision recovered by a TC then we MUST adopt it as our current
-       
-        self.store_cert(cert).await;  
     }
 
     //Call process_special_header upon receiving upcall from Dag layer.
@@ -1130,7 +1160,7 @@ impl Core {
                     //7) Sync Headers
                     ConsensusMessage::Header(header) => self.process_special_header(header).await,  //TODO: Sanity check that this is fine. ==> Sync Headers will also cause a vote at the Dag layer to be generated.
                     //8) Sync Headers
-                    ConsensusMessage::Certificate(cert) => self.process_sync_cert(cert).await,  //TODO: Sanity check that this is fine. ==> Sync Headers will also cause a vote at the Dag layer to be generated.
+                    //ConsensusMessage::Certificate(cert) => self.process_sync_cert(cert).await,  //TODO: Sanity check that this is fine. ==> Sync Headers will also cause a vote at the Dag layer to be generated.
                     _ => panic!("Unexpected protocol message")
                 },
 
