@@ -5,7 +5,7 @@ use crate::error::DagError;
 use crate::garbage_collector::GarbageCollector;
 use crate::header_waiter::HeaderWaiter;
 use crate::helper::Helper;
-use crate::messages::{Certificate, Header, Vote, QC, TC, Ticket};
+use crate::messages::{Certificate, Header, Vote, TC, Ticket, PrepareInfo, ConfirmInfo};
 use crate::payload_receiver::PayloadReceiver;
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
@@ -73,8 +73,8 @@ impl Primary {
         tx_committer: Sender<Certificate>,
         rx_consensus: Receiver<Certificate>,
         tx_sailfish: Sender<Header>,
-        rx_ticket: Receiver<Ticket>,//Receiver<(View, Round, Ticket)>,
-        rx_validation: Receiver<(Header, u8, Option<QC>, Option<TC>)>,
+        rx_ticket: Receiver<PrepareInfo>,//Receiver<(View, Round, Ticket)>,
+        rx_validation: Receiver<(Header, Vec<(PrepareInfo, bool)>, Vec<(ConfirmInfo, bool)>)>,
         rx_pushdown_cert: Receiver<Certificate>,
         rx_request_header_sync: Receiver<Digest>,
     ) {

@@ -98,7 +98,7 @@ impl Synchronizer {
     pub async fn get_special_parent(&mut self, header: &Header, sync: bool) -> DagResult<(Option<Header>, bool)> {
 
         let digest = header.special_parent.as_ref().unwrap();//header.parents.iter().next().unwrap().clone();
-        if digest == &self.genesis_header.id {  //Note: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
+        /*if digest == &self.genesis_header.id {  //Note: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
             //parents.push(self.genesis_header.clone());
             return Ok((Some(self.genesis_header.clone()), true))
         }
@@ -120,7 +120,7 @@ impl Synchronizer {
         self.tx_header_waiter
             .send(WaiterMessage::SyncSpecialParent(digest.clone(), header.clone()))  //sends message to header.author to request previous header digest.
             .await
-            .expect("Failed to send sync special parent request");
+            .expect("Failed to send sync special parent request");*/
         Ok((None, false))
     }
 

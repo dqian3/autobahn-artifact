@@ -1,5 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::{primary::{Height, View}, messages::{QC, TC, Timeout}};
+use crate::{primary::{Height, View}, messages::{TC, Timeout}};
 use crypto::{CryptoError, Digest, PublicKey};
 use store::StoreError;
 use thiserror::Error;
@@ -140,12 +140,6 @@ pub enum ConsensusError {
 
     #[error("Timeout invalid {0:?}")]
     InvalidTimeout(Timeout),
-
-    #[error("QC invalid {0:?}")]
-    InvalidQC(QC),
-
-    #[error("TC invalid {0:?}")]
-    InvalidTC(TC),
 
     #[error("Header proposer provided no ticket")]
     InvalidTicket,

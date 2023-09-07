@@ -1,7 +1,7 @@
 use crate::consensus::View;
 use primary::Certificate;
 //use crate::error::{ConsensusError, ConsensusResult};
-use primary::messages::{Timeout, QC, TC, AcceptVote};
+use primary::messages::{Timeout, TC};
 use primary::{ensure, error::{ConsensusError, ConsensusResult}};
 use config::{Committee, Stake};
 use crypto::Hash as _;
@@ -40,21 +40,7 @@ impl Aggregator {
             .append(vote, &self.committee)
     }*/
 
-    pub fn add_accept_vote(&mut self, vote: AcceptVote) -> ConsensusResult<Option<QC>> {
-        // TODO [issue #7]: A bad node may make us run out of memory by sending many votes
-        // with different view numbers or different digests.
-        //
-
-        // Add the new vote to our aggregator and see if we have a QC.
-        self.votes_aggregators
-            .entry(vote.view)
-            .or_insert_with(HashMap::new)
-            .entry(vote.digest())
-            .or_insert_with(|| Box::new(QCMaker::new()))
-            .append_accept_vote(vote, &self.committee)
-    }
-
-    pub fn add_timeout(&mut self, timeout: Timeout) -> ConsensusResult<Option<TC>> {
+    /*pub fn add_timeout(&mut self, timeout: Timeout) -> ConsensusResult<Option<TC>> {
         // TODO: A bad node may make us run out of memory by sending many timeouts
         // with different view numbers.
 
@@ -63,7 +49,7 @@ impl Aggregator {
             .entry(timeout.view)
             .or_insert_with(|| Box::new(TCMaker::new()))
             .append(timeout, &self.committee)
-    }
+    }*/
 
     pub fn cleanup(&mut self, view: &View) {
         self.votes_aggregators.retain(|k, _| k >= view);
@@ -112,31 +98,6 @@ impl QCMaker {
         Ok(None)
     }
     */
-
-    /// Try to append a signature to a (partial) quorum.
-    pub fn append_accept_vote(&mut self, vote: AcceptVote, committee: &Committee) -> ConsensusResult<Option<QC>> {
-        let author = vote.author;
-
-        // Ensure it is the first time this authority votes.
-        ensure!(
-            self.used.insert(author),
-            ConsensusError::AuthorityReuse(author)
-        );
-
-        self.votes.push((author, vote.signature.clone()));
-        self.weight += committee.stake(&author);
-        if self.weight >= committee.quorum_threshold() {
-            self.weight = 0; // Ensures QC is only made once.
-            return Ok(Some(QC {
-                hash: vote.hash.clone(),
-                view: vote.view,
-                view_round: vote.view_round, //Note: Currently aren't checking anywhere that the view_rounds of the Votes match. However, they must be matching transitively: Replicas only vote on certs, and a cert only is formed on matching view_round.
-                votes: self.votes.clone(),
-                origin: PublicKey::default(), //Note: Don't need this for slow QC's
-            }));
-        }
-        Ok(None)
-    }
 }
 
 struct TCMaker { //TimeoutCert for View Changes,
@@ -172,7 +133,7 @@ impl TCMaker {
         );
 
         // Add the timeout to the accumulator.
-        let view = timeout.view;
+        /*let view = timeout.view;
         self.votes
             .push(timeout);
         self.weight += committee.stake(&author);
@@ -180,7 +141,7 @@ impl TCMaker {
             self.weight = 0; // Ensures TC is only created once.
             let tc = TC::new(committee, view, self.votes.clone());
             return Ok(Some(tc));
-        }
+        }*/
         Ok(None)
     }
 }

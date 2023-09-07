@@ -42,7 +42,7 @@ impl State {
 
         Self {
             last_committed_round: 0,
-            last_committed: genesis.iter().map(|(x, (_, y))| (*x, y.round())).collect(),
+            last_committed: genesis.iter().map(|(x, (_, y))| (*x, y.height())).collect(),
             dag: [(0, genesis)].iter().cloned().collect(),
         }
     }
@@ -51,8 +51,8 @@ impl State {
     fn update(&mut self, certificate: &Certificate, gc_depth: Round) {
         self.last_committed
             .entry(certificate.origin())
-            .and_modify(|r| *r = max(*r, certificate.round()))
-            .or_insert_with(|| certificate.round());
+            .and_modify(|r| *r = max(*r, certificate.height()))
+            .or_insert_with(|| certificate.height());
 
         let last_committed_round = *self.last_committed.values().max().unwrap();
         self.last_committed_round = last_committed_round;
@@ -118,7 +118,7 @@ impl Committer {
             tokio::select! {
                 Some(certificate) = self.rx_mempool.recv() => {
                     // Add the new certificate to the local storage.
-                    state.dag.entry(certificate.round()).or_insert_with(HashMap::new).insert(
+                    state.dag.entry(certificate.height()).or_insert_with(HashMap::new).insert(
                         certificate.origin(),
                         (certificate.digest(), certificate.clone()),
                     );
@@ -128,7 +128,7 @@ impl Committer {
 
                     // Ensure we didn't already order this certificate.
                     if let Some(r) = state.last_committed.get(&certificate.origin()) {
-                        if r >= &certificate.round() {
+                        if r >= &certificate.height() {
                             debug!("Already ordered certificate");
                             continue;
                         }
@@ -155,13 +155,13 @@ impl Committer {
                     // Print the committed sequence in the right order.
                     for certificate in sequence {
                         
-                        info!("Committed {}", certificate.header);
+                        //info!("Committed {}", certificate.header);
 
                         // #[cfg(feature = "benchmark")]
-                        for digest in certificate.header.payload.keys() {
+                        /*for digest in certificate.header.payload.keys() {
                             // NOTE: This log entry is used to compute performance.
-                            info!("Committed {} -> {:?}", certificate.header, digest);
-                        }
+                            //info!("Committed {} -> {:?}", certificate.header, digest);
+                        }*/
                         debug!("Finished Commit");
                          // Output the block to the top-level application.
                         // if let Err(e) = self.tx_output.send(certificate.header).await {
@@ -180,7 +180,7 @@ impl Committer {
     fn order_dag(&self, tip: &Certificate, state: &State) -> Vec<Certificate> {
         debug!("Processing sub-dag of {:?}", tip);
         let mut ordered = Vec::new();
-        let mut already_ordered = HashSet::new();
+        /*let mut already_ordered = HashSet::new();
 
         let dummy = (Digest::default(), Certificate::default());
     
@@ -280,7 +280,7 @@ impl Committer {
         ordered.retain(|x| x.round() + self.gc_depth >= state.last_committed_round);
 
         // Ordering the output by round is not really necessary but it makes the commit sequence prettier.
-        ordered.sort_by_key(|x| x.round());
+        ordered.sort_by_key(|x| x.round());*/
         ordered
     }
 }
@@ -340,18 +340,18 @@ impl CertificateWaiter {
 
     async fn confirm_committment(&mut self, certificate: &Certificate){
 
-        debug!("committing view: {}", certificate.header.view);
-        let committment = Committment {commit_view : certificate.header.view };
-        let bytes = bincode::serialize(&committment).expect("Failed to serialize header");
-        self.store.write(committment.digest().to_vec(), bytes).await;
+        //debug!("committing view: {}", certificate.header.view);
+        //let committment = Committment {commit_view : certificate.header.view };
+        //let bytes = bincode::serialize(&committment).expect("Failed to serialize header");
+        //self.store.write(committment.digest().to_vec(), bytes).await;
     }
 
     async fn run(&mut self) {
-        let mut waiting =  FuturesOrdered::new(); //FuturesUnordered::new(); //
+        //let mut waiting =  FuturesOrdered::new(); //FuturesUnordered::new(); //
         loop {
             tokio::select! {
                 biased; // Try to commit waiting ones first.
-                Some(result) = waiting.next() => match result {
+                /*Some(result) = waiting.next() => match result {
                     // _ => { debug!{"Reaching branch"};},
                     Ok(certificate) => {
                         debug!("Got all the history of {:?}", certificate);
@@ -365,11 +365,11 @@ impl CertificateWaiter {
                         panic!("Storage failure: killing node.");
                     }
                    
-                },
+                },*/
                 Some(certificate) = self.rx_input.recv() => {
                     // Skip genesis' children.
                     //Note: Ideally only want to allow genesis parents for block in round 1 -- however, only a byz special block will be able to use them anyways. At which point coverage doesn't really matter
-                    if certificate.header.parents == self.genesis_digests { //|| certificate.round() == 1 {
+                    /*if certificate.header.parents == self.genesis_digests { //|| certificate.round() == 1 {
                         debug!("Delivering cert with genesis parents. {:?}", certificate);
 
                         //self.confirm_committment(&certificate).await;
@@ -420,7 +420,7 @@ impl CertificateWaiter {
                     
                     let fut = Self::waiter(wait_for, certificate);
                     //waiting.push(fut);
-                    waiting.push_back(fut);
+                    waiting.push_back(fut);*/
                 },
             }
         }

@@ -1,7 +1,6 @@
 //use crate::error::ConsensusResult;
 use primary::error::{ConsensusResult};
 //use crate::messages::Block;
-use primary::messages::{Block};
 use config::Committee;
 use primary::Certificate;
 use tokio::sync::mpsc::Sender;
@@ -20,12 +19,12 @@ impl MempoolDriver {
     }
 
     /// Verify the payload certificates.
-    pub async fn verify(&mut self, block: &Block) -> ConsensusResult<()> {
+    /*pub async fn verify(&mut self, block: &Block) -> ConsensusResult<()> {
         for certificate in &block.payload {
             certificate.verify(&self.committee)?;
         }
         Ok(())
-    }
+    }*/
 
     /// Cleanup the mempool.
     pub async fn cleanup(&mut self, payload: Vec<Certificate>) {

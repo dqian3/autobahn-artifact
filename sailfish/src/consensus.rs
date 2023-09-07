@@ -1,11 +1,11 @@
 use crate::committer::Committer;
 use crate::core::Core;
 //use crate::error::ConsensusError;
-use primary::error::{ConsensusError};
+use primary::{error::{ConsensusError}, messages::{PrepareInfo, ConfirmInfo}};
 use crate::helper::Helper;
 use crate::leader::LeaderElector;
 use crate::mempool::MempoolDriver;
-use primary::messages::{Header, Block, Certificate, Timeout, AcceptVote, QC, TC, Ticket, Vote};
+use primary::messages::{Header, Certificate, Timeout, TC, Ticket, Vote};
 //use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
 use async_trait::async_trait;
@@ -36,12 +36,8 @@ pub type Slot= u64;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ConsensusMessage {
-    Propose(Block), //No longer used //FIXME needed to uncomment to compile
     Vote(Vote),     //No longer used
-    AcceptVote(AcceptVote),
-    QC(QC),
     Timeout(Timeout),
-    TC(TC),
     SyncRequest(Digest, PublicKey), //Note: These Digests are now for Headers
     SyncRequestCert(Digest, PublicKey),
     Header(Header),
@@ -65,8 +61,8 @@ impl Consensus {
         rx_committer: Receiver<Certificate>,  // This is the channel used to send all certs to committer (previously this was called mempool -- maybe rename for clarity)
         tx_mempool: Sender<Certificate>,
         tx_output: Sender<Header>,
-        tx_ticket: Sender<Ticket>,//Sender<(View, Round, Ticket)>,
-        tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>,
+        tx_ticket: Sender<PrepareInfo>,//Sender<(View, Round, Ticket)>,
+        tx_validation: Sender<(Header, Vec<(PrepareInfo, bool)>, Vec<(ConfirmInfo, bool)>)>,
         rx_sailfish: Receiver<Header>,
         tx_pushdown_cert: Sender<Certificate>,
         tx_request_header_sync: Sender<Digest>,
@@ -204,7 +200,7 @@ impl MessageHandler for ConsensusReceiverHandler {
                 .send((missing, origin))
                 .await
                 .expect("Failed to send consensus message"),
-            message @ ConsensusMessage::Propose(..) => {
+            /*message @ ConsensusMessage::Propose(..) => {
                 // Reply with an ACK.
                 let _ = writer.send(Bytes::from("Ack")).await;
 
@@ -213,7 +209,7 @@ impl MessageHandler for ConsensusReceiverHandler {
                     .send(message)
                     .await
                     .expect("Failed to send consensus message")
-            }
+            }*/
             message => self
                 .tx_message
                 .send(message)

@@ -1,7 +1,7 @@
 //use crate::primary::Height;
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::{DagError, DagResult};
-use crate::messages::{Certificate, Header, Vote, Info, ConfirmInfo, CertType, ConsensusInfo};
+use crate::messages::{Certificate, Header, Vote, ConfirmInfo, CertType, ConsensusInfo};
 use config::{Committee, Stake};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, Signature};
@@ -39,8 +39,8 @@ impl VotesAggregator {
         
         self.votes.push((author, vote.signature));
 
-        let num_prepare_valids: u32 = vote.prepare_special_valids.iter().filter(|(_, valid)| valid).count();
-        let num_confirm_valids: u32 = vote.confirm_special_valids.iter().filter(|(_, valid)| valid).count();
+        let num_prepare_valids: usize = vote.prepare_special_valids.into_iter().filter(|x| x.1).count();
+        let num_confirm_valids: usize = vote.confirm_special_valids.into_iter().filter(|x| x.1).count();
 
         if num_prepare_valids == header.info_list.len() && num_confirm_valids == header.parent_cert.confirm_info_list.len() {
             self.weight += committee.stake(&author);
@@ -52,8 +52,8 @@ impl VotesAggregator {
         
         let invalidated: bool = self.invalid_weight >= committee.validity_threshold();
 
-        let invalid_cert: Option<Certificate> = None;
-        let valid_cert: Option<Certificate> = None;
+        let mut invalid_cert: Option<Certificate> = None;
+        let mut valid_cert: Option<Certificate> = None;
 
         if invalidated {
             self.invalid_weight = 0;
@@ -62,7 +62,7 @@ impl VotesAggregator {
                 header_digest: header.digest(),
                 height: header.height(),
                 votes: self.votes.clone(),
-                special_valids: header.info_list.iter().map(|info| (info, false)).collect(),
+                special_valids: Vec::new(),
                 confirm_info_list: Vec::new(),
             });
         }
@@ -70,14 +70,14 @@ impl VotesAggregator {
         if normal || special {
             self.weight = 0;
 
-            let info_list: Vec<ConfirmInfo> = Vec::new();
-            for info in header.info_list {
+            let mut info_list: Vec<ConfirmInfo> = Vec::new();
+            for info in header.info_list.clone() {
                 let consensus_info: ConsensusInfo = info.consensus_info;
                 let confirm_info = ConfirmInfo { consensus_info, cert_type: CertType::Prepare };
                 info_list.push(confirm_info);
             }
 
-            for info in header.parent_cert.confirm_info_list {
+            for info in header.parent_cert.confirm_info_list.clone() {
                 let consensus_info: ConsensusInfo = info.consensus_info;
                 if info.cert_type == CertType::Prepare {
                     let confirm_info = ConfirmInfo { consensus_info, cert_type: CertType::Commit };
@@ -90,7 +90,7 @@ impl VotesAggregator {
                 header_digest: header.digest(),
                 height: header.height(),
                 votes: self.votes.clone(),
-                special_valids: header.info_list.iter().map(|info| (info, true)).collect(),
+                special_valids: Vec::new(),
                 confirm_info_list: info_list,
             });
         }

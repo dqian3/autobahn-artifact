@@ -1,5 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::messages::{Certificate, Header, Info};
+use crate::messages::{Certificate, Header, Info, PrepareInfo};
 use crate::primary::Height;
 use config::{Committee, WorkerId};
 use crypto::{Digest, PublicKey, SignatureService};
@@ -31,7 +31,7 @@ pub struct Proposer {
     /// Receives the batches' digests from our workers.
     rx_workers: Receiver<(Digest, WorkerId)>,
     // Receives new consensus info
-    rx_info: Receiver<Info>,
+    rx_info: Receiver<PrepareInfo>,
     /// Sends newly created headers to the `Core`.
     tx_core: Sender<Header>,
    
@@ -40,7 +40,7 @@ pub struct Proposer {
     /// Holds the certificate waiting to be included in the next header
     last_parent: Option<Certificate>,
     // Holds the consensus info for the last special header
-    info_list: Vec<Info>,
+    info_list: Vec<PrepareInfo>,
     /// Holds the batches' digests waiting to be included in the next header.
     digests: Vec<(Digest, WorkerId)>,
     /// Keeps track of the size (in bytes) of batches' digests that we received so far.
@@ -57,7 +57,7 @@ impl Proposer {
         max_header_delay: u64,
         rx_core: Receiver<Certificate>,
         rx_workers: Receiver<(Digest, WorkerId)>,
-        rx_info: Receiver<Info>,
+        rx_info: Receiver<PrepareInfo>,
         tx_core: Sender<Header>,
     ) {
         /*let genesis: Vec<Digest> = Certificate::genesis(&committee)

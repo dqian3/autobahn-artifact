@@ -2,12 +2,12 @@
 use crate::aggregators::{CertificatesAggregator, VotesAggregator};
 //use crate::common::special_header;
 use crate::error::{DagError, DagResult};
-use crate::messages::{Certificate, Header, Vote, QC, TC, Ticket, Info, PrepareInfo, ConfirmInfo};
+use crate::messages::{Certificate, Header, Vote, Info, PrepareInfo, ConfirmInfo};
 use crate::primary::{PrimaryMessage, Height};
 use crate::synchronizer::Synchronizer;
 use async_recursion::async_recursion;
 use bytes::Bytes;
-use config::Committee;
+use config::{Committee, Stake};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
 use log::{debug, error, warn};
@@ -60,7 +60,7 @@ pub struct Core {
     /// Send valid a quorum of certificates' ids to the `Proposer` (along with their round).
     tx_proposer: Sender<Certificate>,
     // Receives validated special Headers & proof from the consensus layer.
-    rx_validation: Receiver<(Header, BTreeMap<Info, bool>)>,
+    rx_validation: Receiver<(Header, Vec<(PrepareInfo, bool)>, Vec<(ConfirmInfo, bool)>)>,
     tx_special: Sender<Header>,
 
     rx_pushdown_cert: Receiver<Certificate>,
@@ -115,7 +115,7 @@ impl Core {
         tx_consensus: Sender<Certificate>,
         tx_committer: Sender<Certificate>,
         tx_proposer: Sender<Certificate>,
-        rx_validation: Receiver<(Header, bool)>,
+        rx_validation: Receiver<(Header, Vec<(PrepareInfo, bool)>, Vec<(ConfirmInfo, bool)>)>,
         tx_special: Sender<Header>,
         rx_pushdown_cert: Receiver<Certificate>,
         rx_request_header_sync: Receiver<Digest>,
@@ -188,15 +188,15 @@ impl Core {
             .extend(handlers);
 
         // Process the header.
-        self.process_header(&header).await
+        self.process_header(header).await
     }
 
     #[async_recursion]
-    async fn process_header(&mut self, header: &Header) -> DagResult<()> {
+    async fn process_header(&mut self, header: Header) -> DagResult<()> {
         debug!("Processing {:?}", header);
 
         // Check the parent certificate. Ensure the parents form a quorum and are all from the previous round.
-        let mut stake = header.parent_cert.votes.iter().map(|(pk, _)| self.committee.stake(pk)).sum();
+        let stake: Stake = header.parent_cert.votes.iter().map(|(pk, _)| self.committee.stake(pk)).sum();
         ensure!(
             header.parent_cert.height() + 1 == header.height(),
             DagError::MalformedHeader(header.id.clone())
@@ -208,13 +208,13 @@ impl Core {
 
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
         // reschedule processing of this header once we have it.
-        if self.synchronizer.missing_payload(header).await? {
+        if self.synchronizer.missing_payload(&header).await? {
             debug!("Processing of {} suspended: missing payload", header);
             return Ok(());
         }
 
         // Store the header.
-        let bytes = bincode::serialize(header).expect("Failed to serialize header");
+        let bytes = bincode::serialize(&header).expect("Failed to serialize header");
         self.store.write(header.id.to_vec(), bytes).await;
 
         // Check if we can vote for this header.
@@ -224,7 +224,7 @@ impl Core {
             .or_insert_with(HashSet::new)
             .insert(header.author)
         {
-            self.tx_consensus
+            self.tx_special
                 .send(header)
                 .await
                 .expect("Failed to send header");
@@ -233,7 +233,7 @@ impl Core {
     }
 
     #[async_recursion]
-    async fn create_vote(&mut self, header: Header, prepare_valids: BTreeMap<PrepareInfo, bool>, confirm_valids: BTreeMap<ConfirmInfo, bool>) -> DagResult<()>{ 
+    async fn create_vote(&mut self, header: Header, prepare_valids: Vec<(PrepareInfo, bool)>, confirm_valids: Vec<(ConfirmInfo, bool)>) -> DagResult<()>{ 
          // Make a vote and send it to the header's creator.
          let vote = Vote::new(&header, &self.name, &mut self.signature_service, prepare_valids, confirm_valids).await;
          debug!("Created Vote {:?}", vote);
@@ -296,11 +296,11 @@ impl Core {
         //forward cert to Consensus Dag view. NOTE: Forwards cert with whatever special_valids are available. This might not be the ones we use for a special block that is passed up
         //Currently this is safe/compatible because neither votes, norspecial_valids are part of the cert digest and equality definition (I consider special_valids to be "extra" info of the signatures)
         
-        debug!("Committer Received {:?}", certificate);
-        self.tx_committer
+        //debug!("Committer Received {:?}", certificate);
+        /*self.tx_committer
                 .send(certificate.clone())
                 .await
-                .expect("Failed to send certificate to committer");
+                .expect("Failed to send certificate to committer");*/
         
         Ok(())
     }
@@ -402,7 +402,7 @@ impl Core {
                     match message {
                         PrimaryMessage::Header(header) => {
                             match self.sanitize_header(&header) {
-                                Ok(()) => self.process_header(&header).await,
+                                Ok(()) => self.process_header(header).await,
                                 error => error
                             }
 
@@ -434,7 +434,7 @@ impl Core {
 
                 // We receive here loopback headers from the `HeaderWaiter`. Those are headers for which we interrupted
                 // execution (we were missing some of their dependencies) and we are now ready to resume processing.
-                Some(header) = self.rx_header_waiter.recv() => self.process_header(&header).await,
+                Some(header) = self.rx_header_waiter.recv() => self.process_header(header).await,
 
                 //Loopback for special headers that were validated by consensus layer.
                 Some((header, prepare_valids, confirm_valids)) = self.rx_validation.recv() => self.create_vote(header, prepare_valids, confirm_valids).await,               

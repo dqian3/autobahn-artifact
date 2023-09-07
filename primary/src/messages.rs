@@ -21,7 +21,7 @@ use std::fmt;
 pub mod messages_tests;
 
 ///////////
-#[derive(Clone, Copy, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Ticket {
     // The special header from prior slot
     pub header: Option<Header>,
@@ -53,7 +53,7 @@ impl Ticket {
             header: None,
             tc: None, 
             slot: 0,
-            proposals: Certificate::genesis_certs(committee),
+            proposals: BTreeMap::new(),
         }
     }
 }
@@ -61,17 +61,17 @@ impl Ticket {
 impl Hash for Ticket {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
-        match self.header {
-            Some(header) => hasher.update(&header),
+        match &self.header {
+            Some(header) => {},
             None => {}
         }
 
-        match self.tc {
-            Some(tc) => hasher.update(&tc),
+        match &self.tc {
+            Some(tc) => {},
             None => {}
         }
         hasher.update(&self.slot.to_le_bytes());
-        hasher.update(&self.proposals);
+        //hasher.update(&self.proposals);
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
@@ -116,6 +116,17 @@ pub struct ConsensusInfo {
     pub view: View,
 }
 
+impl Hash for ConsensusInfo {
+
+    fn digest(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(&self.slot.to_le_bytes());
+        hasher.update(&self.view.to_le_bytes());
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+
+}
+
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct PrepareInfo {
@@ -124,8 +135,34 @@ pub struct PrepareInfo {
     // The ticket needed to send prepare message
     pub ticket: Ticket,
     // The certificates that are proposed
-    pub proposals: BTreeMap<PublicKey, Certificate>,
+    pub proposals: HashMap<PublicKey, Certificate>,
 }
+
+impl Hash for PrepareInfo {
+
+    fn digest(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(&self.consensus_info.slot.to_le_bytes());
+        hasher.update(&self.consensus_info.view.to_le_bytes());
+        for (x, y) in &self.proposals {
+            //hasher.update(x.to_le_bytes());
+            //hasher.update(y);
+        }
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+
+}
+
+impl fmt::Debug for PrepareInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(
+            f,
+            "T{})",
+            self.consensus_info.slot,
+        )
+    }
+}
+
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct ConfirmInfo {
@@ -134,6 +171,28 @@ pub struct ConfirmInfo {
     // The prepare/commit QC that was formed previously
     pub cert_type: CertType,
 }
+
+impl Hash for ConfirmInfo {
+
+    fn digest(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(&self.consensus_info.slot.to_le_bytes());
+        hasher.update(&self.consensus_info.view.to_le_bytes());
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+
+}
+
+impl fmt::Debug for ConfirmInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(
+            f,
+            "T{})",
+            self.consensus_info.slot,
+        )
+    }
+}
+
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Header {
@@ -159,7 +218,7 @@ impl Header {
         payload: BTreeMap<Digest, WorkerId>,
         parent_cert: Certificate,
         signature_service: &mut SignatureService,
-        info_list: Vec<Info>,
+        info_list: Vec<PrepareInfo>,
         special_parent: Option<Certificate>,
     ) -> Self {
         let header = Self {
@@ -250,31 +309,15 @@ impl Hash for Header {
             hasher.update(x);
             hasher.update(y.to_le_bytes());
         }
-        hasher.update(&self.parent_cert);
+        //hasher.update(&self.parent_cert);
 
         for info in &self.info_list {
             hasher.update(&info.consensus_info.slot.to_le_bytes());
             hasher.update(&info.consensus_info.view.to_le_bytes());
-            match &info.prepare_info {
-                Some(prepare_info) => {
-                    hasher.update(&prepare_info.ticket);
-                    for (x, y) in &prepare_info.proposals {
-                        hasher.update(x);
-                        hasher.update(y);
-                    }
-                }
-                None => {}
-            }
-            match &info.confirm_info {
-                Some(confirm_info) => {
-                    hasher.update(&confirm_info.qc);
-                }
-                None => {}
-            }
         }
     
         match &self.special_parent {
-            Some(parent) => hasher.update(parent),
+            Some(parent) => {},
             None => {},
         }
         
@@ -292,7 +335,7 @@ impl fmt::Debug for Header {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "{}: B{}({},, special:, view:, {:?}, {})",
+            "{}: B{}({},, special:, view:, {:?})",
             self.id,
             self.height,
             self.author,
@@ -315,8 +358,8 @@ pub struct Vote {
     pub origin: PublicKey,
     pub author: PublicKey,
     pub signature: Signature,
-    pub prepare_special_valids: BTreeMap<PrepareInfo, bool>,
-    pub confirm_special_valids: BTreeMap<ConfirmInfo, bool>,
+    pub prepare_special_valids: Vec<(PrepareInfo, bool)>,
+    pub confirm_special_valids: Vec<(ConfirmInfo, bool)>,
 }
 
 impl Vote {
@@ -324,8 +367,8 @@ impl Vote {
         header: &Header,
         author: &PublicKey,
         signature_service: &mut SignatureService,
-        prepare_special_valids: BTreeMap<PrepareInfo, bool>, 
-        confirm_special_valids: BTreeMap<ConfirmInfo, bool>,
+        prepare_special_valids: Vec<(PrepareInfo, bool)>, 
+        confirm_special_valids: Vec<(ConfirmInfo, bool)>,
     ) -> Self {
         let vote = Self {
             id: header.id.clone(),
@@ -388,8 +431,8 @@ impl Vote {
             origin,
             author,
             signature: Signature::default(),
-            consensus_info: None,
-            special_valid: false,
+            prepare_special_valids: Vec::new(),
+            confirm_special_valids: Vec::new(),
         };
         let signature = Signature::new(&vote.digest(), &secret);
         Self { signature, ..vote }
@@ -402,7 +445,7 @@ impl PartialEq for Vote {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq)]
 pub enum CertType {
     #[default]
     Normal,
@@ -415,7 +458,7 @@ pub struct Certificate {
     pub author: PublicKey,
     pub header_digest: Digest,
     pub height: Height,
-    pub special_valids: BTreeMap<Info, bool>,
+    pub special_valids: Vec<(Info, bool)>,
     pub votes: Vec<(PublicKey, Signature)>,
     pub confirm_info_list: Vec<ConfirmInfo>,
 }
@@ -443,7 +486,7 @@ impl Certificate {
         }
     }
 
-    pub fn genesis_certs(committee: &Committee) -> BTreeMap<PublicKey, Self> {
+    /*pub fn genesis_certs(committee: &Committee) -> BTreeMap<PublicKey, Self> {
         committee
             .authorities
             .keys()
@@ -456,7 +499,7 @@ impl Certificate {
                 ..Self::default()
             })
             .collect()
-    }
+    }*/
 
     pub fn verify(&self, committee: &Committee) -> DagResult<()> {
         // Genesis certificates are always valid.
@@ -966,14 +1009,6 @@ impl Timeout {
 
         //NOTE: When verifying TC, we have purged all vote contents besides the winner --> so this step is skipped. Verification is only necessary for the winning proposal
 
-        //Check the validity of embedded proposals
-        if let Some(high_qc) = &self.high_qc {
-            // Check the embedded QC.
-            if *high_qc != QC::genesis(committee) {
-                high_qc.verify(committee)?;
-            }
-        }
-
         Ok(())
     }
 }
@@ -981,10 +1016,10 @@ impl Timeout {
 impl Hash for Timeout {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
-        hasher.update(self.view.to_le_bytes());
+        /*hasher.update(self.view.to_le_bytes());
         if let Some(qc_view) = self.vote_high_qc {
             hasher.update(qc_view.to_le_bytes());
-        }
+        }*/
        
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
@@ -992,14 +1027,14 @@ impl Hash for Timeout {
 
 impl fmt::Debug for Timeout {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "TV({}, {}, {:?})", self.author, self.view, self.high_qc)
+        write!(f, "TV({}, {:?})", self.author, self.high_qc)
     }
 }
 
 impl Timeout {
     pub fn new_from_key(high_qc: Certificate, consensus_info: ConsensusInfo, author: PublicKey, secret: &SecretKey) -> Self {
         let timeout = Timeout {
-            high_qc: Some(high_qc),
+            high_qc,
             consensus_info,
             author,
             signature: Signature::default(),
@@ -1030,6 +1065,7 @@ impl PartialEq for TC {
     fn eq(&self, other: &Self) -> bool {
         //self.hash == other.hash && self.view == other.view
         //*self.winning_proposal == *other.winning_proposal
+        true
     }
 }
 
@@ -1099,7 +1135,7 @@ impl TC {
     }
 
     //Used for debugging: Returns all voted views. 0 by default if no vote was cast for specific type (prepare/accept/qc)
-    pub fn high_qc_views(&self) -> Vec<(View, View, View)> {
+    /*pub fn high_qc_views(&self) -> Vec<(View, View, View)> {
         self.votes.iter().map(|timeout| {
                                     let mut hp_view = 0;
                                     let mut ha_view = 0;    
@@ -1118,14 +1154,14 @@ impl TC {
                                     (hp_view, ha_view, hqc_view)
                                 })
                             .collect()
-    }
+    }*/
 }
 
-impl fmt::Debug for TC {
+/*impl fmt::Debug for TC {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(f, "TC({}, {:?})", self.view, self.high_qc_views())
     }
-}
+}*/
 
 
 #[derive(Clone, Serialize, Deserialize, Default)]

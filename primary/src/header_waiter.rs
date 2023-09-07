@@ -351,7 +351,7 @@ impl HeaderWaiter {
 
                         if header.special_parent.is_some() {
                             let head_ref = &header.special_parent.as_ref().unwrap();
-                            let _ = self.header_requests.remove(head_ref);
+                            //let _ = self.header_requests.remove(head_ref);
                         }
                         self.tx_core.send(header).await.expect("Failed to send header"); 
                     },
@@ -378,7 +378,7 @@ impl HeaderWaiter {
 
                         if header.special_parent.is_some() {
                             let head_ref = &header.special_parent.as_ref().unwrap();
-                            let _ = self.header_requests.remove(head_ref);
+                            //let _ = self.header_requests.remove(head_ref);
                         }
                         self.tx_core.send(header).await.expect("Failed to send header"); 
                     },
