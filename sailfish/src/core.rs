@@ -18,7 +18,7 @@ use futures::FutureExt;
 use log::{debug, error, warn};
 use network::SimpleSender;
 use primary::ensure;
-use primary::messages::{Header, Certificate, Timeout, AcceptVote, QC, TC, Ticket, Vote, Info, CertType, PrepareInfo};
+use primary::messages::{Header, Certificate, Timeout, AcceptVote, QC, TC, Ticket, Vote, Info, CertType, PrepareInfo, ConfirmInfo};
 use primary::{error::{ConsensusError, ConsensusResult}};
 //use primary::messages::AcceptVote;
 use std::cmp::max;
@@ -51,7 +51,7 @@ pub struct Core {
     //tx_proposer: Sender<ProposerMessage>,
     tx_commit: Sender<Certificate>,
     tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>,
-    tx_ticket: Sender<Ticket>, //Sender<(View, Round, Ticket)>,
+    tx_info: Sender<Ticket>, //Sender<(View, Round, Ticket)>,
     rx_special: Receiver<Header>,
     rx_loopback_process_commit: Receiver<(Digest, Ticket)>,
     rx_loopback_commit: Receiver<(Header, Ticket)>,
@@ -103,10 +103,9 @@ impl Core {
         rx_loopback_header: Receiver<Header>,
         rx_loopback_cert: Receiver<Certificate>,
         tx_pushdown_cert: Sender<Certificate>,
-        //tx_proposer: Sender<ProposerMessage>,
         tx_commit: Sender<Certificate>,
         tx_validation: Sender<(Header, u8, Option<QC>, Option<TC>)>, // Loopback Special Headers to DAG
-        tx_ticket: Sender<Ticket>, //Sender<(View, Round, Ticket)>,
+        tx_info: Sender<Info>, 
         rx_special: Receiver<Header>,
         rx_loopback_process_commit: Receiver<(Digest, Ticket)>,
         rx_loopback_commit: Receiver<(Header, Ticket)>,
@@ -128,7 +127,7 @@ impl Core {
                 //tx_proposer,
                 tx_commit,
                 tx_validation,
-                tx_ticket,
+                tx_info,
                 rx_special,
                 rx_loopback_process_commit,
                 rx_loopback_commit,
@@ -630,7 +629,7 @@ impl Core {
         //Don't generate proposals for old views.
         if ticket.view == self.view - 1 {  //Note: view -1 since pur next proposal should be for self.view, and thus the associate ticket is from view-1
             debug!("Sent ticket to proposer");
-            self.tx_ticket
+            self.tx_info
             //.send((self.view, ticket.round, ticket)) 
             .send(ticket) 
             .await
@@ -737,32 +736,36 @@ impl Core {
         info.confirm_info.is_some()
     }
 
-    async fn process_prepare_info(&mut self, header: Header, info: Info) {
+    async fn process_prepare_info(&mut self, header: Header, info: PrepareInfo) {
         let prepare_valid = self.is_prepare_valid(info);
         if prepare_valid {
             self.views[info.consensus_info.slot] = info.consensus_info.view;
             //self.timers[info.consensus_info.slot] = Timer::new(5);
-            let has_proposed = self.already_proposed_slots.contains(info.consensus_info.slot);
+            let has_proposed = self.already_proposed_slots.contains(&info.consensus_info.slot);
             if self.leader_elector.get_leader(info.consensus_info.slot + 1, 1) && has_proposed {
                 self.ticket = header.clone();
                 if self.enough_coverage(&self.ticket, self.current_certs) {
                     let new_prepare_info: PrepareInfo = PrepareInfo { ticket: self.ticket, proposals: self.current_certs };
+                    self.tx_info
+                        .send(new_prepare_info)
+                        .await
+                        .expect("failed to send info to proposer");
                 }
             }
         }
     }
 
 
-    async fn process_confirm_info(&mut self, header: Header, info: Info) {
+    async fn process_confirm_info(&mut self, certificate: Certificate, info: ConfirmInfo) {
         let confirm_valid = self.is_confirm_valid(info);
         if confirm_valid {
-            let cert_info = header.parent_cert.consensus_info.unwrap();
-            let qc_info = self.qcs.get(cert_info.slot).unwrap().consensus_info.unwrap();
+            let cert_info = info.consensus_info;
+            let qc_info = self.qcs.get(cert_info.slot).unwrap().confirm_info_list;
             if cert_info.view > qc_info.view {
-                self.qcs[info.consensus_info.slot] = header.parent_cert;
+                self.qcs[info.consensus_info.slot] = certificate;
             }
 
-            if header.parent_cert.cert_type == CertType::Commit {
+            if info.cert_type == CertType::Commit {
                 self.committed.insert(info.consensus_info.slot, info.clone());
             }
         }
@@ -776,119 +779,43 @@ impl Core {
         new_tips.len() as u32 >= self.committee.quorum_threshold()
     }
 
-    //Call process_special_header upon receiving upcall from Dag layer.
+    //Call process_special_header upon receiving header from data dissemination layer.
     #[async_recursion]
     async fn process_special_header(&mut self, header: Header) -> ConsensusResult<()> {
-
-        //println!("CONSENSUS: processing special header view {} certificate at replica? {}. Curr view = {}", header.view.clone(), self.name, self.view);
-
-         //Indicate that we are processing this header.
-        if !self.processing_headers
-         .entry(header.view)
-         .or_insert_with(HashSet::new)
-         .insert(header.id.clone()){
-            return Ok(());
-         }
-
-
-        let mut special_valid: u8 = 1;
-
-
-        //A) CHECK WHETHER HEADER IS CURRENT ==> If not, reply invalid   
-
-                //1) Check if we have already voted in this view > last prepared view
-                if header.view <= self.last_prepared_view {
-                    debug!("Reject Special header {:?}. Already prepared view {}", header, self.last_prepared_view);
-                    special_valid = 0;
-                }
-                /*ensure!(
-                    header.view > self.last_prepared_view,
-                    ConsensusError::TooOld(header.id, header.view)  //TODO: Still want to reply invalid in DAG. ==> Corner-case: Have already moved views, but Dag still requires cert.
-                );*/
-                
-                //2) If we have not voted, but have already committed higher view, vote invalid
-                if header.view <= self.last_committed_view {
-                    debug!("Reject Special header {:?}. Already committed view {}", header, self.last_committed_view);
-                    special_valid = 0;
-                }
-
-                if special_valid == 0 {
-                    self.tx_validation.send((header, special_valid, None, None)).await .expect("Failed to send payload");
-                    return Ok(());
-                }
-            
-                // TODO: If we have already voted for this view; or we have already voted in a previoius view for this vote round or
-                // bigger ==> then don't vote at all. The proposer must be byz.
-                // But if we cannot vote for this view because of a timeout; then do want to vote for Dag, but invalidate the specialness.
-                // Problem: Might not have a proof yet. ==> Need to wait for it.
-                // (I.e. if don't have conflict QC/TC, start a waiter)
-
-                // NOTE: Invalid replies/Proofs thus only need to prove timeout case (since otherwise replicas would stay silent) ==> i.e. checking TC
-                // (or a consecutive QC) for higher view suffices. (I.e. don't need to check round number)
-        
-    
-        //B) CHECK HEADER CORRECTNESS ==> If not, don't need to reply. Proposer must be byz
-
-            //1) Header signature correct => If false, dont need to reply
-            header.verify(&self.committee)?;
+        //1) Header signature correct => If false, dont need to reply
+        header.verify(&self.committee)?;
+        header.parent_cert.verify(&self.committee)?;
                
+        if header.height() < self.tips.get(&header.origin()).unwrap().height() {
+            Ok(())
+        }
 
-            //2) Header author == view leader
-            ensure!(
-                header.author == self.leader_elector.get_leader(header.view),
-                 ConsensusError::WrongProposer
-            );
+        if header.parent_cert.height() < self.current_certs.get(&header.origin()).unwrap().height() {
+            Ok(())
+        }
 
-            //3)Check if Ticket valid. If we have not processed qc/tc in ticket yet then process it.
+        if header.parent_cert.votes.iter().map(|(pk, _)| self.committee.stake(pk)).sum() < self.committee.quorum_threshold() {
+            Ok(())
+        }
 
-                        // ensure!(
-                        //     header.ticket.is_some(),
-                        //     ConsensusError::InvalidTicket
-                        // );
-            if header.ticket.is_none() { //TODO: Could ignore ticket validation if we have header.consensus_parent (=ticket) in store already.
-                debug!("Reject Special header {:?}. No ticket", header);
-                special_valid = 0;
-            }
-            else{ //If there is a ticket attached
-                let ticket = header.ticket.clone().unwrap();
-                self.process_ticket(&header, ticket).await?;    
-            }
-                //IGNORE Comment (only true if we use Ticket as proof for validation result.)
-                    // // I.e. whether have QC/TC for view v-1 
-                    // // If don't have QC/TC. Start a waiter. If waiter triggers, call this function again (or directly call down validation complete)
+        self.tips.insert(header.origin(), header);
+        self.current_certs.insert(header.origin(), header.parent_cert);
 
+        let prepare_valids: BTreeMap<PrepareInfo, bool> = BTreeMap::new();
+        let confirm_valids: BTreeMap<ConfirmInfo, bool> = BTreeMap::new();
 
-            //4) proposed round > last committed round
-                // Only process special header if the round number is increasing  // self.round >= ticket.qc.view_round since we process_qc first.
-                
-                if !(header.round > self.round) {  //header.round <= self.round {
-                    debug!("Reject Special header {:?} with round {}. Already committed a ticket with a higher round {}", header, header.round, self.round);
-                    special_valid = 0;
-                }
-                // ensure!(
-                //     header.round > self.round,
-                //     ConsensusError::NonMonotonicRounds(header.round, self.round)
-                // );
-        
-   
-        let special_valids: BTreeMap<Info, bool> = BTreeMap::new();
         for info in header.info_list {
-            let prepare_valid = false;
-            let confirm_valid = false;
+            self.process_prepare_info(header, info);
+            prepare_valids.insert(info, true);
+        }
 
-            if (info.prepare_info.is_some()) {
-                self.process_prepare_info(header, info);
-                prepare_valid = true;
-            } else if (info.confirm_info.is_some()) {
-                self.process_confirm_info(header, info);
-                confirm_valid = true;
-            }
-
-            special_valids.insert(info, prepare_valid || confirm_valid);
+        for info in header.parent_cert.confirm_info_list {
+            self.process_confirm_info(header.parent_cert, info);
+            confirm_valids.insert(info, true);
         }
 
         self.tx_validation
-            .send((header, special_valids))
+            .send((header, prepare_valids, confirm_valids))
             .await
             .expect("Failed to send payload");
      
@@ -899,8 +826,7 @@ impl Core {
     //Call process_special_header upon receiving upcall from Dag layer.
     #[async_recursion]
     async fn process_special_certificate(&mut self, certificate: Certificate) -> ConsensusResult<()> {
-      
-        println!("process special cert for view {} at replica {}", certificate.header.view.clone(), self.name);
+
     
          //1) Check if cert is still relevant to current view, if so, update view and high_accept. Ignore cert if we've already committed in the round.
          ensure!(

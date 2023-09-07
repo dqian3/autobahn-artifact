@@ -119,6 +119,8 @@ pub struct ConsensusInfo {
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct PrepareInfo {
+    // The slot and view info
+    pub consensus_info: ConsensusInfo,
     // The ticket needed to send prepare message
     pub ticket: Ticket,
     // The certificates that are proposed
@@ -127,8 +129,10 @@ pub struct PrepareInfo {
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct ConfirmInfo {
+    // The slot and view info
+    pub consensus_info: ConsensusInfo,
     // The prepare/commit QC that was formed previously
-    pub qc: Certificate,
+    pub cert_type: CertType,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -140,7 +144,7 @@ pub struct Header {
     pub id: Digest,
     pub signature: Signature,
 
-    pub info_list: Vec<Info>,
+    pub info_list: Vec<PrepareInfo>,
 
     // special parent header
     pub special_parent: Option<Certificate>, //Digest of the header of the special parent.
@@ -311,9 +315,8 @@ pub struct Vote {
     pub origin: PublicKey,
     pub author: PublicKey,
     pub signature: Signature,
-    pub consensus_info: Option<ConsensusInfo>,
-
-    pub special_valid: bool,
+    pub prepare_special_valids: BTreeMap<PrepareInfo, bool>,
+    pub confirm_special_valids: BTreeMap<ConfirmInfo, bool>,
 }
 
 impl Vote {
@@ -321,8 +324,8 @@ impl Vote {
         header: &Header,
         author: &PublicKey,
         signature_service: &mut SignatureService,
-        consensus_info: Option<ConsensusInfo>,
-        special_valid: bool, 
+        prepare_special_valids: BTreeMap<PrepareInfo, bool>, 
+        confirm_special_valids: BTreeMap<ConfirmInfo, bool>,
     ) -> Self {
         let vote = Self {
             id: header.id.clone(),
@@ -330,8 +333,8 @@ impl Vote {
             origin: header.author,
             author: *author,
             signature: Signature::default(),
-            consensus_info,
-            special_valid,
+            prepare_special_valids,
+            confirm_special_valids,
         };
         let signature = signature_service.request_signature(vote.digest()).await;
         Self { signature, ..vote }
@@ -412,10 +415,9 @@ pub struct Certificate {
     pub author: PublicKey,
     pub header_digest: Digest,
     pub height: Height,
-    pub special_valids: Vec<bool>,
+    pub special_valids: BTreeMap<Info, bool>,
     pub votes: Vec<(PublicKey, Signature)>,
-    pub consensus_info: Option<ConsensusInfo>,
-    pub cert_type: CertType,
+    pub confirm_info_list: Vec<ConfirmInfo>,
 }
 
 impl Certificate {
