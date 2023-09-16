@@ -194,6 +194,7 @@ impl Core {
     #[async_recursion]
     async fn process_header(&mut self, header: Header) -> DagResult<()> {
         debug!("Processing {:?}", header);
+        println!("Processing the header");
 
         // Check the parent certificate. Ensure the parents form a quorum and are all from the previous round.
         let stake: Stake = header.parent_cert.votes.iter().map(|(pk, _)| self.committee.stake(pk)).sum();
@@ -201,14 +202,17 @@ impl Core {
             header.parent_cert.height() + 1 == header.height(),
             DagError::MalformedHeader(header.id.clone())
         );
+        println!("height is correct");
         ensure!(
-            stake >= self.committee.validity_threshold(),
+            stake >= self.committee.validity_threshold() || header.parent_cert == Certificate::genesis_cert(&self.committee),
             DagError::HeaderRequiresQuorum(header.id.clone())
         );
+        println!("stake is correct");
 
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
         // reschedule processing of this header once we have it.
         if self.synchronizer.missing_payload(&header).await? {
+            println!("Missing payload");
             debug!("Processing of {} suspended: missing payload", header);
             return Ok(());
         }
@@ -224,6 +228,7 @@ impl Core {
             .or_insert_with(HashSet::new)
             .insert(header.author)
         {
+            println!("Voted for the header");
             self.tx_special
                 .send(header)
                 .await
@@ -263,6 +268,7 @@ impl Core {
     #[async_recursion]
     async fn process_vote(&mut self, vote: Vote) -> DagResult<()> {
         debug!("Processing Vote {:?}", vote);
+        println!("processing the vote");
 
         // TODO: Handle invalidated case
         if let (Some(certificate), invalidated_certificate) = self.votes_aggregator.append(vote, &self.committee, &self.current_header)? { 

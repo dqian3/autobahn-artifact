@@ -1,20 +1,18 @@
 //use crate::common::committee;
 // Copyright(C) Facebook, Inc. and its affiliates.
+
 use crate::error::{DagError, DagResult, ConsensusError, ConsensusResult};
-//use sailfish::error::{DagError, DagResult, ConsensusError, ConsensusResult};
-use crate::primary::{Height, View, Slot};
-//use crate::config::{Committee};
+use crate::primary::{Height, Slot, View};
 use config::{Committee, WorkerId, Stake};
 use crypto::{Digest, Hash, PublicKey, Signature, SignatureService, SecretKey};
 use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
 use log::debug;
 use serde::{Deserialize, Serialize};
-use std::cmp::max;
-use std::collections::{BTreeMap, HashSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashSet, HashMap};
 use std::convert::TryInto;
 use std::fmt;
-//use crate::messages_consensus::{QC, TC};
+
 
 #[cfg(test)]
 #[path = "tests/messages_tests.rs"]
@@ -127,6 +125,22 @@ impl Hash for ConsensusInfo {
 
 }
 
+impl PartialEq for ConsensusInfo {
+    fn eq(&self, other: &Self) -> bool {
+        self.slot == other.slot && self.view == other.view
+    }
+}
+
+impl fmt::Debug for ConsensusInfo {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(
+            f,
+            "CI{},{})",
+            self.slot,
+            self.view,
+        )
+    }
+}
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct PrepareInfo {
@@ -203,11 +217,12 @@ pub struct Header {
     pub id: Digest,
     pub signature: Signature,
 
-    pub info_list: Vec<PrepareInfo>,
+    pub prepare_info_list: Vec<PrepareInfo>,
 
     // special parent header
     pub special_parent: Option<Certificate>, //Digest of the header of the special parent.
 }
+
 
 //NOTE: A header is special if "is_special = true". It contains a view, prev_view_round, and its parents may be just a single edge -- a Digest of its parent header (notably not of a Cert)
 // Special headers currently do not need to carry the QC/TC to justify their ticket -- we keep that at the consensu layer. The view and prev_view_round references the relevant QC/TC.
@@ -228,7 +243,7 @@ impl Header {
             parent_cert,
             id: Digest::default(),
             signature: Signature::default(),
-            info_list,
+            prepare_info_list: info_list,
             special_parent,
         };
         let id = header.digest();
@@ -250,6 +265,10 @@ impl Header {
             //parents: Certificate::genesis(committee).iter().map(|x| x.digest()).collect(), //Note: Can't use these parents, because both parents and current header would be in round 0 => malformed
             ..Self::default()
         }
+    }
+
+    pub fn genesis_headers(committee: &Committee) -> HashMap<PublicKey, Self> {
+        committee.authorities.iter().map(|(pk, _)| (*pk, Header {author: *pk, ..Self::default()})).collect()
     }
 
     pub fn verify(&self, committee: &Committee) -> DagResult<()> {
@@ -298,6 +317,26 @@ impl Header {
         let signature = Signature::new(&id, secret);
         Self {id, signature, ..header }
     }
+
+
+    pub fn digest(&self) -> Digest {
+        let mut hasher = Sha512::new();
+        hasher.update(&self.author);
+        hasher.update(self.height.to_le_bytes());
+        for (x, y) in &self.payload {
+            hasher.update(x);
+            hasher.update(y.to_le_bytes());
+        }
+        //hasher.update(&self.parent_cert);
+
+        for info in &self.prepare_info_list {
+            hasher.update(&info.consensus_info.slot.to_le_bytes());
+            hasher.update(&info.consensus_info.view.to_le_bytes());
+        }
+        
+        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+    }
+
 }
 
 impl Hash for Header {
@@ -311,14 +350,9 @@ impl Hash for Header {
         }
         //hasher.update(&self.parent_cert);
 
-        for info in &self.info_list {
+        for info in &self.prepare_info_list {
             hasher.update(&info.consensus_info.slot.to_le_bytes());
             hasher.update(&info.consensus_info.view.to_le_bytes());
-        }
-    
-        match &self.special_parent {
-            Some(parent) => {},
-            None => {},
         }
         
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
@@ -424,15 +458,15 @@ impl fmt::Debug for Vote {
 }
 
 impl Vote {
-    pub fn new_from_key(id: Digest, height: Height, origin: PublicKey, author: PublicKey, secret: &SecretKey) -> Self {
+    pub fn new_from_key(header: Header, prepare_special_valids: Vec<(PrepareInfo, bool)>, confirm_special_valids: Vec<(ConfirmInfo, bool)>, author: PublicKey, secret: &SecretKey) -> Self {
         let vote = Vote {
-            id: id.clone(),
-            height,
-            origin,
+            id: header.id.clone(),
+            height: header.height(),
+            origin: header.origin(),
             author,
             signature: Signature::default(),
-            prepare_special_valids: Vec::new(),
-            confirm_special_valids: Vec::new(),
+            prepare_special_valids,
+            confirm_special_valids,
         };
         let signature = Signature::new(&vote.digest(), &secret);
         Self { signature, ..vote }
@@ -458,7 +492,8 @@ pub struct Certificate {
     pub author: PublicKey,
     pub header_digest: Digest,
     pub height: Height,
-    pub special_valids: Vec<(Info, bool)>,
+    pub valid_prepare_info: Vec<(PrepareInfo, bool)>,
+    pub valid_confirm_info: Vec<(ConfirmInfo, bool)>,
     pub votes: Vec<(PublicKey, Signature)>,
     pub confirm_info_list: Vec<ConfirmInfo>,
 }
@@ -486,20 +521,20 @@ impl Certificate {
         }
     }
 
-    /*pub fn genesis_certs(committee: &Committee) -> BTreeMap<PublicKey, Self> {
+    pub fn genesis_certs(committee: &Committee) -> HashMap<PublicKey, Self> {
         committee
             .authorities
             .keys()
-            .map(|name| name, Self {
+            .map(|name| (*name, Self {
                 header_digest: Header {
                     author: *name,
                     ..Header::genesis(committee)
                     //..Header::default()
                 }.digest(),
                 ..Self::default()
-            })
+            }))
             .collect()
-    }*/
+    }
 
     pub fn verify(&self, committee: &Committee) -> DagResult<()> {
         // Genesis certificates are always valid.

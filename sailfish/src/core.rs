@@ -497,9 +497,15 @@ impl Core {
         let confirm_valid = self.is_confirm_valid(info.clone());
         if confirm_valid {
             let cert_info = info.consensus_info.clone();
-            let qc_info = self.qcs.get(&cert_info.slot).unwrap().1.clone();
-            if cert_info.view > qc_info.consensus_info.view {
-                self.qcs.insert(info.clone().consensus_info.slot, (certificate.clone(), info.clone()));
+            match self.qcs.get(&cert_info.slot) {
+                Some((_, qc_info)) => {
+                    if cert_info.view > qc_info.consensus_info.view {
+                        self.qcs.insert(info.clone().consensus_info.slot, (certificate.clone(), info.clone()));
+                    }
+                },
+                None => {
+                    self.qcs.insert(info.clone().consensus_info.slot, (certificate.clone(), info.clone()));
+                }
             }
 
             if info.clone().cert_type == CertType::Commit {
@@ -520,6 +526,7 @@ impl Core {
     #[async_recursion]
     async fn process_special_header(&mut self, header: Header) -> ConsensusResult<()> {
         //1) Header signature correct => If false, dont need to reply
+       
         header.verify(&self.committee)?;
         header.parent_cert.verify(&self.committee)?;
 
@@ -530,12 +537,12 @@ impl Core {
             return Ok(());
         }
 
-        if header.parent_cert.height() < self.current_certs.get(&header.origin()).unwrap().height() {
+        if header.parent_cert.height() > 0 && header.parent_cert.height() < self.current_certs.get(&header.origin()).unwrap().height() {
             return Ok(());
         }
 
         let stake: Stake = header.parent_cert.votes.iter().map(|(pk, _)| self.committee.stake(pk)).sum();
-        if stake < self.committee.quorum_threshold() {
+        if header.parent_cert.height() > 0 && stake < self.committee.quorum_threshold() {
             return Ok(());
         }
 
@@ -545,15 +552,19 @@ impl Core {
         let mut prepare_valids: Vec<(PrepareInfo, bool)> = Vec::new();
         let mut confirm_valids: Vec<(ConfirmInfo, bool)> = Vec::new();
 
-        for info in header.info_list.clone() {
+        for info in header.prepare_info_list.clone() {
+            println!("processing prepare info");
             self.process_prepare_info(header.clone(), info.clone()).await;
             prepare_valids.push((info.clone(), self.is_prepare_valid(info.clone())));
         }
 
         for info in header.parent_cert.confirm_info_list.clone() {
+            println!("processing confirm info");
             self.process_confirm_info(header.parent_cert.clone(), info.clone());
             confirm_valids.push((info.clone(), self.is_confirm_valid(info.clone())));
         }
+
+        println!("sending validation");
 
         self.tx_validation
             .send((header, prepare_valids, confirm_valids))
@@ -576,6 +587,8 @@ impl Core {
         // Upon booting, generate the very first block (if we are the leader).
         // Also, schedule a timer in case we don't hear from the leader.
         self.timer.reset();
+        self.tips = Header::genesis_headers(&self.committee);
+        self.current_certs = Certificate::genesis_certs(&self.committee);
 
         // This is the main loop: it processes incoming blocks and votes,
         // and receive timeout notifications from our Timeout Manager.

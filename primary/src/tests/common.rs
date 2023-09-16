@@ -1,5 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::messages::{Certificate, Header, Vote, Ticket, AcceptVote, QC};
+use crate::messages::{Certificate, Header, Vote, Ticket};
 use bytes::Bytes;
 use config::{Authority, Committee, ConsensusAddresses, PrimaryAddresses, WorkerAddresses};
 use crypto::Hash as _;
@@ -8,8 +8,6 @@ use futures::sink::SinkExt as _;
 use futures::stream::StreamExt as _;
 use rand::rngs::StdRng;
 use rand::SeedableRng as _;
-use std::collections::{btree_set, BTreeSet};
-use std::convert::TryInto;
 use std::net::SocketAddr;
 use std::vec;
 use tokio::net::TcpListener;
@@ -100,7 +98,6 @@ pub fn header() -> Header {
             .iter()
             .map(|x| x.digest())
             .collect(),*/
-        is_special: false,
         ..Header::default()
     };
     Header {
@@ -119,16 +116,6 @@ pub fn special_header() -> Header {
         author,
         height: 1,
         //parents: par.iter().cloned().collect(),
-
-        is_special: true,
-        view: Some(1),
-        //special parent
-        special_parent: Some(Header::genesis(&committee()).id),
-        special_parent_height: Some(0),
-        //consensus parent
-        ticket: Some(Ticket::genesis(&committee())),
-        prev_view_round: 0,
-        consensus_parent: Some(Header::genesis(&committee()).id),
 
         //defaults: payload, parent, 
         ..Header::default()
@@ -153,7 +140,6 @@ pub fn headers() -> Vec<Header> {
                     .map(|x| x.digest())
                     .collect(),*/
 
-                is_special: false,
                 ..Header::default()
             };
             Header {
@@ -177,8 +163,8 @@ pub fn votes(header: &Header) -> Vec<Vote> {
                 origin: header.author,
                 author,
                 signature: Signature::default(),
-                view: Some(1),
-                special_valid: false,
+                prepare_special_valids: Vec::new(),
+                confirm_special_valids: Vec::new(),
                 //qc: None,
                 //tc: None,
             };
@@ -201,8 +187,9 @@ pub fn special_votes(header: &Header) -> Vec<Vote> {
                 origin: header.author,
                 author,
                 signature: Signature::default(),
-                view: header.view,
-                special_valid: false, //author.0[0] % 2, //make some valid, some invalid
+                prepare_special_valids: Vec::new(),
+                confirm_special_valids: Vec::new(),
+
                 //qc: None,
                 //tc: None,
             };
@@ -217,10 +204,11 @@ pub fn special_votes(header: &Header) -> Vec<Vote> {
 // Fixture
 pub fn certificate(header: &Header) -> Certificate {
     Certificate {
+        author: header.origin(),
         header_digest: header.digest(),
         height: header.height,
-        view: header.view,
-        special_valids: vec![false, false, false],
+        special_valids: Vec::new(),
+        confirm_info_list: Vec::new(),
         votes: votes(&header)
             .into_iter()
             .map(|x| (x.author, x.signature))
@@ -231,13 +219,11 @@ pub fn certificate(header: &Header) -> Certificate {
 // Fixture
 pub fn special_certificate(header: &Header) -> Certificate {
     Certificate {
+        author: header.origin(),
         header_digest: header.digest(),
         height: header.height,
-        view: header.view,
-        special_valids: special_votes(&header)
-            .into_iter()
-            .map(|x| x.special_valid)
-            .collect(),
+        special_valids: Vec::new(),
+        confirm_info_list: Vec::new(),
         votes: special_votes(&header)
             .into_iter()
             .map(|x| (x.author, x.signature))
@@ -279,71 +265,4 @@ pub fn committee_basic() -> Committee {
             .collect(),
         /* epoch */ //100,
     )
-}
-
-// Fixture.
-pub fn accept_vote() -> AcceptVote {
-    let (public_key, secret_key) = keys().pop().unwrap();
-    AcceptVote::new_from_key(special_header().digest(), 1, 1, public_key, &secret_key)
-}
-
-// Fixture.
-pub fn qc() -> QC {
-    let qc = QC {
-        hash: special_header().id, //Digest::default(),
-        view: 1,
-        view_round: 1,
-        votes: Vec::new(),
-        origin: PublicKey::default(),
-    };
-    let digest = qc.digest();
-    let mut keys = keys();
-    let votes: Vec<_> = (0..3)
-        .map(|_| {
-            let (public_key, secret_key) = keys.pop().unwrap();
-            (public_key, Signature::new(&digest, &secret_key))
-        })
-        .collect();
-    QC { votes, ..qc }
-}
-
-// Fixture.
-pub fn fast_qc() -> QC {
-    let qc = QC {
-        hash: special_header().id, //Digest::default(),
-        view: 1,
-        view_round: 1,
-        votes: Vec::new(),
-        origin: special_header().author,
-    };
-
-    let vote = Vote {
-        id: special_header().id, 
-        height: 1,
-        origin: special_header().author,
-        author: PublicKey::default(),
-        signature: Signature::default(),
-        view: Some(1), 
-        special_valid: true,
-        //qc: None,
-        //tc: None,
-    };
-    let digest = vote.digest();
-
-    //Using Cert to simulate should be equivalent
-    // let cert = Certificate {
-    //     header: special_header(),
-    //     special_valids: vec![1u8, 1u8, 1u8, 1u8],
-    //     votes: Vec::new(),
-    // };
-    // let digest = cert.verifiable_digest();
-
-    let mut keys = keys();
-    let votes: Vec<_> = (0..4)
-        .map(|_| {
-            let (public_key, secret_key) = keys.pop().unwrap();
-            (public_key, Signature::new(&digest, &secret_key))
-        })
-        .collect();
-    QC { votes, ..qc }
 }

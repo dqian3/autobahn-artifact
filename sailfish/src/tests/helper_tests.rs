@@ -2,7 +2,7 @@ use super::*;
 use crate::common::{committee_with_base_port, keys, listener, committee};
 use crate::leader::LeaderElector;
 use crate::consensus::Round;
-use primary::messages::{Ticket, Header, QC};
+use primary::messages::{Ticket, Header};
 use crypto::{Signature, SecretKey, PublicKey};
 use std::{collections::BTreeMap, collections::BTreeSet};
 use crypto::Hash as _;
@@ -11,7 +11,7 @@ use tokio::sync::mpsc::channel;
 
 fn leader_keys(round: Round) -> (PublicKey, SecretKey) {
     let leader_elector = LeaderElector::new(committee());
-    let leader = leader_elector.get_leader(round);
+    let leader = leader_elector.get_leader(1, round);
     keys()
         .into_iter()
         .find(|(public_key, _)| *public_key == leader)
@@ -21,7 +21,7 @@ fn leader_keys(round: Round) -> (PublicKey, SecretKey) {
 
 //NOTE: THESE ARE DEPRECATED/NOT USED. We currently sync for headers through the DAG layer.
 
-#[tokio::test]
+/*#[tokio::test]
 async fn sync_reply() {
     let (tx_request, rx_request) = channel(1);
     let (tx_request_cert, rx_request_cert) = channel(1);
@@ -64,4 +64,4 @@ async fn sync_reply() {
 
     // Ensure the requestor received the batch (ie. it did not panic).
     assert!(handle.await.is_ok());
-}
+}*/

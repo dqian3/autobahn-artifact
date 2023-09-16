@@ -1,15 +1,9 @@
-use super::*;
 use config::{Committee, Authority, ConsensusAddresses, PrimaryAddresses, WorkerAddresses};
-use primary::error::{ConsensusError};
 use primary::messages::Ticket;
-use crate::consensus::ConsensusMessage;
-//use primary::config::Committee;
 use crate::consensus::Round;
-use crate::consensus::View;
-use primary::messages::{Block, Timeout, AcceptVote, QC};
 use bytes::Bytes;
 use crypto::Hash as _;
-use crypto::{generate_keypair, Digest, PublicKey, SecretKey, Signature};
+use crypto::{generate_keypair, PublicKey, SecretKey, Signature};
 use futures::sink::SinkExt as _;
 use futures::stream::StreamExt as _;
 use primary::messages::Header;
@@ -213,19 +207,6 @@ pub fn special_header() -> Header {
     //let par = vec![Header::default().id];
     let header = Header {
         author,
-        round: 1,
-        //parents: par.iter().cloned().collect(),
-
-        is_special: true,
-        view: 1,
-        //special parent
-        special_parent: Some(Header::genesis(&committee()).id),
-        special_parent_round: 0,
-        //consensus parent
-        ticket: Some(Ticket::genesis(&committee())),
-        prev_view_round: 0,
-        consensus_parent: Some(Header::genesis(&committee()).id),
-
         //defaults: payload, parent, 
         ..Header::default()
     };
@@ -237,33 +218,7 @@ pub fn special_header() -> Header {
 }
 
 // Fixture.
-pub fn accept_vote() -> AcceptVote {
-    let (public_key, secret_key) = keys().pop().unwrap();
-    AcceptVote::new_from_key(special_header().digest(), 1, 1, public_key, &secret_key)
-}
-
-// Fixture.
-pub fn qc() -> QC {
-    let qc = QC {
-        hash: special_header().id, //Digest::default(),
-        view: 1,
-        view_round: 1,
-        votes: Vec::new(),
-        origin: special_header().author, 
-    };
-    let digest = qc.digest();
-    let mut keys = keys();
-    let votes: Vec<_> = (0..4)
-        .map(|_| {
-            let (public_key, secret_key) = keys.pop().unwrap();
-            (public_key, Signature::new(&digest, &secret_key))
-        })
-        .collect();
-    QC { votes, ..qc }
-}
-
-// Fixture.
-pub fn chain(keys: Vec<(PublicKey, SecretKey)>) -> Vec<Block> {
+/*pub fn chain(keys: Vec<(PublicKey, SecretKey)>) -> Vec<Block> {
     let mut latest_qc = QC::genesis(&committee());
     keys.iter()
         .enumerate()
@@ -297,7 +252,7 @@ pub fn chain(keys: Vec<(PublicKey, SecretKey)>) -> Vec<Block> {
             block
         })
         .collect()
-}
+}*/
 
 // Fixture
 pub fn listener(address: SocketAddr, expected: Option<Bytes>) -> JoinHandle<()> {

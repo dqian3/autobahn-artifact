@@ -1,9 +1,9 @@
 use super::*;
-use crate::common::{chain, committee, committee_with_base_port, keys, listener};
+use crate::common::{committee, committee_with_base_port, keys, listener};
 use crypto::{SecretKey, Signature};
-use primary::messages::{Header, QC, TC, Vote, Block};
+use primary::messages::{Header, TC, Vote};
 use futures::future::try_join_all;
-use std::{fs, collections::BTreeMap, collections::BTreeSet, time::Duration};
+use std::{fs, collections::BTreeMap, collections::BTreeSet, time::Duration, vec};
 use tokio::{sync::mpsc::channel, time::sleep};
 use serial_test::serial;
 
@@ -15,10 +15,10 @@ fn core(
 ) -> (
     Sender<ConsensusMessage>,
     //Receiver<ProposerMessage>,
-    Receiver<Block>,
-    Receiver<(Header, u8, Option<QC>, Option<TC>)>,
+    //Receiver<Block>,
+    Receiver<(Header, Vec<(PrepareInfo, bool)>, Vec<(ConfirmInfo, bool)>)>,
     Sender<Header>,
-    Receiver<Ticket>,
+    Receiver<PrepareInfo>,
     Receiver<Certificate>,
     Sender<Certificate>,
     Store,
@@ -33,7 +33,6 @@ fn core(
     let (tx_validation, mut rx_validation) = channel(10);
     let (tx_ticket, rx_ticket) = channel(1);
     let (tx_special, rx_special) = channel(1);
-    let (tx_block, rx_block) = channel(1);
 
     let(tx_loopback_process_commit, rx_loopback_process_commit) = channel(1);
     let(tx_loopback_commit, rx_loopback_commit) = channel(1);
@@ -86,12 +85,12 @@ fn core(
         rx_loopback_commit,
     );
 
-    (tx_core, rx_block, rx_validation, tx_special, rx_ticket, rx_commit, tx_consensus, store)
+    (tx_core, rx_validation, tx_special, rx_ticket, rx_commit, tx_consensus, store)
 }
 
-fn leader_keys(view: View) -> (PublicKey, SecretKey) {
+fn leader_keys(slot: Slot, view: View) -> (PublicKey, SecretKey) {
     let leader_elector = LeaderElector::new(committee());
-    let leader = leader_elector.get_leader(view);
+    let leader = leader_elector.get_leader(slot, view);
     keys()
         .into_iter()
         .find(|(public_key, _)| *public_key == leader)
@@ -106,27 +105,28 @@ async fn process_special_header() {
     // Make a block and the vote we expect to receive.
     //let block = chain(vec![leader_keys(1)]).pop().unwrap();
     let (public_key, secret_key) = keys().pop().unwrap();
-    let (public_key_1, secret_key_1) = leader_keys(1);
+    let (public_key_1, secret_key_1) = leader_keys(1, 1);
     //println!("Leader keys {}, {}, {}", leader_keys(2).0, leader_keys(3).0, leader_keys(4).0);
     //let vote = Vote::new_from_key(block.digest(), block.view, public_key, &secret_key);
-    //
 
-    let ticket = Ticket {hash: Header::genesis(&committee).id, qc: QC::genesis(&committee), tc: None, view: 0 , round: 0};
+    let ticket: Ticket = Ticket { header: Some(Header::genesis(&committee)), tc: None, slot: 0, proposals: BTreeMap::new() };
+    let prepare_info: PrepareInfo = PrepareInfo { consensus_info: ConsensusInfo { slot: 1, view: 1 }, ticket, proposals: HashMap::new() };
+    let info_list = vec![prepare_info.clone()];
 
-    let header = Header {author: public_key_1, round: 2, payload: BTreeMap::new(), parents: BTreeSet::new(),
-                         id: Digest::default(), signature: Signature::default(), is_special: true, view: 1,
-                         prev_view_round: 1, special_parent: None, special_parent_round: 1, ticket: Some(ticket), consensus_parent: None};
+    let header = Header {author: public_key_1, height: 2, payload: BTreeMap::new(), parent_cert: Certificate::genesis_cert(&committee),
+                         id: Digest::default(), signature: Signature::default(), prepare_info_list: info_list,
+                         special_parent: None};
     let id = header.digest();
     let signature = Signature::new(&id, &secret_key_1);
 
     let head = Header {id, signature, ..header};
         //(public_key, 1, BTreeMap::new(), BTreeSet::new(), sig_service, true, 1, 1, None, 1).await;
-    let validate: (Header, u8, Option<QC>, Option<TC>) = (head.clone(), 1, None, None);
+    let validate: (Header, Vec<(PrepareInfo, bool)>, Vec<(ConfirmInfo, bool)>) = (head.clone(), vec![(prepare_info, true)], Vec::new());
     //let expected = bincode::serialize(&validate).unwrap();
 
     // Run a core instance.
     let store_path = ".db_test_handle_proposal";
-    let (_, _rx_commit, mut rx_validation, tx_special, _, _, _, _) =
+    let (_, mut rx_validation, tx_special, _, _, _, _) =
         core(public_key, secret_key, committee.clone(), store_path);
 
     // Send a header to the core.
@@ -136,8 +136,9 @@ async fn process_special_header() {
     let received = rx_validation.recv().await.unwrap();
 
     //assert!(received.0.eq(&validate.0));
-    assert_eq!(received.1, validate.1);
-    assert_eq!(received.2, validate.2);
+    assert_eq!(received.1.get(0).unwrap().0.consensus_info, validate.1.get(0).unwrap().0.consensus_info);
+    assert_eq!(received.1.get(0).unwrap().1, validate.1.get(0).unwrap().1);
+    assert_eq!(received.2.is_empty(), validate.2.is_empty());
     //assert_eq!(received.3, validate.3);
 
     // Ensure the next leaders gets the vote.
@@ -152,59 +153,65 @@ async fn process_special_header() {
 async fn process_special_cert() {
     let committee = committee_with_base_port(16_000);
 
-    // Make a header, cert and the accept_vote we expect to receive.
-    println!("Leader keys {}, {}, {}, {}", leader_keys(1).0, leader_keys(2).0, leader_keys(3).0, leader_keys(4).0);
-    let (public_key, secret_key) = leader_keys(4); //keys().get(4).unwrap();
-    let (public_key_1, secret_key_1) = leader_keys(1);
-    
-    let ticket = Ticket {hash: Header::genesis(&committee).id, qc: QC::genesis(&committee), tc: None, view: 0 , round: 0};
+    let (public_key, secret_key) = keys().pop().unwrap();
+    let (public_key_1, secret_key_1) = leader_keys(1, 1);
+    //println!("Leader keys {}, {}, {}", leader_keys(2).0, leader_keys(3).0, leader_keys(4).0);
+    //let vote = Vote::new_from_key(block.digest(), block.view, public_key, &secret_key);
 
-    let header = Header {author: public_key_1, round: 2, payload: BTreeMap::new(), parents: BTreeSet::new(),
-                         id: Digest::default(), signature: Signature::default(), is_special: true, view: 1,
-                         prev_view_round: 1, special_parent: None, special_parent_round: 1, ticket: Some(ticket), consensus_parent: None};
+    let ticket: Ticket = Ticket { header: Some(Header::genesis(&committee)), tc: None, slot: 0, proposals: BTreeMap::new() };
+    let prepare_info: PrepareInfo = PrepareInfo { consensus_info: ConsensusInfo { slot: 1, view: 1 }, ticket, proposals: HashMap::new() };
+    let info_list = vec![prepare_info.clone()];
+
+    let header = Header {author: public_key_1, height: 2, payload: BTreeMap::new(), parent_cert: Certificate::genesis_cert(&committee),
+                         id: Digest::default(), signature: Signature::default(), prepare_info_list: info_list,
+                         special_parent: None};
     let id = header.digest();
     let signature = Signature::new(&id, &secret_key_1);
-    let head = Header {id, signature, ..header};
-    let validate: (Header, u8, Option<QC>, Option<TC>) = (head.clone(), 1, None, None);
-    
-    let certificate = Certificate {header: head.clone(), ..Certificate::default()};
 
-    //Create Expected reply.
-    let vote: AcceptVote = AcceptVote::new_from_key(head.id, head.view, head.round, public_key.clone(), &secret_key);
-    //let msg = ConsensusMessage::AcceptVote(vote);
-    let expected = bincode::serialize(&ConsensusMessage::AcceptVote(vote)).unwrap();
-    // println!("accept_vote expected: {:?}", expected.clone());
-    // println!("accept vote bytes expected: {:?}", Bytes::from(expected.clone()));
+    let head = Header {id, signature, ..header};
+    let confirm_info: ConfirmInfo = ConfirmInfo { consensus_info: ConsensusInfo { slot: 1, view: 1 }, cert_type: CertType::Prepare };
+
+    let votes: Vec<_> = keys()
+        .iter()
+        .take(3)
+        .map(|(public_key, secret_key)| {
+            Vote::new_from_key(head.clone(), vec![(prepare_info.clone(), true)], Vec::new(), *public_key, &secret_key)
+        })
+        .map(|v| (v.author, v.signature))
+        .collect();
+
+    let certificate: Certificate = Certificate { author: head.origin(), header_digest: head.id.clone(), height: head.height(), valid_prepare_info: vec![(prepare_info, true)], valid_confirm_info: Vec::new(), votes, confirm_info_list: vec![confirm_info.clone()] };
+
+    let header1 = Header {author: public_key_1, height: 3, payload: BTreeMap::new(), parent_cert: certificate,
+                         id: Digest::default(), signature: Signature::default(), prepare_info_list: Vec::new(),
+                         special_parent: None};
+    let id1 = header1.digest();
+    let signature1 = Signature::new(&id1, &secret_key_1);
+
+    let head1 = Header {id: id1, signature: signature1, ..header1};
+
+        //(public_key, 1, BTreeMap::new(), BTreeSet::new(), sig_service, true, 1, 1, None, 1).await;
+    let validate: (Header, Vec<(PrepareInfo, bool)>, Vec<(ConfirmInfo, bool)>) = (head1.clone(), Vec::new(), vec![(confirm_info, true)]);
+    //let expected = bincode::serialize(&validate).unwrap();
 
     // Run a core instance.
     let store_path = ".db_test_handle_proposal";
-    let (_, _rx_commit, mut rx_validation, _, _, _, tx_consensus, _) =
+    let (_, mut rx_validation, tx_special, _, _, _, _) =
         core(public_key, secret_key, committee.clone(), store_path);
-    
 
-    // Ensure the next leader gets the vote.
-    let (next_leader, _) = leader_keys(2);
-    let address = committee.address(&next_leader).unwrap();
-    //println!("listening for message on address: {:?}", address.clone());
-    let handle = listener(address, Some(Bytes::from(expected.clone())));   
-
-    // Send a certificate to the core.
-    tx_consensus.send(certificate).await.unwrap();
-
-    //process_special_cert should also call process_special_header
+    // Send a header to the core.
+    //let message = ConsensusMessage::Propose(block.clone());
+    tx_special.send(head1).await.unwrap();
 
     let received = rx_validation.recv().await.unwrap();
-    //println!("Received validation: {:?}", received);
-    assert_eq!(received.1, validate.1);
-    assert_eq!(received.2, validate.2);
 
-
-    assert!(handle.await.is_ok());
-
-
+    //assert!(received.0.eq(&validate.0));
+    assert_eq!(received.2.get(0).unwrap().0.consensus_info, validate.2.get(0).unwrap().0.consensus_info);
+    assert_eq!(received.2.get(0).unwrap().1, validate.2.get(0).unwrap().1);
+    assert_eq!(received.1.is_empty(), validate.1.is_empty());
 }
 
-#[tokio::test]
+/*#[tokio::test]
 async fn handle_accept_votes() {
     let committee = committee_with_base_port(16_000);
 
@@ -594,4 +601,4 @@ async fn local_timeout_round() {
         .map(|(_, address)| listener(address, Some(Bytes::from(expected.clone()))))
         .collect();
     assert!(try_join_all(handles).await.is_ok());
-}
+}*/

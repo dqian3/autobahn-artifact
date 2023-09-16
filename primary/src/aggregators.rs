@@ -42,13 +42,13 @@ impl VotesAggregator {
         let num_prepare_valids: usize = vote.prepare_special_valids.into_iter().filter(|x| x.1).count();
         let num_confirm_valids: usize = vote.confirm_special_valids.into_iter().filter(|x| x.1).count();
 
-        if num_prepare_valids == header.info_list.len() && num_confirm_valids == header.parent_cert.confirm_info_list.len() {
+        if num_prepare_valids == header.prepare_info_list.len() && num_confirm_valids == header.parent_cert.confirm_info_list.len() {
             self.weight += committee.stake(&author);
         }
         self.invalid_weight += committee.stake(&author);
 
-        let normal: bool = header.info_list.is_empty() && header.parent_cert.confirm_info_list.is_empty() && self.weight >= committee.validity_threshold();
-        let special: bool = !(header.info_list.is_empty() && header.parent_cert.confirm_info_list.is_empty()) && self.weight >= committee.quorum_threshold();
+        let normal: bool = header.prepare_info_list.is_empty() && header.parent_cert.confirm_info_list.is_empty() && self.weight >= committee.validity_threshold();
+        let special: bool = !(header.prepare_info_list.is_empty() && header.parent_cert.confirm_info_list.is_empty()) && self.weight >= committee.quorum_threshold();
         
         let invalidated: bool = self.invalid_weight >= committee.validity_threshold();
 
@@ -62,7 +62,8 @@ impl VotesAggregator {
                 header_digest: header.digest(),
                 height: header.height(),
                 votes: self.votes.clone(),
-                special_valids: Vec::new(),
+                valid_prepare_info: Vec::new(),
+                valid_confirm_info: Vec::new(),
                 confirm_info_list: Vec::new(),
             });
         }
@@ -71,7 +72,7 @@ impl VotesAggregator {
             self.weight = 0;
 
             let mut info_list: Vec<ConfirmInfo> = Vec::new();
-            for info in header.info_list.clone() {
+            for info in header.prepare_info_list.clone() {
                 let consensus_info: ConsensusInfo = info.consensus_info;
                 let confirm_info = ConfirmInfo { consensus_info, cert_type: CertType::Prepare };
                 info_list.push(confirm_info);
@@ -90,7 +91,8 @@ impl VotesAggregator {
                 header_digest: header.digest(),
                 height: header.height(),
                 votes: self.votes.clone(),
-                special_valids: Vec::new(),
+                valid_prepare_info: Vec::new(),
+                valid_confirm_info: Vec::new(),
                 confirm_info_list: info_list,
             });
         }

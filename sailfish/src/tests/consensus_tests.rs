@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use serial_test::serial;
 
 
-fn spawn_nodes(
+/*fn spawn_nodes(
     mut keys: Vec<(PublicKey, SecretKey)>,
     committee: Committee,
     store_path: &str,
@@ -620,4 +620,4 @@ fn spawn_nodes_with_dag(
             0
         })
        .collect();
-}
+}*/
