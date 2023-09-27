@@ -1,8 +1,8 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::{DagError, DagResult};
-use crate::messages::{Certificate, Header, Vote, Info, QC};
+use crate::messages::{Certificate, Header, Vote, QC};
 use config::{Committee, Stake};
-use crypto::{PublicKey, Signature, Hash};
+use crypto::{PublicKey, Signature, Digest};
 use std::collections::HashSet;
 
 /// Aggregates votes for a particular header into a certificate.
@@ -83,7 +83,7 @@ impl QCMaker {
     pub fn append(
         &mut self,
         author: PublicKey,
-        vote: (Info, Signature),
+        vote: (Digest, Signature),
         committee: &Committee,
     ) -> DagResult<Option<QC>> {
         ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
@@ -93,7 +93,7 @@ impl QCMaker {
         if self.weight >= committee.quorum_threshold() {
             // Ensure QC is only made once.
             self.weight = 0; 
-            return Ok(Some(QC { info_digest: vote.0.digest(), votes: self.votes.clone() }))
+            return Ok(Some(QC { id: vote.0, votes: self.votes.clone() }))
         }
         
         Ok(None)

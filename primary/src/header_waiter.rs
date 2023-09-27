@@ -29,6 +29,8 @@ pub enum WaiterMessage {
     SyncParent(Digest, Header),
     SyncSpecialParent(Digest, Header),
     SyncHeader(Digest),
+    //SyncInfo(Digest),
+    //SyncProposals(Vec<Digest>, Info),
 }
 
 /// Waits for missing parent certificates and batches' digests.
@@ -232,6 +234,53 @@ impl HeaderWaiter {
                                 self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await; //after timeout, re-broadcast again (technically not necessary)
                             }
                         }
+
+
+                        /*WaiterMessage::SyncProposals(missing, info) => {
+                            debug!("Synching the proposals of {}", info);
+                            let info_id = info.digest();
+
+                            // Ensure we sync only once per header.
+                            if self.pending.contains_key(&info_id) {
+                                continue;
+                            }
+
+                            // Add the header to the waiter pool. The waiter will return it to us
+                            // when all its parents are in the store.
+                            let wait_for = missing
+                                .iter()
+                                .cloned()
+                                .map(|x| (x.to_vec(), self.store.clone()))
+                                .collect();
+                            let (tx_cancel, rx_cancel) = channel(1);
+                            self.pending.insert(info_id, (info.instance_info.slot, tx_cancel));
+                            let fut = Self::waiter(wait_for, info, rx_cancel);
+                            waiting.push(fut);
+
+                            // Ensure we didn't already sent a sync request for these parents.
+                            // Optimistically send the sync request to the node that created the certificate.
+                            // If this fails (after a timeout), we broadcast the sync request.
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .expect("Failed to measure time")
+                                .as_millis();
+                            let mut requires_sync = Vec::new();
+                            for missing in missing {
+                                self.parent_requests.entry(missing.clone()).or_insert_with(|| {
+                                    requires_sync.push(missing);
+                                    (info.instance_info.slot, now)
+                                });
+                            }
+                            if !requires_sync.is_empty() {
+                                let address = self.committee
+                                    .primary(&author)
+                                    .expect("Author of valid header not in the committee")
+                                    .primary_to_primary;
+                                let message = PrimaryMessage::CertificatesRequest(requires_sync, self.name);
+                                let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
+                                self.network.send(address, Bytes::from(bytes)).await;
+                            }
+                        }*/
 
 
                         WaiterMessage::SyncParent(missing, header) => {

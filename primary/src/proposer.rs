@@ -1,5 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::messages::{Certificate, Header, Info, PrepareInfo};
+use crate::messages::{Certificate, Header, ConsensusInstance};
 use crate::primary::Height;
 use config::{Committee, WorkerId};
 use crypto::{Digest, PublicKey, SignatureService};
@@ -30,8 +30,8 @@ pub struct Proposer {
     rx_core: Receiver<Certificate>,
     /// Receives the batches' digests from our workers.
     rx_workers: Receiver<(Digest, WorkerId)>,
-    // Receives new consensus info
-    rx_info: Receiver<Info>,
+    // Receives new consensus instance
+    rx_instance: Receiver<ConsensusInstance>,
     /// Sends newly created headers to the `Core`.
     tx_core: Sender<Header>,
    
@@ -40,7 +40,7 @@ pub struct Proposer {
     /// Holds the certificate waiting to be included in the next header
     last_parent: Option<Certificate>,
     // Holds the consensus info for the last special header
-    info_list: Vec<Info>,
+    consensus_instances: Vec<ConsensusInstance>,
     /// Holds the batches' digests waiting to be included in the next header.
     digests: Vec<(Digest, WorkerId)>,
     /// Keeps track of the size (in bytes) of batches' digests that we received so far.
@@ -57,7 +57,7 @@ impl Proposer {
         max_header_delay: u64,
         rx_core: Receiver<Certificate>,
         rx_workers: Receiver<(Digest, WorkerId)>,
-        rx_info: Receiver<Info>,
+        rx_instance: Receiver<ConsensusInstance>,
         tx_core: Sender<Header>,
     ) {
         /*let genesis: Vec<Digest> = Certificate::genesis(&committee)
@@ -77,11 +77,11 @@ impl Proposer {
                 max_header_delay,
                 rx_core,
                 rx_workers,
-                rx_info,
+                rx_instance,
                 tx_core,
                 height: 1,
                 last_parent: Some(genesis),
-                info_list: Vec::new(),
+                consensus_instances: Vec::new(),
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
             }
@@ -98,7 +98,7 @@ impl Proposer {
                 self.digests.drain(..).collect(),
                 self.last_parent.clone().unwrap(),
                 &mut self.signature_service,
-                self.info_list.clone(),
+                self.consensus_instances.clone(),
                 None,
             ).await;
 
@@ -112,8 +112,8 @@ impl Proposer {
 
         // Reset last parent
         self.last_parent = None;
-        // Reset info list
-        self.info_list.clear();
+        // Reset proposed consensus instances
+        self.consensus_instances.clear();
       
         // Send the new header to the `Core` that will broadcast and process it.
         self.tx_core
@@ -160,8 +160,8 @@ impl Proposer {
 
             tokio::select! {
                 // Received info from consensus
-                Some(info) = self.rx_info.recv() => {
-                    self.info_list.push(info);
+                Some(info) = self.rx_instance.recv() => {
+                    self.consensus_instances.push(info);
                 }
 
                 // Receive own certificate from core (we are the author)

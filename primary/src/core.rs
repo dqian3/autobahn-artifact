@@ -3,7 +3,7 @@ use crate::aggregators::{VotesAggregator, QCMaker};
 //use crate::common::special_header;
 use crate::error::{DagError, DagResult};
 use crate::leader::LeaderElector;
-use crate::messages::{Certificate, Header, Vote, Info, PrepareInfo, ConfirmInfo, InstanceInfo, TC, Ticket, CertType};
+use crate::messages::{Certificate, Header, Vote, TC, Ticket, ConsensusInstance};
 use crate::primary::{PrimaryMessage, Height, Slot, View};
 use crate::synchronizer::Synchronizer;
 use crate::timer::Timer;
@@ -95,13 +95,14 @@ pub struct Core {
     current_certs: HashMap<PublicKey, Certificate>,
     views: HashMap<Slot, View>,
     timers: HashMap<Slot, Timer>,
-    qcs: HashMap<Slot, Info>,
-    qc_makers: HashMap<Info, QCMaker>,
+    qcs: HashMap<Slot, ConsensusInstance>,
+    qc_makers: HashMap<Digest, QCMaker>,
+    current_consensus_instances: HashMap<Digest, ConsensusInstance>,
     tcs: HashMap<Slot, TC>,
     ticket: Ticket,
     already_proposed_slots: Vec<Slot>,
-    committed: HashMap<Slot, ConfirmInfo>,
-    tx_info: Sender<Info>,
+    committed: HashMap<Slot, ConsensusInstance>,
+    tx_info: Sender<ConsensusInstance>,
     leader_elector: LeaderElector,
 
 
@@ -129,7 +130,7 @@ impl Core {
         tx_special: Sender<Header>,
         rx_pushdown_cert: Receiver<Certificate>,
         rx_request_header_sync: Receiver<Digest>,
-        tx_info: Sender<Info>,
+        tx_info: Sender<ConsensusInstance>,
         leader_elector: LeaderElector,
     ) {
         tokio::spawn(async move {
@@ -172,6 +173,7 @@ impl Core {
                 tcs: HashMap::with_capacity(2 * gc_depth as usize),
                 ticket: Ticket::default(),
                 committed: HashMap::with_capacity(2 * gc_depth as usize),
+                current_consensus_instances: HashMap::with_capacity(2 * gc_depth as usize),
                 //gc_map: HashMap::with_capacity(2 * gc_depth as usize),
             }
             .run()
@@ -255,7 +257,7 @@ impl Core {
             .or_insert_with(HashSet::new)
             .insert(header.author)
         {
-            let consensus_sigs = self.process_info_list(&header, &header.info_list).await?;
+            let consensus_sigs = self.process_consensus_instances(&header, &header.consensus_instances).await?;
             let vote = Vote::new(&header, &self.name, &mut self.signature_service, consensus_sigs).await;
             debug!("Created Vote {:?}", vote);
 
@@ -286,33 +288,45 @@ impl Core {
         debug!("Processing Vote {:?}", vote);
         println!("processing the vote");
 
-        for (info, sig) in vote.consensus_sigs.iter() {
-            match self.qc_makers.get_mut(&info) {
-                Some(qc_maker) => {
-                    let cert_type = match &info.prepare_info {
-                        Some(_) => CertType::Prepare,
-                        None => CertType::Commit,
-                    };
-                    let slot = info.instance_info.slot;
-                    let view = info.instance_info.view;
+        for (digest, sig) in vote.consensus_sigs.iter() {
+            match self.qc_makers.get(&digest) {
+                Some(_) => {},
+                None => {
+                    self.qc_makers.insert(digest.clone(), QCMaker::new());
+                }
+            }
 
-                    if let Some(qc) = qc_maker.append(vote.origin, (info.clone(), sig.clone()), &self.committee)? {
-                        let confirm_info = ConfirmInfo { cert: qc, cert_type };
-                        let new_info: Info = Info { instance_info: InstanceInfo { slot, view }, prepare_info: None, confirm_info: Some(confirm_info) };
-                        // TODO: Tokio channel to send info to proposer
+            let qc_maker = self.qc_makers.get_mut(&digest).unwrap();
+
+            if let Some(qc) = qc_maker.append(vote.origin, (digest.clone(), sig.clone()), &self.committee)? {
+                let current_instance = self.current_consensus_instances.get(&digest).unwrap();
+                match current_instance {
+                    ConsensusInstance::Prepare { slot, view, ticket, proposals } => {
+                        let new_instance = ConsensusInstance::Confirm { slot: *slot, view: *view, qc };
+
                         self.tx_info
-                            .send(new_info)
+                            .send(new_instance)
                             .await
                             .expect("Failed to send info");
-                    }
-                },
-                None => {}
+
+                    },
+                    ConsensusInstance::Confirm { slot, view, qc: other_qc} => {
+                        let new_instance = ConsensusInstance::Commit { slot: *slot, view: *view, qc };
+
+                        self.tx_info
+                            .send(new_instance)
+                            .await
+                            .expect("Failed to send info");
+
+                    },
+                    ConsensusInstance::Commit { slot, view, qc: other_qc } => {},
+                };
             }
         }
 
         let (dissemination_cert, consensus_cert) = self.votes_aggregator.append(vote, &self.committee, &self.current_header)?;
-        let use_dissemination: bool = self.current_header.info_list.is_empty() && dissemination_cert.is_some();
-        let use_consensus: bool = !self.current_header.info_list.is_empty() && consensus_cert.is_some();
+        let use_dissemination: bool = self.current_header.consensus_instances.is_empty() && dissemination_cert.is_some();
+        let use_consensus: bool = !self.current_header.consensus_instances.is_empty() && consensus_cert.is_some();
 
         if use_dissemination {
             //debug!("Assembled {:?}", dissemination_cert.unwrap());
@@ -369,105 +383,60 @@ impl Core {
     }
 
     #[async_recursion]
-    async fn process_info_list(&mut self, header: &Header, info_list: &Vec<Info>) -> DagResult<Vec<(Info, Signature)>> {
+    async fn process_consensus_instances(&mut self, header: &Header, consensus_instances: &Vec<ConsensusInstance>) -> DagResult<Vec<(Digest, Signature)>> {
         //1) Header signature correct => If false, dont need to reply
-        let mut consensus_sigs: Vec<(Info, Signature)> = Vec::new();
+        let mut consensus_sigs: Vec<(Digest, Signature)> = Vec::new();
 
-        for info in info_list {
-            println!("processing info");
-            let prepare_sig = self.process_prepare_info(header, info).await;
-            let confirm_sig = self.process_confirm_info(info.clone()).await;
+        for consensus_instance in consensus_instances {
+            println!("processing instance");
+            match consensus_instance {
+                ConsensusInstance::Prepare { slot, view, ticket, proposals } => {
+                    // TODO: Add validity checks
+                    let has_proposed = self.already_proposed_slots.contains(slot);
+                    if self.name == self.leader_elector.get_leader(slot + 1, 1) && has_proposed {
+                        self.ticket = Ticket::new(Some(header.clone()), None, 1, BTreeMap::new()).await;
+                        if self.enough_coverage(&self.ticket.clone(), self.current_certs.clone()) {
+                            let new_prepare_instance = ConsensusInstance::Prepare { slot: slot + 1, view: 1, ticket: self.ticket.clone(), proposals: self.current_certs.clone() }; 
+                            self.tx_info
+                                .send(new_prepare_instance)
+                                .await
+                                .expect("failed to send info to proposer");
+                        }
+                    }
 
-            match prepare_sig {
-                Some(sig) => {
-                    consensus_sigs.push((info.clone(), sig));
+                    let sig = self.signature_service.request_signature(consensus_instance.digest()).await;
+                    consensus_sigs.push((consensus_instance.digest(), sig));
                 },
-                None => {}
-            }
+                ConsensusInstance::Confirm { slot, view, qc } => {
+                    // TODO: Add validity checks
+                    match self.qcs.get(slot) {
+                        Some(consensus_metadata) => {
+                            match consensus_metadata {
+                                ConsensusInstance::Prepare { slot: other_slot, view: other_view, ticket: other_ticket, proposals: other_proposals } => {},
+                                ConsensusInstance::Confirm { slot: other_slot, view: other_view, qc: other_qc } => {
+                                    if view > other_view {
+                                        self.qcs.insert(*slot, consensus_metadata.clone());
+                                    }
+                                },
+                                ConsensusInstance::Commit { slot: other_slot, view: other_view, qc: other_qc } => {},
+                            }
+                        },
+                        None => {
+                            self.qcs.insert(*slot, consensus_instance.clone());
+                        }
+                    }
 
-            match confirm_sig {
-                Some(sig) => {
-                    consensus_sigs.push((info.clone(), sig));
+                    let sig = self.signature_service.request_signature(consensus_instance.digest()).await;
+                    consensus_sigs.push((consensus_instance.digest(), sig));
                 },
-                None => {}
+                ConsensusInstance::Commit { slot, view, qc } => {
+                    // TODO: Add validity checks
+                    self.committed.insert(*slot, consensus_instance.clone());
+                },
             }
         }
 
         Ok(consensus_sigs)
-    }
-
-
-    // TODO: Add actual validity checks
-    fn is_prepare_valid(&mut self, info: &Info) -> bool {
-        info.prepare_info.is_some()
-    }
-
-    // TODO: Add actual validity checks
-    fn is_confirm_valid(&mut self, info: &Info) -> bool {
-        info.confirm_info.is_some()
-    }
-
-    #[async_recursion]
-    async fn process_prepare_info(&mut self, header: &Header, info: &Info) -> Option<Signature> {
-        let prepare_valid = self.is_prepare_valid(info);
-        if prepare_valid {
-            //self.views[&info.consensus_info.slot] = info.consensus_info.view;
-            //self.timers[info.consensus_info.slot] = Timer::new(5);
-
-            let instance_info = &info.instance_info;
-            let new_instance_info: InstanceInfo = InstanceInfo { slot: instance_info.slot + 1, view: 1 };
-            let has_proposed = self.already_proposed_slots.contains(&instance_info.slot);
-            if self.name == self.leader_elector.get_leader(instance_info.slot + 1, 1) && has_proposed {
-                self.ticket = Ticket::new(Some(header.clone()), None, 1, BTreeMap::new()).await;
-                if self.enough_coverage(&self.ticket.clone(), self.current_certs.clone()) {
-                    let new_prepare_info: PrepareInfo = PrepareInfo { ticket: self.ticket.clone(), proposals: self.current_certs.clone() };
-                    let new_info: Info = Info { instance_info: new_instance_info, prepare_info: Some(new_prepare_info), confirm_info: None };
-                    self.tx_info
-                        .send(new_info)
-                        .await
-                        .expect("failed to send info to proposer");
-                }
-            }
-
-            let sig = self.signature_service.request_signature(info.digest()).await;
-            return Some(sig)
-        }
-        None
-    }
-
-
-    #[async_recursion]
-    async fn process_confirm_info(&mut self, info: Info) -> Option<Signature> {
-        let confirm_valid = self.is_confirm_valid(&info);
-        if confirm_valid {
-            let cert_info = &info.instance_info;
-
-            match info.confirm_info.clone() {
-                Some(confirm_info) => {
-                    if &confirm_info.cert_type == &CertType::Commit {
-                        self.committed.insert(cert_info.slot, confirm_info);
-                    }
-                },
-                None => {}
-            }
-
-            let digest = info.digest();
-
-            match self.qcs.get(&cert_info.slot) {
-                Some(qc_info) => {
-                    if cert_info.view > qc_info.instance_info.view {
-                        self.qcs.insert(cert_info.slot, info);
-                    }
-                },
-                None => {
-                    self.qcs.insert(cert_info.slot, info);
-                }
-            }
-
-            let sig = self.signature_service.request_signature(digest).await;
-            return Some(sig)
-        }
-        None
     }
 
     fn enough_coverage(&mut self, ticket: &Ticket, current_certs: HashMap<PublicKey, Certificate>) -> bool {

@@ -127,19 +127,19 @@ impl Synchronizer {
     /// Returns the parents of a header if we have them all. If at least one parent is missing,
     /// we return an empty vector, synchronize with other nodes, and re-schedule processing
     /// of the header for when we will have all the parents.
-    pub async fn get_parent(&mut self, header: &Header) -> DagResult<(Option<Header>, bool)> {
+    /*pub async fn get_proposal_headers(&mut self, header_info: &Info) -> DagResult<Vec<Header>> {
+        let mut missing: Vec<Digest> = Vec::new();
+        let mut parents: Vec<Header> = Vec::new();
 
-        /*let mut missing = Vec::new();
-        let mut parents = Vec::new();*/
+        let prepare_info = match header_info.prepare_info {
+            Some(prepare) => prepare,
+            None => return Ok(Vec::new()),
+        };
 
-        let mut missing = None;
-        let mut parent = None;
-
-        //if *header == self.genesis_header { return Ok((parents, true))} //Just for unit testing...
-
-        /*for digest in &header.parent_cert_digest {
+        for (pk, cert) in &prepare_info.proposals {
+            let digest = &cert.header_digest;
             if let Some(genesis) = self
-                .genesis
+                .genesis_headers
                 .iter()
                 .find(|(x, _)| x == digest)
                 .map(|(_, x)| x)
@@ -152,39 +152,36 @@ impl Synchronizer {
                 Some(certificate) => parents.push(bincode::deserialize(&certificate)?),
                 None => missing.push(digest.clone()),
             };
-        }*/
-
-        let parent_digest = &header.parent_cert.header_digest;
-
-        if header.parent_cert.header_digest == self.genesis_header.digest() {
-            println!("Parent is genesis");
-            return Ok((parent, false));
         }
 
-        /*if let Some(_genesis) = self
-                .genesis
-                .iter()
-                .find(|(x, _)| x == parent_digest)
-                .map(|(_, x)| x)
-        {
-            parent = Some(self.genesis_header.clone());
-        }*/
-
-        match self.store.read(parent_digest.to_vec()).await? {
-            Some(parent_header) => parent = bincode::deserialize(&parent_header)?,
-            None => missing = Some(parent_digest.clone()),
-        };
-
-        if missing.is_none() {
-            return Ok((parent, false));
+        if missing.is_empty() {
+            return Ok(parents);
         }
 
         self.tx_header_waiter
-            .send(WaiterMessage::SyncParent(missing.unwrap(), header.clone()))
+            .send(WaiterMessage::SyncProposals(missing, header_info.clone()))
             .await
             .expect("Failed to send sync parents request");
-        Ok((None, true))
-    }
+        Ok(Vec::new())
+    }*/
+
+
+    /// Returns the parents of a header if we have them all. If at least one parent is missing,
+    /// we return an empty vector, synchronize with other nodes, and re-schedule processing
+    /// of the header for when we will have all the parents.
+    /*pub async fn get_info(&mut self, info_digest: &Digest) -> DagResult<Option<Info>> {
+        match self.store.read(info_digest.to_vec()).await? {
+            Some(info) => Ok(Some(bincode::deserialize(&info)?)),
+            None => {
+                self.tx_header_waiter
+                    .send(WaiterMessage::SyncInfo(info_digest.clone()))
+                    .await
+                    .expect("Failed to send sync info request");
+                Ok(None)
+            },
+        }
+    }*/
+
 
     /// Check whether we have all the ancestors of the certificate. If we don't, send the certificate to
     /// the `CertificateWaiter` which will trigger re-processing once we have all the missing data.

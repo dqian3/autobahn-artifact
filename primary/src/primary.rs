@@ -6,7 +6,7 @@ use crate::garbage_collector::GarbageCollector;
 use crate::header_waiter::HeaderWaiter;
 use crate::helper::Helper;
 use crate::leader::LeaderElector;
-use crate::messages::{Certificate, Header, Vote, TC, Ticket, PrepareInfo, ConfirmInfo};
+use crate::messages::{Certificate, Header, Vote};
 use crate::payload_receiver::PayloadReceiver;
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
@@ -74,8 +74,6 @@ impl Primary {
         tx_committer: Sender<Certificate>,
         rx_consensus: Receiver<Certificate>,
         tx_sailfish: Sender<Header>,
-        rx_ticket: Receiver<PrepareInfo>,//Receiver<(View, Round, Ticket)>,
-        rx_validation: Receiver<(Header, Vec<(PrepareInfo, bool)>, Vec<(ConfirmInfo, bool)>)>,
         rx_pushdown_cert: Receiver<Certificate>,
         rx_request_header_sync: Receiver<Digest>,
     ) {
@@ -90,7 +88,7 @@ impl Primary {
         let (tx_primary_messages, rx_primary_messages) = channel(CHANNEL_CAPACITY);
         let (tx_cert_requests, rx_cert_requests) = channel(CHANNEL_CAPACITY);
         let (tx_header_requests, rx_header_requests) = channel(CHANNEL_CAPACITY);
-        let (tx_info, rx_info) = channel(CHANNEL_CAPACITY);
+        let (tx_instance, rx_instance) = channel(CHANNEL_CAPACITY);
 
 
         // Write the parameters to the logs.
@@ -168,7 +166,7 @@ impl Primary {
             /* tx_special */ tx_sailfish, 
             rx_pushdown_cert,
             rx_request_header_sync,
-            tx_info,
+            tx_instance,
             LeaderElector::new(committee.clone()),
         );
 
@@ -218,7 +216,7 @@ impl Primary {
             parameters.max_header_delay,
             /* rx_core */ rx_parents,
             /* rx_workers */ rx_our_digests,
-            /* rx_ticket */ rx_info,
+            /* rx_ticket */ rx_instance,
             /* tx_core */ tx_headers,
         );
 

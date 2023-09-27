@@ -96,151 +96,144 @@ impl fmt::Display for Ticket {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, Default)]
-pub struct Info {
-    // The slot and view info
-    pub instance_info: InstanceInfo,
-    // Prepare info
-    pub prepare_info: Option<PrepareInfo>,
-    // Confirm info
-    pub confirm_info: Option<ConfirmInfo>,
+#[derive(Clone, Serialize, Deserialize)]
+pub enum ConsensusInstance {
+    Prepare { slot: Slot, view: View, ticket: Ticket, proposals: HashMap<PublicKey, Certificate> },
+    Confirm { slot: Slot, view: View, qc: QC},
+    Commit { slot: Slot, view: View, qc: QC},
 }
 
-impl Hash for Info {
+impl Hash for ConsensusInstance {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
-        hasher.update(self.instance_info.digest().0);
+        match self {
+            ConsensusInstance::Prepare { slot, view, ticket, proposals } => {
+                hasher.update(slot.to_le_bytes());
+                hasher.update(view.to_le_bytes());
+                hasher.update(ticket.digest().0);
+                // NOTE: Indicates a prepare message
+                hasher.update((0 as u8).to_le_bytes());
+            },
+            ConsensusInstance::Confirm { slot, view, qc } => {
+                hasher.update(slot.to_le_bytes());
+                hasher.update(view.to_le_bytes());
+                hasher.update(qc.digest().0);
+                // NOTE: Indicates a confirm message
+                hasher.update((1 as u8).to_le_bytes());
+            },
+            ConsensusInstance::Commit { slot, view, qc } => {
+                hasher.update(slot.to_le_bytes());
+                hasher.update(view.to_le_bytes());
+                hasher.update(qc.digest().0);
+                // NOTE: Indicates a commit message
+                hasher.update((2 as u8).to_le_bytes());
+            },
+        }
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
 
-impl std::hash::Hash for Info {
+impl std::hash::Hash for ConsensusInstance {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         state.write(&self.digest().0)
     }
 }
 
-impl PartialEq for Info {
+impl PartialEq for ConsensusInstance {
     fn eq(&self, other: &Self) -> bool {
-        self.instance_info == other.instance_info
-    }
-}
-
-impl Eq for Info {}
-
-impl fmt::Debug for Info {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(
-            f,
-            "T{})",
-            self.instance_info.slot,
-        )
-    }
-}
-
-
-impl fmt::Display for Info {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "T{}", self.instance_info.slot)
-    }
-}
-
-
-#[derive(Clone, Serialize, Deserialize, Default)]
-pub struct InstanceInfo {
-    // The slot in the log
-    pub slot: Slot,
-    // The view of the header
-    pub view: View,
-}
-
-impl Hash for InstanceInfo {
-
-    fn digest(&self) -> Digest {
-        let mut hasher = Sha512::new();
-        hasher.update(&self.slot.to_le_bytes());
-        hasher.update(&self.view.to_le_bytes());
-        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
-    }
-
-}
-
-impl PartialEq for InstanceInfo {
-    fn eq(&self, other: &Self) -> bool {
-        self.slot == other.slot && self.view == other.view
-    }
-}
-
-impl fmt::Debug for InstanceInfo {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(
-            f,
-            "CI{},{})",
-            self.slot,
-            self.view,
-        )
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, Default)]
-pub struct PrepareInfo {
-    // The ticket needed to send prepare message
-    pub ticket: Ticket,
-    // The certificates that are proposed
-    pub proposals: HashMap<PublicKey, Certificate>,
-}
-
-impl Hash for PrepareInfo {
-
-    fn digest(&self) -> Digest {
-        let mut hasher = Sha512::new();
-        //hasher.update(&self.consensus_info.slot.to_le_bytes());
-        //hasher.update(&self.consensus_info.view.to_le_bytes());
-        for (x, y) in &self.proposals {
-            //hasher.update(x.to_le_bytes());
-            //hasher.update(y);
+        match self {
+            ConsensusInstance::Prepare { slot, view, ticket, proposals } => {
+                return match other {
+                    ConsensusInstance::Prepare { slot: other_slot, view: other_view, ticket: other_ticket, proposals: other_proposals } => {
+                        slot == other_slot && view == other_view && ticket == other_ticket && proposals == other_proposals
+                    },
+                    _ => false
+                };
+            },
+            ConsensusInstance::Confirm { slot, view, qc } => {
+                return match other {
+                    ConsensusInstance::Confirm { slot: other_slot, view: other_view, qc: other_qc } => {
+                        slot == other_slot && view == other_view && qc == other_qc
+                    },
+                    _ => false
+                };
+            },
+            ConsensusInstance::Commit { slot, view, qc } => {
+                return match other {
+                    ConsensusInstance::Commit { slot: other_slot, view: other_view, qc: other_qc } => {
+                        slot == other_slot && view == other_view && qc == other_qc
+                    },
+                    _ => false
+                };
+            },
         }
-        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
-
 }
 
-impl fmt::Debug for PrepareInfo {
+impl Eq for ConsensusInstance {}
+
+impl fmt::Debug for ConsensusInstance {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(
-            f,
-            "T)",
-        )
+        match self {
+            ConsensusInstance::Prepare { slot, view, ticket, proposals } => {
+                write!(
+                    f,
+                    "T{})",
+                    slot,
+                )
+            },
+
+            ConsensusInstance::Confirm { slot, view, qc } => {
+                write!(
+                    f,
+                    "T{})",
+                    slot,
+                )
+            },
+
+            ConsensusInstance::Commit { slot, view, qc } => {
+                write!(
+                    f,
+                    "T{})",
+                    slot,
+                )
+            },
+
+        }
     }
 }
 
 
-#[derive(Clone, Serialize, Deserialize, Default)]
-pub struct ConfirmInfo {
-    // The QC
-    pub cert: QC,
-    // The prepare/commit QC that was formed previously
-    pub cert_type: CertType,
-}
-
-impl Hash for ConfirmInfo {
-
-    fn digest(&self) -> Digest {
-        let mut hasher = Sha512::new();
-        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
-    }
-
-}
-
-impl fmt::Debug for ConfirmInfo {
+impl fmt::Display for ConsensusInstance {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(
-            f,
-            "",
-        )
+        match self {
+            ConsensusInstance::Prepare { slot, view, ticket, proposals } => {
+                write!(
+                    f,
+                    "T{})",
+                    slot,
+                )
+            },
+
+            ConsensusInstance::Confirm { slot, view, qc } => {
+                write!(
+                    f,
+                    "T{})",
+                    slot,
+                )
+            },
+
+            ConsensusInstance::Commit { slot, view, qc } => {
+                write!(
+                    f,
+                    "T{})",
+                    slot,
+                )
+            },
+
+        }
     }
 }
-
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Header {
@@ -252,7 +245,7 @@ pub struct Header {
     pub signature: Signature,
 
     // Consensus metadata
-    pub info_list: Vec<Info>,
+    pub consensus_instances: Vec<ConsensusInstance>,
     // special parent header
     pub special_parent: Option<Certificate>, //Digest of the header of the special parent.
 }
@@ -267,7 +260,7 @@ impl Header {
         payload: BTreeMap<Digest, WorkerId>,
         parent_cert: Certificate,
         signature_service: &mut SignatureService,
-        info_list: Vec<Info>,
+        consensus_instances: Vec<ConsensusInstance>,
         special_parent: Option<Certificate>,
     ) -> Self {
         let header = Self {
@@ -277,7 +270,7 @@ impl Header {
             parent_cert,
             id: Digest::default(),
             signature: Signature::default(),
-            info_list,
+            consensus_instances,
             special_parent,
         };
         let id = header.digest();
@@ -426,7 +419,7 @@ pub struct Vote {
     pub origin: PublicKey,
     pub author: PublicKey,
     pub signature: Signature,
-    pub consensus_sigs: Vec<(Info, Signature)>,
+    pub consensus_sigs: Vec<(Digest, Signature)>,
 }
 
 impl Vote {
@@ -434,7 +427,7 @@ impl Vote {
         header: &Header,
         author: &PublicKey,
         signature_service: &mut SignatureService,
-        consensus_sigs: Vec<(Info, Signature)>,
+        consensus_sigs: Vec<(Digest, Signature)>,
     ) -> Self {
         let vote = Self {
             id: header.id.clone(),
@@ -489,7 +482,7 @@ impl fmt::Debug for Vote {
 }
 
 impl Vote {
-    pub fn new_from_key(header: Header, consensus_sigs: Vec<(Info, Signature)>, author: PublicKey, secret: &SecretKey) -> Self {
+    pub fn new_from_key(header: Header, consensus_sigs: Vec<(Digest, Signature)>, author: PublicKey, secret: &SecretKey) -> Self {
         let vote = Vote {
             id: header.id.clone(),
             height: header.height(),
@@ -507,14 +500,6 @@ impl PartialEq for Vote {
     fn eq(&self, other: &Self) -> bool {
         self.digest() == other.digest()
     }
-}
-
-#[derive(Clone, Serialize, Deserialize, Default, PartialEq)]
-pub enum CertType {
-    #[default]
-    Normal,
-    Prepare,
-    Commit,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -932,7 +917,7 @@ impl fmt::Debug for AcceptVote {
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct QC {
-    pub info_digest: Digest,
+    pub id: Digest,
     pub votes: Vec<(PublicKey, Signature)>,
 }
 
@@ -995,7 +980,8 @@ impl PartialEq for QC {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Timeout {
     // The slot and view the timeout is for
-    pub consensus_info: InstanceInfo,
+    pub slot: Slot,
+    pub view: View,
     // The highest qc the replica has for its state
     pub high_qc: Certificate,
 
@@ -1005,13 +991,15 @@ pub struct Timeout {
 
 impl Timeout {
     pub async fn new(
-        consensus_info: InstanceInfo,
+        slot: Slot,
+        view: View,
         high_qc: Certificate,
         author: PublicKey,
         mut signature_service: SignatureService,
     ) -> Self {
         let timeout = Self {
-            consensus_info,
+            slot,
+            view,
             high_qc,
             author,
             signature: Signature::default(),
@@ -1060,10 +1048,11 @@ impl fmt::Debug for Timeout {
 }
 
 impl Timeout {
-    pub fn new_from_key(high_qc: Certificate, consensus_info: InstanceInfo, author: PublicKey, secret: &SecretKey) -> Self {
+    pub fn new_from_key(high_qc: Certificate, slot: Slot, view: View, author: PublicKey, secret: &SecretKey) -> Self {
         let timeout = Timeout {
             high_qc,
-            consensus_info,
+            slot,
+            view,
             author,
             signature: Signature::default(),
 
@@ -1085,7 +1074,8 @@ impl PartialEq for Timeout {
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct TC {
-    pub consensus_info: InstanceInfo,
+    pub slot: Slot,
+    pub view: View,
     pub timeouts: Vec<Timeout>,
 }
 
@@ -1098,9 +1088,10 @@ impl PartialEq for TC {
 }
 
 impl TC {
-    pub fn new(committee: &Committee, consensus_info: InstanceInfo, timeouts: Vec<Timeout>) -> Self {
+    pub fn new(committee: &Committee, slot: Slot, view: View, timeouts: Vec<Timeout>) -> Self {
         let tc = TC {
-            consensus_info,
+            slot,
+            view,
             timeouts,
         };
         tc
