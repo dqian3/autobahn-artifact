@@ -1,14 +1,16 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::aggregators::{CertificatesAggregator, VotesAggregator};
+use crate::aggregators::{VotesAggregator, QCMaker};
 //use crate::common::special_header;
 use crate::error::{DagError, DagResult};
-use crate::messages::{Certificate, Header, Vote, Info, PrepareInfo, ConfirmInfo};
-use crate::primary::{PrimaryMessage, Height};
+use crate::leader::LeaderElector;
+use crate::messages::{Certificate, Header, Vote, Info, PrepareInfo, ConfirmInfo, InstanceInfo, TC, Ticket, CertType};
+use crate::primary::{PrimaryMessage, Height, Slot, View};
 use crate::synchronizer::Synchronizer;
+use crate::timer::Timer;
 use async_recursion::async_recursion;
 use bytes::Bytes;
 use config::{Committee, Stake};
-use crypto::Hash as _;
+use crypto::{Hash as _, Signature};
 use crypto::{Digest, PublicKey, SignatureService};
 use log::{debug, error, warn};
 use network::{CancelHandler, ReliableSender};
@@ -59,8 +61,6 @@ pub struct Core {
 
     /// Send valid a quorum of certificates' ids to the `Proposer` (along with their round).
     tx_proposer: Sender<Certificate>,
-    // Receives validated special Headers & proof from the consensus layer.
-    rx_validation: Receiver<(Header, Vec<(PrepareInfo, bool)>, Vec<(ConfirmInfo, bool)>)>,
     tx_special: Sender<Header>,
 
     rx_pushdown_cert: Receiver<Certificate>,
@@ -79,21 +79,32 @@ pub struct Core {
 
     // Keeps track of current headers
     //TODO: Merge current_headers && processing.
-    current_headers: HashMap<Height, HashMap<PublicKey, Header>>, ///HashMap<Digest, Header>, //Note, re-factored this map to do GC cleaner. 
+    //current_headers: HashMap<Height, HashMap<PublicKey, Header>>, ///HashMap<Digest, Header>, //Note, re-factored this map to do GC cleaner. 
     // Hashmap containing votes aggregators
     vote_aggregators: HashMap<Height, HashMap<Digest, Box<VotesAggregator>>>,  //HashMap<Digest, VotesAggregator>,
     // /// Aggregates votes into a certificate.
     votes_aggregator: VotesAggregator,
 
     //votes_aggregators: HashMap<Round, VotesAggregator>, //TODO: To accomodate all to all, the map should be map<round, map<publickey, VotesAggreagtor>>
-    /// Aggregates certificates to use as parents for new headers.
-    certificates_aggregators: HashMap<Height, Box<CertificatesAggregator>>, //Keep the Set of Certs = Edges for multiple rounds. //TODO: for all-to-all need to store CertAggregators per node.
     /// A network sender to send the batches to the other workers.
     network: ReliableSender,
     /// Keeps the cancel handlers of the messages we sent.
     cancel_handlers: HashMap<Height, Vec<CancelHandler>>,
 
-   
+    tips: HashMap<PublicKey, Header>,
+    current_certs: HashMap<PublicKey, Certificate>,
+    views: HashMap<Slot, View>,
+    timers: HashMap<Slot, Timer>,
+    qcs: HashMap<Slot, Info>,
+    qc_makers: HashMap<Info, QCMaker>,
+    tcs: HashMap<Slot, TC>,
+    ticket: Ticket,
+    already_proposed_slots: Vec<Slot>,
+    committed: HashMap<Slot, ConfirmInfo>,
+    tx_info: Sender<Info>,
+    leader_elector: LeaderElector,
+
+
     // GC the vote aggregators and current headers
     // gc_map: HashMap<Round, Digest>,
 }
@@ -115,10 +126,11 @@ impl Core {
         tx_consensus: Sender<Certificate>,
         tx_committer: Sender<Certificate>,
         tx_proposer: Sender<Certificate>,
-        rx_validation: Receiver<(Header, Vec<(PrepareInfo, bool)>, Vec<(ConfirmInfo, bool)>)>,
         tx_special: Sender<Header>,
         rx_pushdown_cert: Receiver<Certificate>,
         rx_request_header_sync: Receiver<Digest>,
+        tx_info: Sender<Info>,
+        leader_elector: LeaderElector,
     ) {
         tokio::spawn(async move {
             Self {
@@ -137,21 +149,29 @@ impl Core {
                 tx_consensus,
                 tx_committer,
                 tx_proposer,
-                rx_validation,
                 tx_special,
                 rx_pushdown_cert,
                 rx_request_header_sync,
+                tx_info,
+                leader_elector,
                 gc_round: 0,
                 last_voted: HashMap::with_capacity(2 * gc_depth as usize),
                 processing: HashMap::with_capacity(2 * gc_depth as usize),
                 current_header: Header::default(),
-                current_headers: HashMap::with_capacity(2 * gc_depth as usize),
                 votes_aggregator: VotesAggregator::new(),
                 vote_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
-                certificates_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 network: ReliableSender::new(),
                 cancel_handlers: HashMap::with_capacity(2 * gc_depth as usize),
-               
+                already_proposed_slots: Vec::new(),
+                tips: HashMap::with_capacity(2 * gc_depth as usize),
+                current_certs: HashMap::with_capacity(2 * gc_depth as usize),
+                views: HashMap::with_capacity(2 * gc_depth as usize),
+                timers: HashMap::with_capacity(2 * gc_depth as usize),
+                qcs: HashMap::with_capacity(2 * gc_depth as usize),
+                qc_makers: HashMap::with_capacity(2 * gc_depth as usize),
+                tcs: HashMap::with_capacity(2 * gc_depth as usize),
+                ticket: Ticket::default(),
+                committed: HashMap::with_capacity(2 * gc_depth as usize),
                 //gc_map: HashMap::with_capacity(2 * gc_depth as usize),
             }
             .run()
@@ -221,6 +241,13 @@ impl Core {
         let bytes = bincode::serialize(&header).expect("Failed to serialize header");
         self.store.write(header.id.to_vec(), bytes).await;
 
+        if header.height() > self.tips.get(&header.origin()).unwrap().height() {
+            self.tips.insert(header.origin(), header.clone());
+        }
+
+        // Process the parent certificate
+        self.process_certificate(header.clone().parent_cert).await;
+
         // Check if we can vote for this header.
         if self
             .last_voted
@@ -228,41 +255,30 @@ impl Core {
             .or_insert_with(HashSet::new)
             .insert(header.author)
         {
-            println!("Voted for the header");
-            self.tx_special
-                .send(header)
-                .await
-                .expect("Failed to send header");
+            let consensus_sigs = self.process_info_list(&header, &header.info_list).await?;
+            let vote = Vote::new(&header, &self.name, &mut self.signature_service, consensus_sigs).await;
+            debug!("Created Vote {:?}", vote);
+
+            if vote.origin == self.name {
+                self.process_vote(vote)
+                    .await
+                    .expect("Failed to process our own vote");
+            } else {
+                let address = self
+                    .committee
+                    .primary(&header.author)
+                    .expect("Author of valid header is not in the committee")
+                    .primary_to_primary;
+                let bytes = bincode::serialize(&PrimaryMessage::Vote(vote))
+                    .expect("Failed to serialize our own vote");
+                let handler = self.network.send(address, Bytes::from(bytes)).await;
+                self.cancel_handlers
+                    .entry(header.height())
+                    .or_insert_with(Vec::new)
+                    .push(handler);
+            }
         }
         Ok(())
-    }
-
-    #[async_recursion]
-    async fn create_vote(&mut self, header: Header, prepare_valids: Vec<(PrepareInfo, bool)>, confirm_valids: Vec<(ConfirmInfo, bool)>) -> DagResult<()>{ 
-         // Make a vote and send it to the header's creator.
-         let vote = Vote::new(&header, &self.name, &mut self.signature_service, prepare_valids, confirm_valids).await;
-         debug!("Created Vote {:?}", vote);
-
-         if vote.origin == self.name {
-             self.process_vote(vote)
-                 .await
-                 .expect("Failed to process our own vote");
-         } else {
-             let address = self
-                 .committee
-                 .primary(&header.author)
-                 .expect("Author of valid header is not in the committee")
-                 .primary_to_primary;
-             let bytes = bincode::serialize(&PrimaryMessage::Vote(vote))
-                 .expect("Failed to serialize our own vote");
-             let handler = self.network.send(address, Bytes::from(bytes)).await;    // TODO: For special block: May want to use all to all broadcast for replies.
-             self.cancel_handlers
-                 .entry(header.height())
-                 .or_insert_with(Vec::new)
-                 .push(handler);
-         }
-
-         Ok(())
     }
 
     #[async_recursion]
@@ -270,14 +286,49 @@ impl Core {
         debug!("Processing Vote {:?}", vote);
         println!("processing the vote");
 
-        // TODO: Handle invalidated case
-        if let (Some(certificate), invalidated_certificate) = self.votes_aggregator.append(vote, &self.committee, &self.current_header)? { 
-            debug!("Assembled {:?}", certificate);
-            self.process_certificate(certificate)
+        for (info, sig) in vote.consensus_sigs.iter() {
+            match self.qc_makers.get_mut(&info) {
+                Some(qc_maker) => {
+                    let cert_type = match &info.prepare_info {
+                        Some(_) => CertType::Prepare,
+                        None => CertType::Commit,
+                    };
+                    let slot = info.instance_info.slot;
+                    let view = info.instance_info.view;
+
+                    if let Some(qc) = qc_maker.append(vote.origin, (info.clone(), sig.clone()), &self.committee)? {
+                        let confirm_info = ConfirmInfo { cert: qc, cert_type };
+                        let new_info: Info = Info { instance_info: InstanceInfo { slot, view }, prepare_info: None, confirm_info: Some(confirm_info) };
+                        // TODO: Tokio channel to send info to proposer
+                        self.tx_info
+                            .send(new_info)
+                            .await
+                            .expect("Failed to send info");
+                    }
+                },
+                None => {}
+            }
+        }
+
+        let (dissemination_cert, consensus_cert) = self.votes_aggregator.append(vote, &self.committee, &self.current_header)?;
+        let use_dissemination: bool = self.current_header.info_list.is_empty() && dissemination_cert.is_some();
+        let use_consensus: bool = !self.current_header.info_list.is_empty() && consensus_cert.is_some();
+
+        if use_dissemination {
+            //debug!("Assembled {:?}", dissemination_cert.unwrap());
+            self.process_certificate(dissemination_cert.unwrap())
                 .await
                 .expect("Failed to process valid certificate");
         }
 
+        if use_consensus {
+            //debug!("Assembled {:?}", consensus_cert.unwrap());
+            self.process_certificate(consensus_cert.unwrap())
+                .await
+                .expect("Failed to process valid certificate");
+        }
+
+        // TODO: Handle invalidated case
         Ok(())
     }
     
@@ -294,10 +345,16 @@ impl Core {
         if certificate.origin() == self.name {
             // Send it to the `Proposer`.
             self.tx_proposer
-                .send(certificate)
+                .send(certificate.clone())
                 .await
                 .expect("Failed to send certificate");
         }
+
+
+        if certificate.height() > self.current_certs.get(&certificate.origin()).unwrap().height() {
+            self.current_certs.insert(certificate.origin(), certificate.clone());
+        }
+
 
         //forward cert to Consensus Dag view. NOTE: Forwards cert with whatever special_valids are available. This might not be the ones we use for a special block that is passed up
         //Currently this is safe/compatible because neither votes, norspecial_valids are part of the cert digest and equality definition (I consider special_valids to be "extra" info of the signatures)
@@ -309,6 +366,116 @@ impl Core {
                 .expect("Failed to send certificate to committer");*/
         
         Ok(())
+    }
+
+    #[async_recursion]
+    async fn process_info_list(&mut self, header: &Header, info_list: &Vec<Info>) -> DagResult<Vec<(Info, Signature)>> {
+        //1) Header signature correct => If false, dont need to reply
+        let mut consensus_sigs: Vec<(Info, Signature)> = Vec::new();
+
+        for info in info_list {
+            println!("processing info");
+            let prepare_sig = self.process_prepare_info(header, info).await;
+            let confirm_sig = self.process_confirm_info(info.clone()).await;
+
+            match prepare_sig {
+                Some(sig) => {
+                    consensus_sigs.push((info.clone(), sig));
+                },
+                None => {}
+            }
+
+            match confirm_sig {
+                Some(sig) => {
+                    consensus_sigs.push((info.clone(), sig));
+                },
+                None => {}
+            }
+        }
+
+        Ok(consensus_sigs)
+    }
+
+
+    // TODO: Add actual validity checks
+    fn is_prepare_valid(&mut self, info: &Info) -> bool {
+        info.prepare_info.is_some()
+    }
+
+    // TODO: Add actual validity checks
+    fn is_confirm_valid(&mut self, info: &Info) -> bool {
+        info.confirm_info.is_some()
+    }
+
+    #[async_recursion]
+    async fn process_prepare_info(&mut self, header: &Header, info: &Info) -> Option<Signature> {
+        let prepare_valid = self.is_prepare_valid(info);
+        if prepare_valid {
+            //self.views[&info.consensus_info.slot] = info.consensus_info.view;
+            //self.timers[info.consensus_info.slot] = Timer::new(5);
+
+            let instance_info = &info.instance_info;
+            let new_instance_info: InstanceInfo = InstanceInfo { slot: instance_info.slot + 1, view: 1 };
+            let has_proposed = self.already_proposed_slots.contains(&instance_info.slot);
+            if self.name == self.leader_elector.get_leader(instance_info.slot + 1, 1) && has_proposed {
+                self.ticket = Ticket::new(Some(header.clone()), None, 1, BTreeMap::new()).await;
+                if self.enough_coverage(&self.ticket.clone(), self.current_certs.clone()) {
+                    let new_prepare_info: PrepareInfo = PrepareInfo { ticket: self.ticket.clone(), proposals: self.current_certs.clone() };
+                    let new_info: Info = Info { instance_info: new_instance_info, prepare_info: Some(new_prepare_info), confirm_info: None };
+                    self.tx_info
+                        .send(new_info)
+                        .await
+                        .expect("failed to send info to proposer");
+                }
+            }
+
+            let sig = self.signature_service.request_signature(info.digest()).await;
+            return Some(sig)
+        }
+        None
+    }
+
+
+    #[async_recursion]
+    async fn process_confirm_info(&mut self, info: Info) -> Option<Signature> {
+        let confirm_valid = self.is_confirm_valid(&info);
+        if confirm_valid {
+            let cert_info = &info.instance_info;
+
+            match info.confirm_info.clone() {
+                Some(confirm_info) => {
+                    if &confirm_info.cert_type == &CertType::Commit {
+                        self.committed.insert(cert_info.slot, confirm_info);
+                    }
+                },
+                None => {}
+            }
+
+            let digest = info.digest();
+
+            match self.qcs.get(&cert_info.slot) {
+                Some(qc_info) => {
+                    if cert_info.view > qc_info.instance_info.view {
+                        self.qcs.insert(cert_info.slot, info);
+                    }
+                },
+                None => {
+                    self.qcs.insert(cert_info.slot, info);
+                }
+            }
+
+            let sig = self.signature_service.request_signature(digest).await;
+            return Some(sig)
+        }
+        None
+    }
+
+    fn enough_coverage(&mut self, ticket: &Ticket, current_certs: HashMap<PublicKey, Certificate>) -> bool {
+        let new_tips: HashMap<&PublicKey, &Certificate> = current_certs.iter()
+            .filter(|(pk, cert)| cert.height() > ticket.proposals.get(&pk).unwrap().height())
+            .collect();
+        
+        new_tips.len() as u32 >= self.committee.quorum_threshold()
     }
 
     fn sanitize_header(&mut self, header: &Header) -> DagResult<()> {
@@ -443,7 +610,7 @@ impl Core {
                 Some(header) = self.rx_header_waiter.recv() => self.process_header(header).await,
 
                 //Loopback for special headers that were validated by consensus layer.
-                Some((header, prepare_valids, confirm_valids)) = self.rx_validation.recv() => self.create_vote(header, prepare_valids, confirm_valids).await,               
+                //Some((header, consensus_sigs)) = self.rx_validation.recv() => self.create_vote(header, consensus_sigs).await,               
                 //i.e. core requests validation from consensus (check if ticket valid; wait to receive ticket if we don't have it yet -- should arrive: using all to all or forwarding)
 
                 Some(header_digest) = self.rx_request_header_sync.recv() => self.synchronizer.fetch_header(header_digest).await,
@@ -473,10 +640,10 @@ impl Core {
                 self.last_voted.retain(|k, _| k >= &gc_round);
                 self.processing.retain(|k, _| k >= &gc_round);
 
-                self.current_headers.retain(|k, _| k >= &gc_round);
+                //self.current_headers.retain(|k, _| k >= &gc_round);
                 self.vote_aggregators.retain(|k, _| k >= &gc_round);
 
-                self.certificates_aggregators.retain(|k, _| k >= &gc_round);
+                //self.certificates_aggregators.retain(|k, _| k >= &gc_round);
                 self.cancel_handlers.retain(|k, _| k >= &gc_round);
                 self.gc_round = gc_round;
                 debug!("GC round moved to {}", self.gc_round);

@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 
 // Copyright(C) Facebook, Inc. and its affiliates.
 use super::*;
-use crate::{common::{committee, keys}, messages::{Vote, Ticket, ConsensusInfo}};
+use crate::{common::{committee, keys}, messages::{Vote, Ticket, InstanceInfo}};
 use tokio::sync::mpsc::channel;
 
 #[tokio::test]
@@ -31,7 +31,7 @@ async fn propose_empty() {
 
     // Ensure the proposer makes a correct empty header.
     let header = rx_headers.recv().await.unwrap();
-    assert_eq!(header.info_list.is_empty(), true);
+    assert_eq!(header.prepare_info_list.is_empty(), true);
     assert_eq!(header.height, 1);
     assert!(header.payload.is_empty());
     assert!(header.verify(&committee()).is_ok());
@@ -70,7 +70,7 @@ async fn propose_payload() {
 
     // Ensure the proposer makes a correct header from the provided payload.
     let header = rx_headers.recv().await.unwrap();
-    assert_eq!(header.info_list.is_empty(), true);
+    assert_eq!(header.prepare_info_list.is_empty(), true);
     assert_eq!(header.height, 1);
     assert_eq!(header.payload.get(&digest), Some(&worker_id));
     assert!(header.verify(&committee()).is_ok());
@@ -110,7 +110,7 @@ async fn propose_normal() {
     // Ensure the proposer makes a correct header from the provided payload.
     let header = rx_headers.recv().await.unwrap();
 
-    assert_eq!(header.info_list.is_empty(), true);
+    assert_eq!(header.prepare_info_list.is_empty(), true);
     assert_eq!(header.height, 1);
     assert_eq!(header.payload.get(&digest), Some(&worker_id));
     assert!(header.verify(&committee()).is_ok());
@@ -134,7 +134,7 @@ async fn propose_normal() {
 
     let header1 = rx_headers.recv().await.unwrap();
 
-    assert_eq!(header1.info_list.is_empty(), true);
+    assert_eq!(header1.prepare_info_list.is_empty(), true);
     assert_eq!(header1.height, 2);
     assert_eq!(header1.payload.get(&digest), Some(&worker_id));
     assert!(header1.verify(&committee()).is_ok());
@@ -169,7 +169,7 @@ async fn propose_special_ticket_first() {
     let gen_header = Header::genesis(&committee());
 
     let ticket: Ticket = Ticket::new(Some(gen_header), None, 1, BTreeMap::new()).await;
-    let consensus_info: ConsensusInfo = ConsensusInfo { slot: 2, view: 1 };
+    let consensus_info: InstanceInfo = InstanceInfo { slot: 2, view: 1 };
     let prepare_info: PrepareInfo = PrepareInfo { consensus_info, ticket, proposals: HashMap::new() };
 
     tx_ticket
@@ -190,9 +190,9 @@ async fn propose_special_ticket_first() {
     // Ensure the proposer makes a correct special header from the provided payload.
     let header = rx_headers.recv().await.unwrap();
    
-    assert_eq!(header.info_list.is_empty(), false);
-    assert_eq!(header.info_list.get(0).unwrap().consensus_info.slot, 2);
-    assert_eq!(header.info_list.get(0).unwrap().consensus_info.view, 1);
+    assert_eq!(header.prepare_info_list.is_empty(), false);
+    assert_eq!(header.prepare_info_list.get(0).unwrap().consensus_info.slot, 2);
+    assert_eq!(header.prepare_info_list.get(0).unwrap().consensus_info.view, 1);
     
     assert_eq!(header.special_parent.is_none(), true);    
     assert_eq!(header.height, 1);

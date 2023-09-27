@@ -12,13 +12,13 @@ use crate::timer::Timer;
 use async_recursion::async_recursion;
 use bytes::Bytes;
 use config::{Committee, Stake};
-use crypto::{Hash as _, CryptoError};
+use crypto::{Hash as _, CryptoError, Signature};
 use crypto::{PublicKey, SignatureService, Digest};
 use futures::FutureExt;
 use log::{debug, error, warn};
 use network::SimpleSender;
 use primary::ensure;
-use primary::messages::{Header, Certificate, Timeout, TC, Ticket, Vote, Info, CertType, PrepareInfo, ConfirmInfo, ConsensusInfo};
+use primary::messages::{Header, Certificate, Timeout, TC, Ticket, Vote, Info, CertType, PrepareInfo, ConfirmInfo, InstanceInfo};
 use primary::error::{ConsensusError, ConsensusResult};
 use std::cmp::max;
 use std::collections::{VecDeque, HashSet, BTreeMap};
@@ -72,7 +72,7 @@ pub struct Core {
     current_certs: HashMap<PublicKey, Certificate>,
     views: HashMap<Slot, View>,
     timers: HashMap<Slot, Timer>,
-    qcs: HashMap<Slot, (Certificate, ConfirmInfo)>,
+    qcs: HashMap<Slot, Info>,
     tcs: HashMap<Slot, TC>,
     ticket: Ticket,
     already_proposed_slots: Vec<Slot>,
@@ -471,20 +471,21 @@ impl Core {
         true
     }
 
-    async fn process_prepare_info(&mut self, header: Header, info: PrepareInfo) {
+    async fn process_prepare_info(&mut self, header: Header, info: PrepareInfo, instance_info: InstanceInfo) {
         let prepare_valid = self.is_prepare_valid(info.clone());
         if prepare_valid {
             //self.views[&info.consensus_info.slot] = info.consensus_info.view;
             //self.timers[info.consensus_info.slot] = Timer::new(5);
 
-            let new_consensus_info: ConsensusInfo = ConsensusInfo { slot: info.consensus_info.slot, view: 1 };
-            let has_proposed = self.already_proposed_slots.contains(&info.consensus_info.slot);
-            if self.name == self.leader_elector.get_leader(info.consensus_info.slot + 1, 1) && has_proposed {
+            let new_instance_info: InstanceInfo = InstanceInfo { slot: instance_info.slot + 1, view: 1 };
+            let has_proposed = self.already_proposed_slots.contains(&instance_info.slot);
+            if self.name == self.leader_elector.get_leader(instance_info.slot + 1, 1) && has_proposed {
                 self.ticket = Ticket::new(Some(header.clone()), None, 1, BTreeMap::new()).await;
                 if self.enough_coverage(&self.ticket.clone(), self.current_certs.clone()) {
-                    let new_prepare_info: PrepareInfo = PrepareInfo { consensus_info: new_consensus_info, ticket: self.ticket.clone(), proposals: self.current_certs.clone() };
+                    let new_prepare_info: PrepareInfo = PrepareInfo { ticket: self.ticket.clone(), proposals: self.current_certs.clone() };
+                    let new_info: Info = Info { instance_info: new_instance_info, prepare_info: Some(new_prepare_info), confirm_info: None };
                     self.tx_info
-                        .send(new_prepare_info)
+                        .send(new_info)
                         .await
                         .expect("failed to send info to proposer");
                 }
@@ -493,10 +494,10 @@ impl Core {
     }
 
 
-    fn process_confirm_info(&mut self, certificate: Certificate, info: ConfirmInfo) {
+    fn process_confirm_info(&mut self, certificate: Certificate, info: ConfirmInfo, instance_info: InstanceInfo) {
         let confirm_valid = self.is_confirm_valid(info.clone());
         if confirm_valid {
-            let cert_info = info.consensus_info.clone();
+            let cert_info = instance_info;
             match self.qcs.get(&cert_info.slot) {
                 Some((_, qc_info)) => {
                     if cert_info.view > qc_info.consensus_info.view {
@@ -526,7 +527,6 @@ impl Core {
     #[async_recursion]
     async fn process_special_header(&mut self, header: Header) -> ConsensusResult<()> {
         //1) Header signature correct => If false, dont need to reply
-       
         header.verify(&self.committee)?;
         header.parent_cert.verify(&self.committee)?;
 
@@ -541,33 +541,34 @@ impl Core {
             return Ok(());
         }
 
-        let stake: Stake = header.parent_cert.votes.iter().map(|(pk, _)| self.committee.stake(pk)).sum();
-        if header.parent_cert.height() > 0 && stake < self.committee.quorum_threshold() {
-            return Ok(());
-        }
-
         self.tips.insert(header.origin(), header.clone());
         self.current_certs.insert(header.origin(), header.parent_cert.clone());
 
-        let mut prepare_valids: Vec<(PrepareInfo, bool)> = Vec::new();
-        let mut confirm_valids: Vec<(ConfirmInfo, bool)> = Vec::new();
+        let mut consensus_sigs: Vec<(Info, Signature)> = Vec::new();
 
-        for info in header.prepare_info_list.clone() {
-            println!("processing prepare info");
-            self.process_prepare_info(header.clone(), info.clone()).await;
-            prepare_valids.push((info.clone(), self.is_prepare_valid(info.clone())));
+        for info in header.info_list.clone() {
+            println!("processing info");
+            match info.prepare_info {
+                Some(prepare_info) => {
+                    self.process_prepare_info(header.clone(), prepare_info.clone(), info.instance_info).await;
+                    let sig = self.signature_service.request_signature(info.digest());
+                    consensus_sigs.push((info.clone(), sig));
+                },
+                None => {}
+            }
+
+            match info.confirm_info {
+                Some(confirm_info) => {
+                    self.process_confirm_info(confirm_info.clone(), info.clone(), info.instance_info);
+                    let sig = self.signature_service.request_signature(info.digest());
+                    consensus_sigs.push((info.clone(), sig));
+                },
+                None => {}
+            }
         }
-
-        for info in header.parent_cert.confirm_info_list.clone() {
-            println!("processing confirm info");
-            self.process_confirm_info(header.parent_cert.clone(), info.clone());
-            confirm_valids.push((info.clone(), self.is_confirm_valid(info.clone())));
-        }
-
-        println!("sending validation");
 
         self.tx_validation
-            .send((header, prepare_valids, confirm_valids))
+            .send((header, consensus_sigs))
             .await
             .expect("Failed to send payload");
      

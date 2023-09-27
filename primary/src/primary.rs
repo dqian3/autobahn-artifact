@@ -5,6 +5,7 @@ use crate::error::DagError;
 use crate::garbage_collector::GarbageCollector;
 use crate::header_waiter::HeaderWaiter;
 use crate::helper::Helper;
+use crate::leader::LeaderElector;
 use crate::messages::{Certificate, Header, Vote, TC, Ticket, PrepareInfo, ConfirmInfo};
 use crate::payload_receiver::PayloadReceiver;
 use crate::proposer::Proposer;
@@ -89,6 +90,8 @@ impl Primary {
         let (tx_primary_messages, rx_primary_messages) = channel(CHANNEL_CAPACITY);
         let (tx_cert_requests, rx_cert_requests) = channel(CHANNEL_CAPACITY);
         let (tx_header_requests, rx_header_requests) = channel(CHANNEL_CAPACITY);
+        let (tx_info, rx_info) = channel(CHANNEL_CAPACITY);
+
 
         // Write the parameters to the logs.
         // NOTE: These log entries are needed to compute performance.
@@ -162,10 +165,11 @@ impl Primary {
             tx_consensus,
             tx_committer,
             /* tx_proposer */ tx_parents,
-            rx_validation, 
             /* tx_special */ tx_sailfish, 
             rx_pushdown_cert,
             rx_request_header_sync,
+            tx_info,
+            LeaderElector::new(committee.clone()),
         );
 
         // Keeps track of the latest consensus round and allows other tasks to clean up their their internal state
@@ -214,7 +218,7 @@ impl Primary {
             parameters.max_header_delay,
             /* rx_core */ rx_parents,
             /* rx_workers */ rx_our_digests,
-            /* rx_ticket */ rx_ticket,
+            /* rx_ticket */ rx_info,
             /* tx_core */ tx_headers,
         );
 

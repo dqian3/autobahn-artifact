@@ -7,11 +7,13 @@ mod core;
 mod garbage_collector;
 mod header_waiter;
 mod helper;
+pub mod leader;
 pub mod messages;
 mod payload_receiver;
 mod primary;
 mod proposer;
 mod synchronizer;
+pub mod timer;
 
 #[cfg(test)]
 #[path = "tests/common.rs"]

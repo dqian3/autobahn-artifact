@@ -110,7 +110,7 @@ async fn process_special_header() {
     //let vote = Vote::new_from_key(block.digest(), block.view, public_key, &secret_key);
 
     let ticket: Ticket = Ticket { header: Some(Header::genesis(&committee)), tc: None, slot: 0, proposals: BTreeMap::new() };
-    let prepare_info: PrepareInfo = PrepareInfo { consensus_info: ConsensusInfo { slot: 1, view: 1 }, ticket, proposals: HashMap::new() };
+    let prepare_info: PrepareInfo = PrepareInfo { consensus_info: InstanceInfo { slot: 1, view: 1 }, ticket, proposals: HashMap::new() };
     let info_list = vec![prepare_info.clone()];
 
     let header = Header {author: public_key_1, height: 2, payload: BTreeMap::new(), parent_cert: Certificate::genesis_cert(&committee),
@@ -159,7 +159,7 @@ async fn process_special_cert() {
     //let vote = Vote::new_from_key(block.digest(), block.view, public_key, &secret_key);
 
     let ticket: Ticket = Ticket { header: Some(Header::genesis(&committee)), tc: None, slot: 0, proposals: BTreeMap::new() };
-    let prepare_info: PrepareInfo = PrepareInfo { consensus_info: ConsensusInfo { slot: 1, view: 1 }, ticket, proposals: HashMap::new() };
+    let prepare_info: PrepareInfo = PrepareInfo { consensus_info: InstanceInfo { slot: 1, view: 1 }, ticket, proposals: HashMap::new() };
     let info_list = vec![prepare_info.clone()];
 
     let header = Header {author: public_key_1, height: 2, payload: BTreeMap::new(), parent_cert: Certificate::genesis_cert(&committee),
@@ -169,7 +169,7 @@ async fn process_special_cert() {
     let signature = Signature::new(&id, &secret_key_1);
 
     let head = Header {id, signature, ..header};
-    let confirm_info: ConfirmInfo = ConfirmInfo { consensus_info: ConsensusInfo { slot: 1, view: 1 }, cert_type: CertType::Prepare };
+    let confirm_info: ConfirmInfo = ConfirmInfo { consensus_info: InstanceInfo { slot: 1, view: 1 }, cert_type: CertType::Prepare };
 
     let votes: Vec<_> = keys()
         .iter()
