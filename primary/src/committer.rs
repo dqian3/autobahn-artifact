@@ -1,5 +1,5 @@
 use crate::error::DagResult;
-use crate::primary::CHANNEL_CAPACITY;
+use crate::primary::{CHANNEL_CAPACITY, Slot};
 use crate::{Height, Certificate, Header};
 //use crate::error::{ConsensusError, ConsensusResult};
 use config::Committee;
@@ -30,6 +30,10 @@ struct State {
     /// Keeps the latest committed certificate (and its parents) for every authority. Anything older
     /// must be regularly cleaned up through the function `update`.
     dag: Dag,
+    // Log containing slots and committed certificates
+    log: HashMap<Slot, Vec<Header>>,
+    // The last executed slot
+    last_executed_slot: Slot,
 }
 
 impl State {
@@ -43,6 +47,8 @@ impl State {
             last_committed_round: 0,
             last_committed: genesis.iter().map(|(x, (_, y))| (*x, y.height())).collect(),
             dag: [(0, genesis)].iter().cloned().collect(),
+            log: HashMap::new(),
+            last_executed_slot: 0,
         }
     }
 
@@ -69,6 +75,7 @@ pub struct Committer {
     gc_depth: Height,
     rx_mempool: Receiver<Certificate>,
     rx_deliver: Receiver<Certificate>,
+    rx_commit_instance: Receiver<(Slot, Vec<Header>)>,
     tx_output: Sender<Header>,
     genesis: Vec<Certificate>,
 }
@@ -80,6 +87,7 @@ impl Committer {
         gc_depth: Height,
         rx_mempool: Receiver<Certificate>,
         rx_commit: Receiver<Certificate>,
+        rx_commit_instance: Receiver<(Slot, Vec<Header>)>,
         tx_output: Sender<Header>,
     ) {
         let (tx_deliver, rx_deliver) = channel(CHANNEL_CAPACITY);
@@ -101,6 +109,7 @@ impl Committer {
                 gc_depth,
                 rx_mempool,
                 rx_deliver,
+                rx_commit_instance,
                 tx_output,
                 genesis,
             }
@@ -122,6 +131,33 @@ impl Committer {
                         (certificate.digest(), certificate.clone()),
                     );
                 },
+                Some((slot, headers)) = self.rx_commit_instance.recv() => {
+                    if slot <= state.last_executed_slot {
+                        debug!("Already committed slot {}", slot);
+                        continue;
+                    }
+                    state.log.insert(slot, headers);
+                    while state.log.contains_key(&(state.last_executed_slot + 1)) {
+                        // Print the committed sequence in the right order.
+                        for header in state.log.get(&slot).unwrap() {
+                            info!("Committed {}", header);
+
+                            #[cfg(feature = "benchmark")]
+                            for digest in header.payload.keys() {
+                                // NOTE: This log entry is used to compute performance.
+                                info!("Committed {} -> {:?}", header, digest);
+                            }
+                            debug!("Finished Commit");
+                            // Output the block to the top-level application.
+                            if let Err(e) = self.tx_output.send(header.clone()).await {
+                                 debug!("Failed to send block through the output channel: {}", e);
+                            }
+                            debug!("Finish upcall");
+                        }
+
+                        state.last_executed_slot += 1;
+                    }
+                }
                 Some(certificate) = self.rx_deliver.recv() => {
                     debug!("Processing Delivered Commit {:?}", certificate);
 

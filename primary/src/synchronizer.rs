@@ -1,14 +1,14 @@
-use crate::DagError;
+use crate::{DagError, Height};
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::DagResult;
 use crate::header_waiter::WaiterMessage;
-use crate::messages::{Certificate, Header};
+use crate::messages::{Certificate, Header, ConsensusInstance};
 use config::Committee;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
 use std::collections::HashMap;
 use store::Store;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{Sender, Receiver};
 
 /// The `Synchronizer` checks if we have all batches and parents referenced by a header. If we don't, it sends
 /// a command to the `Waiter` to request the missing data.
@@ -274,5 +274,51 @@ impl Synchronizer {
             .await
             .expect("Failed to send sync special parent request");
         Ok((None, false))
+    }
+
+    pub async fn get_header(&mut self, header_digest: Digest, author: &PublicKey, height: &Height, consensus_instance: &ConsensusInstance) -> DagResult<Option<Header>> {
+        if header_digest == self.genesis_header.digest() {
+            return Ok(Some(self.genesis_header.clone()));
+        }
+
+        match self.store.read(header_digest.to_vec()).await? {
+            Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
+            None => {
+                if let Err(e) = self.tx_header_waiter.send(WaiterMessage::SyncParent(header_digest, *author, *height, consensus_instance.clone())).await {
+                    panic!("Failed to send request to synchronizer: {}", e);
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    pub async fn get_ancestors(
+        &mut self,
+        header_digest: Digest,
+        author: &PublicKey,
+        height: &Height,
+        consensus_instance: &ConsensusInstance,
+    ) -> DagResult<Vec<Header>> {
+        let mut ancestors: Vec<Header> = Vec::new();
+        let mut parent_header: Option<Header> = self.get_header(header_digest.clone(), author, height, consensus_instance).await?;
+        
+        while parent_header.as_mut().is_some() {
+            let parent_digest = parent_header.as_mut().unwrap().parent_cert.header_digest.clone();
+            let parent_author = (parent_header.as_mut()).unwrap().parent_cert.author;
+            let parent_height = (parent_header.as_mut()).unwrap().parent_cert.height;
+
+            ancestors.push(parent_header.clone().unwrap());
+            parent_header = self.get_header(parent_digest, &parent_author, &parent_height, consensus_instance).await?;
+            match parent_header.as_mut() {
+                Some(parent) => {
+                    if parent.digest() == self.genesis_header.digest() {
+                        return Ok(ancestors);
+                    }
+                },
+                None => {},
+            };
+        }
+
+        Ok(Vec::new())
     }
 }

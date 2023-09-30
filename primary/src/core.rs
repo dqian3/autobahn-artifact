@@ -50,6 +50,8 @@ pub struct Core {
     rx_primaries: Receiver<PrimaryMessage>,
     /// Receives loopback headers from the `HeaderWaiter`.
     rx_header_waiter: Receiver<Header>,
+    /// Receives loopback instances from the 'HeaderWaiter'
+    rx_header_waiter_instances: Receiver<ConsensusInstance>,
     /// Receives loopback certificates from the `CertificateWaiter`.
     rx_certificate_waiter: Receiver<Certificate>,
     /// Receives our newly created headers from the `Proposer`.
@@ -57,7 +59,7 @@ pub struct Core {
     /// Output special certificates to the consensus layer.
     tx_consensus: Sender<Certificate>,
     // Output all certificates to the consensus Dag view
-    tx_committer: Sender<Certificate>,
+    tx_committer: Sender<(Slot, Vec<Header>)>,
 
     /// Send valid a quorum of certificates' ids to the `Proposer` (along with their round).
     tx_proposer: Sender<Certificate>,
@@ -122,10 +124,11 @@ impl Core {
         gc_depth: Height,
         rx_primaries: Receiver<PrimaryMessage>,
         rx_header_waiter: Receiver<Header>,
+        rx_header_waiter_instances: Receiver<ConsensusInstance>,
         rx_certificate_waiter: Receiver<Certificate>,
         rx_proposer: Receiver<Header>,
         tx_consensus: Sender<Certificate>,
-        tx_committer: Sender<Certificate>,
+        tx_committer: Sender<(Slot, Vec<Header>)>,
         tx_proposer: Sender<Certificate>,
         tx_special: Sender<Header>,
         rx_pushdown_cert: Receiver<Certificate>,
@@ -145,6 +148,7 @@ impl Core {
                 gc_depth,
                 rx_primaries,
                 rx_header_waiter,
+                rx_header_waiter_instances,
                 rx_certificate_waiter,
                 rx_proposer,
                 tx_consensus,
@@ -248,7 +252,7 @@ impl Core {
         }
 
         // Process the parent certificate
-        self.process_certificate(header.clone().parent_cert).await;
+        self.process_certificate(header.clone().parent_cert).await?;
 
         // Check if we can vote for this header.
         if self
@@ -301,8 +305,8 @@ impl Core {
             if let Some(qc) = qc_maker.append(vote.origin, (digest.clone(), sig.clone()), &self.committee)? {
                 let current_instance = self.current_consensus_instances.get(&digest).unwrap();
                 match current_instance {
-                    ConsensusInstance::Prepare { slot, view, ticket, proposals } => {
-                        let new_instance = ConsensusInstance::Confirm { slot: *slot, view: *view, qc };
+                    ConsensusInstance::Prepare { slot, view, ticket: _, proposals } => {
+                        let new_instance = ConsensusInstance::Confirm { slot: *slot, view: *view, qc, proposals: proposals.clone() };
 
                         self.tx_info
                             .send(new_instance)
@@ -310,8 +314,8 @@ impl Core {
                             .expect("Failed to send info");
 
                     },
-                    ConsensusInstance::Confirm { slot, view, qc: other_qc} => {
-                        let new_instance = ConsensusInstance::Commit { slot: *slot, view: *view, qc };
+                    ConsensusInstance::Confirm { slot, view, qc: _, proposals} => {
+                        let new_instance = ConsensusInstance::Commit { slot: *slot, view: *view, qc, proposals: proposals.clone() };
 
                         self.tx_info
                             .send(new_instance)
@@ -319,7 +323,7 @@ impl Core {
                             .expect("Failed to send info");
 
                     },
-                    ConsensusInstance::Commit { slot, view, qc: other_qc } => {},
+                    ConsensusInstance::Commit { slot: _, view: _, qc: _, proposals: _} => {},
                 };
             }
         }
@@ -390,7 +394,7 @@ impl Core {
         for consensus_instance in consensus_instances {
             println!("processing instance");
             match consensus_instance {
-                ConsensusInstance::Prepare { slot, view, ticket, proposals } => {
+                ConsensusInstance::Prepare { slot, view: _, ticket: _, proposals: _ } => {
                     // TODO: Add validity checks
                     let has_proposed = self.already_proposed_slots.contains(slot);
                     if self.name == self.leader_elector.get_leader(slot + 1, 1) && has_proposed {
@@ -407,18 +411,17 @@ impl Core {
                     let sig = self.signature_service.request_signature(consensus_instance.digest()).await;
                     consensus_sigs.push((consensus_instance.digest(), sig));
                 },
-                ConsensusInstance::Confirm { slot, view, qc } => {
+                ConsensusInstance::Confirm { slot, view, qc: _, proposals: _ } => {
                     // TODO: Add validity checks
                     match self.qcs.get(slot) {
                         Some(consensus_metadata) => {
                             match consensus_metadata {
-                                ConsensusInstance::Prepare { slot: other_slot, view: other_view, ticket: other_ticket, proposals: other_proposals } => {},
-                                ConsensusInstance::Confirm { slot: other_slot, view: other_view, qc: other_qc } => {
+                                ConsensusInstance::Confirm { slot: _, view: other_view, qc: _, proposals: _ } => {
                                     if view > other_view {
                                         self.qcs.insert(*slot, consensus_metadata.clone());
                                     }
                                 },
-                                ConsensusInstance::Commit { slot: other_slot, view: other_view, qc: other_qc } => {},
+                                _ => {},
                             }
                         },
                         None => {
@@ -429,9 +432,9 @@ impl Core {
                     let sig = self.signature_service.request_signature(consensus_instance.digest()).await;
                     consensus_sigs.push((consensus_instance.digest(), sig));
                 },
-                ConsensusInstance::Commit { slot, view, qc } => {
+                ConsensusInstance::Commit { slot: _, view: _, qc: _, proposals: _ } => {
                     // TODO: Add validity checks
-                    self.committed.insert(*slot, consensus_instance.clone());
+                    self.process_commit_instance(consensus_instance.clone());
                 },
             }
         }
@@ -445,6 +448,29 @@ impl Core {
             .collect();
         
         new_tips.len() as u32 >= self.committee.quorum_threshold()
+    }
+
+    #[async_recursion]
+    async fn process_commit_instance(&mut self, consensus_instance: ConsensusInstance) -> DagResult<()> {
+        match &consensus_instance {
+            ConsensusInstance::Prepare { slot: _, view: _, ticket: _, proposals: _ } => {},
+            ConsensusInstance::Confirm { slot: _, view: _, qc: _, proposals: _ } => {},
+            ConsensusInstance::Commit { slot, view: _, qc: _, proposals } => {
+                let mut all_ancestors: Vec<Header> = Vec::new();
+                for (pk, certificate) in proposals {
+                    let mut ancestors = self.synchronizer.get_ancestors(certificate.header_digest.clone(), &pk, &certificate.height(), &consensus_instance).await?;
+                    if ancestors.is_empty() {
+                        debug!("Process suspended, missing ancestors");
+                        return Ok(());
+                    }
+                    all_ancestors.append(&mut ancestors);
+                }
+                // Send headers to the committer
+                self.tx_committer.send((*slot, all_ancestors)).await.expect("Failed to send headers");
+            }
+        }
+
+        Ok(())
     }
 
     fn sanitize_header(&mut self, header: &Header) -> DagResult<()> {
@@ -578,6 +604,8 @@ impl Core {
                 // execution (we were missing some of their dependencies) and we are now ready to resume processing.
                 Some(header) = self.rx_header_waiter.recv() => self.process_header(header).await,
 
+                // Loopback for committed instance that hasn't had all of it ancestors yet
+                Some(consensus_instance) = self.rx_header_waiter_instances.recv() => self.process_commit_instance(consensus_instance).await,
                 //Loopback for special headers that were validated by consensus layer.
                 //Some((header, consensus_sigs)) = self.rx_validation.recv() => self.create_vote(header, consensus_sigs).await,               
                 //i.e. core requests validation from consensus (check if ticket valid; wait to receive ticket if we don't have it yet -- should arrive: using all to all or forwarding)

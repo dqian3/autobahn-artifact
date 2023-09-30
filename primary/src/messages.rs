@@ -99,29 +99,29 @@ impl fmt::Display for Ticket {
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ConsensusInstance {
     Prepare { slot: Slot, view: View, ticket: Ticket, proposals: HashMap<PublicKey, Certificate> },
-    Confirm { slot: Slot, view: View, qc: QC},
-    Commit { slot: Slot, view: View, qc: QC},
+    Confirm { slot: Slot, view: View, qc: QC, proposals: HashMap<PublicKey, Certificate>},
+    Commit { slot: Slot, view: View, qc: QC, proposals: HashMap<PublicKey, Certificate>},
 }
 
 impl Hash for ConsensusInstance {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
         match self {
-            ConsensusInstance::Prepare { slot, view, ticket, proposals } => {
+            ConsensusInstance::Prepare { slot, view, ticket, proposals: _ } => {
                 hasher.update(slot.to_le_bytes());
                 hasher.update(view.to_le_bytes());
                 hasher.update(ticket.digest().0);
                 // NOTE: Indicates a prepare message
                 hasher.update((0 as u8).to_le_bytes());
             },
-            ConsensusInstance::Confirm { slot, view, qc } => {
+            ConsensusInstance::Confirm { slot, view, qc, proposals: _} => {
                 hasher.update(slot.to_le_bytes());
                 hasher.update(view.to_le_bytes());
                 hasher.update(qc.digest().0);
                 // NOTE: Indicates a confirm message
                 hasher.update((1 as u8).to_le_bytes());
             },
-            ConsensusInstance::Commit { slot, view, qc } => {
+            ConsensusInstance::Commit { slot, view, qc, proposals: _} => {
                 hasher.update(slot.to_le_bytes());
                 hasher.update(view.to_le_bytes());
                 hasher.update(qc.digest().0);
@@ -150,17 +150,17 @@ impl PartialEq for ConsensusInstance {
                     _ => false
                 };
             },
-            ConsensusInstance::Confirm { slot, view, qc } => {
+            ConsensusInstance::Confirm { slot, view, qc, proposals: _ } => {
                 return match other {
-                    ConsensusInstance::Confirm { slot: other_slot, view: other_view, qc: other_qc } => {
+                    ConsensusInstance::Confirm { slot: other_slot, view: other_view, qc: other_qc, proposals: _ } => {
                         slot == other_slot && view == other_view && qc == other_qc
                     },
                     _ => false
                 };
             },
-            ConsensusInstance::Commit { slot, view, qc } => {
+            ConsensusInstance::Commit { slot, view, qc, proposals: _ } => {
                 return match other {
-                    ConsensusInstance::Commit { slot: other_slot, view: other_view, qc: other_qc } => {
+                    ConsensusInstance::Commit { slot: other_slot, view: other_view, qc: other_qc, proposals: _ } => {
                         slot == other_slot && view == other_view && qc == other_qc
                     },
                     _ => false
@@ -175,7 +175,7 @@ impl Eq for ConsensusInstance {}
 impl fmt::Debug for ConsensusInstance {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
-            ConsensusInstance::Prepare { slot, view, ticket, proposals } => {
+            ConsensusInstance::Prepare { slot, view: _, ticket: _, proposals: _ } => {
                 write!(
                     f,
                     "T{})",
@@ -183,7 +183,7 @@ impl fmt::Debug for ConsensusInstance {
                 )
             },
 
-            ConsensusInstance::Confirm { slot, view, qc } => {
+            ConsensusInstance::Confirm { slot, view: _, qc: _, proposals: _} => {
                 write!(
                     f,
                     "T{})",
@@ -191,7 +191,7 @@ impl fmt::Debug for ConsensusInstance {
                 )
             },
 
-            ConsensusInstance::Commit { slot, view, qc } => {
+            ConsensusInstance::Commit { slot, view: _, qc: _, proposals: _ } => {
                 write!(
                     f,
                     "T{})",
@@ -215,7 +215,7 @@ impl fmt::Display for ConsensusInstance {
                 )
             },
 
-            ConsensusInstance::Confirm { slot, view, qc } => {
+            ConsensusInstance::Confirm { slot, view, qc, proposals: _ } => {
                 write!(
                     f,
                     "T{})",
@@ -223,7 +223,7 @@ impl fmt::Display for ConsensusInstance {
                 )
             },
 
-            ConsensusInstance::Commit { slot, view, qc } => {
+            ConsensusInstance::Commit { slot, view, qc, proposals: _ } => {
                 write!(
                     f,
                     "T{})",

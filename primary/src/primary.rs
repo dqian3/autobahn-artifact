@@ -1,5 +1,6 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::certificate_waiter::CertificateWaiter;
+use crate::committer::Committer;
 use crate::core::Core;
 use crate::error::DagError;
 use crate::garbage_collector::GarbageCollector;
@@ -72,10 +73,12 @@ impl Primary {
         store: Store,
         tx_consensus: Sender<Certificate>,
         tx_committer: Sender<Certificate>,
+        rx_committer: Receiver<Certificate>,
         rx_consensus: Receiver<Certificate>,
         tx_sailfish: Sender<Header>,
         rx_pushdown_cert: Receiver<Certificate>,
         rx_request_header_sync: Receiver<Digest>,
+        tx_output: Sender<Header>,
     ) {
         let (tx_others_digests, rx_others_digests) = channel(CHANNEL_CAPACITY);
         let (tx_our_digests, rx_our_digests) = channel(CHANNEL_CAPACITY);
@@ -89,6 +92,9 @@ impl Primary {
         let (tx_cert_requests, rx_cert_requests) = channel(CHANNEL_CAPACITY);
         let (tx_header_requests, rx_header_requests) = channel(CHANNEL_CAPACITY);
         let (tx_instance, rx_instance) = channel(CHANNEL_CAPACITY);
+        let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(CHANNEL_CAPACITY);
+        let (tx_commit, rx_commit) = channel(CHANNEL_CAPACITY);
+        let (tx_mempool, rx_mempool) = channel(CHANNEL_CAPACITY);
 
 
         // Write the parameters to the logs.
@@ -158,10 +164,11 @@ impl Primary {
             parameters.gc_depth,
             /* rx_primaries */ rx_primary_messages,
             /* rx_header_waiter */ rx_headers_loopback,
+            rx_header_waiter_instances,
             /* rx_certificate_waiter */ rx_certificates_loopback,
             /* rx_proposer */ rx_headers,
             tx_consensus,
-            tx_committer,
+            tx_commit,
             /* tx_proposer */ tx_parents,
             /* tx_special */ tx_sailfish, 
             rx_pushdown_cert,
@@ -169,6 +176,8 @@ impl Primary {
             tx_instance,
             LeaderElector::new(committee.clone()),
         );
+
+        Committer::spawn(committee.clone(), store.clone(), parameters.gc_depth, rx_mempool, rx_committer, rx_commit, tx_output);
 
         // Keeps track of the latest consensus round and allows other tasks to clean up their their internal state
         GarbageCollector::spawn(
@@ -196,6 +205,7 @@ impl Primary {
             parameters.sync_retry_nodes,
             /* rx_synchronizer */ rx_sync_headers,
             /* tx_core */ tx_headers_loopback,
+            tx_header_waiter_instances,
         );
 
         // The `CertificateWaiter` waits to receive all the ancestors of a certificate before looping it back to the
