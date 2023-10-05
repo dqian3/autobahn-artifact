@@ -983,7 +983,7 @@ pub struct Timeout {
     pub slot: Slot,
     pub view: View,
     // The highest qc the replica has for its state
-    pub high_qc: Certificate,
+    pub high_qc: Option<ConsensusInstance>,
 
     pub author: PublicKey,
     pub signature: Signature,
@@ -993,7 +993,7 @@ impl Timeout {
     pub async fn new(
         slot: Slot,
         view: View,
-        high_qc: Certificate,
+        high_qc: Option<ConsensusInstance>,
         author: PublicKey,
         mut signature_service: SignatureService,
     ) -> Self {
@@ -1012,11 +1012,11 @@ impl Timeout {
         }
     }
 
-    pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
+    pub fn verify(&self, committee: &Committee) -> DagResult<()> {
         // Ensure the authority has voting rights.
         ensure!(
             committee.stake(&self.author) > 0,
-            ConsensusError::UnknownAuthority(self.author)
+            DagError::UnknownAuthority(self.author)
         );
 
         // Check the signature.
@@ -1048,7 +1048,7 @@ impl fmt::Debug for Timeout {
 }
 
 impl Timeout {
-    pub fn new_from_key(high_qc: Certificate, slot: Slot, view: View, author: PublicKey, secret: &SecretKey) -> Self {
+    pub fn new_from_key(high_qc: Option<ConsensusInstance>, slot: Slot, view: View, author: PublicKey, secret: &SecretKey) -> Self {
         let timeout = Timeout {
             high_qc,
             slot,
@@ -1176,11 +1176,11 @@ impl TC {
     }*/
 }
 
-/*impl fmt::Debug for TC {
+impl fmt::Debug for TC {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "TC({}, {:?})", self.view, self.high_qc_views())
+        write!(f, "TC({}, {:?})", self.view, self.slot)
     }
-}*/
+}
 
 
 #[derive(Clone, Serialize, Deserialize, Default)]

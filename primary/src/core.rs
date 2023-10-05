@@ -1,9 +1,9 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::aggregators::{VotesAggregator, QCMaker};
+use crate::aggregators::{VotesAggregator, QCMaker, TCMaker};
 //use crate::common::special_header;
 use crate::error::{DagError, DagResult};
 use crate::leader::LeaderElector;
-use crate::messages::{Certificate, Header, Vote, TC, Ticket, ConsensusInstance};
+use crate::messages::{Certificate, Header, Vote, TC, Ticket, ConsensusInstance, Timeout};
 use crate::primary::{PrimaryMessage, Height, Slot, View};
 use crate::synchronizer::Synchronizer;
 use crate::timer::Timer;
@@ -12,10 +12,13 @@ use bytes::Bytes;
 use config::{Committee, Stake};
 use crypto::{Hash as _, Signature};
 use crypto::{Digest, PublicKey, SignatureService};
+use futures::{Future, StreamExt};
+use futures::stream::FuturesUnordered;
 use log::{debug, error, warn};
 use network::{CancelHandler, ReliableSender};
 //use tokio::time::error::Elapsed;
-use std::collections::{HashMap, HashSet, BTreeMap};
+use std::collections::{HashMap, HashSet, BTreeMap, VecDeque};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 //use std::task::Poll;
@@ -96,16 +99,19 @@ pub struct Core {
     tips: HashMap<PublicKey, Header>,
     current_certs: HashMap<PublicKey, Certificate>,
     views: HashMap<Slot, View>,
-    timers: HashMap<Slot, Timer>,
+    timers: HashSet<Slot>,
+    timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>,
     qcs: HashMap<Slot, ConsensusInstance>,
     qc_makers: HashMap<Digest, QCMaker>,
+    tc_makers: HashMap<(Slot, View), TCMaker>,
     current_consensus_instances: HashMap<Digest, ConsensusInstance>,
     tcs: HashMap<Slot, TC>,
-    ticket: Ticket,
-    already_proposed_slots: Vec<Slot>,
+    tickets: VecDeque<Ticket>,
+    already_proposed_slots: HashSet<Slot>,
     committed: HashMap<Slot, ConsensusInstance>,
     tx_info: Sender<ConsensusInstance>,
     leader_elector: LeaderElector,
+    timeout_delay: u64,
 
 
     // GC the vote aggregators and current headers
@@ -135,6 +141,7 @@ impl Core {
         rx_request_header_sync: Receiver<Digest>,
         tx_info: Sender<ConsensusInstance>,
         leader_elector: LeaderElector,
+        timeout_delay: u64,
     ) {
         tokio::spawn(async move {
             Self {
@@ -167,17 +174,20 @@ impl Core {
                 vote_aggregators: HashMap::with_capacity(2 * gc_depth as usize),
                 network: ReliableSender::new(),
                 cancel_handlers: HashMap::with_capacity(2 * gc_depth as usize),
-                already_proposed_slots: Vec::new(),
+                already_proposed_slots: HashSet::new(),
                 tips: HashMap::with_capacity(2 * gc_depth as usize),
                 current_certs: HashMap::with_capacity(2 * gc_depth as usize),
                 views: HashMap::with_capacity(2 * gc_depth as usize),
-                timers: HashMap::with_capacity(2 * gc_depth as usize),
+                timers: HashSet::with_capacity(2 * gc_depth as usize),
                 qcs: HashMap::with_capacity(2 * gc_depth as usize),
                 qc_makers: HashMap::with_capacity(2 * gc_depth as usize),
+                tc_makers: HashMap::with_capacity(2 * gc_depth as usize),
                 tcs: HashMap::with_capacity(2 * gc_depth as usize),
-                ticket: Ticket::default(),
+                tickets: VecDeque::with_capacity(2 * gc_depth as usize),
                 committed: HashMap::with_capacity(2 * gc_depth as usize),
                 current_consensus_instances: HashMap::with_capacity(2 * gc_depth as usize),
+                timeout_delay,
+                timer_futures: FuturesUnordered::new(),
                 //gc_map: HashMap::with_capacity(2 * gc_depth as usize),
             }
             .run()
@@ -371,6 +381,20 @@ impl Core {
 
         if certificate.height() > self.current_certs.get(&certificate.origin()).unwrap().height() {
             self.current_certs.insert(certificate.origin(), certificate.clone());
+
+            if !self.tickets.is_empty() {
+                let ticket = self.tickets.get(0).unwrap();
+                if self.enough_coverage(ticket, &self.current_certs) && !self.already_proposed_slots.contains(&(ticket.slot + 1)) {
+                    let new_prepare_instance = ConsensusInstance::Prepare { slot: ticket.slot + 1, view: 1, ticket: ticket.clone(), proposals: self.current_certs }; 
+                    self.already_proposed_slots.insert(ticket.slot + 1);
+                    self.tickets.pop_front();
+                    self.tx_info
+                        .send(new_prepare_instance)
+                        .await
+                        .expect("failed to send info to proposer");
+
+                }
+            }
         }
 
 
@@ -396,15 +420,25 @@ impl Core {
             match consensus_instance {
                 ConsensusInstance::Prepare { slot, view: _, ticket: _, proposals: _ } => {
                     // TODO: Add validity checks
-                    let has_proposed = self.already_proposed_slots.contains(slot);
-                    if self.name == self.leader_elector.get_leader(slot + 1, 1) && has_proposed {
-                        self.ticket = Ticket::new(Some(header.clone()), None, 1, BTreeMap::new()).await;
-                        if self.enough_coverage(&self.ticket.clone(), self.current_certs.clone()) {
-                            let new_prepare_instance = ConsensusInstance::Prepare { slot: slot + 1, view: 1, ticket: self.ticket.clone(), proposals: self.current_certs.clone() }; 
+                    let has_proposed = self.already_proposed_slots.contains(&(slot + 1));
+                    if self.name == self.leader_elector.get_leader(slot + 1, 1) && !has_proposed {
+                        let ticket = Ticket::new(Some(header.clone()), None, 1, BTreeMap::new()).await;
+                        if self.enough_coverage(&ticket, &self.current_certs) {
+                            let new_prepare_instance = ConsensusInstance::Prepare { slot: slot + 1, view: 1, ticket, proposals: self.current_certs }; 
+                            self.already_proposed_slots.insert(slot + 1);
                             self.tx_info
                                 .send(new_prepare_instance)
                                 .await
                                 .expect("failed to send info to proposer");
+                        } else {
+                            self.tickets.push_back(ticket);
+                        }
+
+                        if !self.timers.contains(&(slot+1)) {
+                            // TODO: also forward the ticket to other replicas
+                            let timer = Timer::new(slot+1, 1, self.timeout_delay);
+                            self.timer_futures.push(Box::pin(timer));
+                            self.timers.insert(slot + 1);
                         }
                     }
 
@@ -442,7 +476,7 @@ impl Core {
         Ok(consensus_sigs)
     }
 
-    fn enough_coverage(&mut self, ticket: &Ticket, current_certs: HashMap<PublicKey, Certificate>) -> bool {
+    fn enough_coverage(&mut self, ticket: &Ticket, current_certs: &HashMap<PublicKey, Certificate>) -> bool {
         let new_tips: HashMap<&PublicKey, &Certificate> = current_certs.iter()
             .filter(|(pk, cert)| cert.height() > ticket.proposals.get(&pk).unwrap().height())
             .collect();
@@ -470,6 +504,118 @@ impl Core {
             }
         }
 
+        Ok(())
+    }
+
+    async fn local_timeout_round(&mut self, slot: Slot, view: View) -> DagResult<()> {
+        warn!("Timeout reached for slot {}, view {}", slot, view);
+
+        // Make a timeout message.
+        let timeout = Timeout::new(
+            slot,
+            view,
+            self.qcs.get(&slot).cloned(),
+            self.name,
+            self.signature_service.clone(),
+        )
+        .await;
+        debug!("Created {:?}", timeout);
+
+        // Broadcast the timeout message.
+        debug!("Broadcasting {:?}", timeout);
+        let addresses = self
+            .committee
+            .others_consensus(&self.name)
+            .into_iter()
+            .map(|(_, x)| x.consensus_to_consensus)
+            .collect();
+        let message = bincode::serialize(&PrimaryMessage::Timeout(timeout.clone()))
+            .expect("Failed to serialize timeout message");
+        self.network
+            .broadcast(addresses, Bytes::from(message))
+            .await;
+
+        // Process our message.
+        self.handle_timeout(&timeout).await
+    }
+
+    async fn handle_timeout(&mut self, timeout: &Timeout) -> DagResult<()> {
+        debug!("Processing {:?}", timeout);
+        match self.views.get(&timeout.slot) {
+            Some(view) => {
+                if timeout.view < *view {
+                    return Ok(())
+                } 
+            },
+            _ => {},
+        };
+
+        // Ensure the timeout is well formed.
+        timeout.verify(&self.committee)?;
+
+        if self.tc_makers.get(&(timeout.slot, timeout.view)).is_none() {
+            self.tc_makers.insert((timeout.slot, timeout.view), TCMaker::new());
+        }
+
+        let tc_maker = self.tc_makers.get_mut(&(timeout.slot, timeout.view)).unwrap();
+
+        // Add the new vote to our aggregator and see if we have a quorum.
+        if let Some(tc) = tc_maker.append(timeout.clone(), &self.committee)? {
+            debug!("Assembled {:?}", tc);
+
+            // Try to advance the view
+            self.views.insert(timeout.slot, timeout.view + 1);
+
+            // Broadcast the TC.
+            debug!("Broadcasting {:?}", tc);
+            let addresses = self
+                .committee
+                .others_consensus(&self.name)
+                .into_iter()
+                .map(|(_, x)| x.consensus_to_consensus)
+                .collect();
+            let message = bincode::serialize(&PrimaryMessage::TC(tc.clone()))
+                .expect("Failed to serialize timeout certificate");
+            self.network
+                .broadcast(addresses, Bytes::from(message))
+                .await;
+
+            // Make a new block if we are the next leader.
+            if self.name == self.leader_elector.get_leader(timeout.slot, timeout.view + 1) {
+                // TODO: Generate ticket
+                let mut winning_proposals = HashMap::new();
+                let mut winning_timeout = tc.timeouts.get(0).unwrap();
+
+                for timeout in &tc.timeouts {
+                    match &timeout.high_qc {
+                        Some(qc) => {
+                            match qc {
+                                ConsensusInstance::Confirm { slot: _, view: other_view, qc: _, proposals } => {
+                                    if other_view > &winning_timeout.view {
+                                        winning_timeout = &timeout;
+                                        winning_proposals = proposals.clone();
+                                    }
+                                },
+                                _ => {},
+                            }
+                        },
+                        None => {},
+                    };
+                }
+
+                let ticket: Ticket = Ticket { header: None, tc: Some(tc), slot: timeout.slot, proposals: BTreeMap::new() };
+
+                if winning_proposals.is_empty() {
+                    winning_proposals = self.current_certs.clone();
+                }
+
+                let prepare_instance: ConsensusInstance = ConsensusInstance::Prepare { slot: timeout.slot, view: timeout.view + 1, ticket, proposals: winning_proposals };
+                self.tx_info
+                    .send(prepare_instance)
+                    .await
+                    .expect("Failed to send consensus instance");
+            }
+        }
         Ok(())
     }
 
@@ -593,6 +739,8 @@ impl Core {
                                 }
                             }
                         },
+                        PrimaryMessage::Timeout(timeout) => self.handle_timeout(&timeout).await,
+                        PrimaryMessage::TC(tc) => self.process_tc(&tc).await,
                         _ => panic!("Unexpected core message")
                     }
                 },
@@ -616,6 +764,9 @@ impl Core {
                 // we interrupted execution (we were missing some of their ancestors) and we are now ready to resume
                 // processing.
                 Some(certificate) = self.rx_certificate_waiter.recv() => self.process_certificate(certificate).await,
+
+                // We receive an event that timer expired
+                Some((slot, view)) = self.timer_futures.next() => self.local_timeout_round(slot, view).await,
 
             };
             match result {

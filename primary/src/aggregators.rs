@@ -1,6 +1,6 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::{DagError, DagResult};
-use crate::messages::{Certificate, Header, Vote, QC};
+use crate::messages::{Certificate, Header, Vote, QC, Timeout, TC};
 use config::{Committee, Stake};
 use crypto::{PublicKey, Signature, Digest};
 use std::collections::HashSet;
@@ -96,6 +96,51 @@ impl QCMaker {
             return Ok(Some(QC { id: vote.0, votes: self.votes.clone() }))
         }
         
+        Ok(None)
+    }
+}
+
+pub struct TCMaker {
+    weight: Stake,
+    votes: Vec<Timeout>,
+    used: HashSet<PublicKey>,
+}
+
+impl TCMaker {
+    pub fn new() -> Self {
+        Self {
+            weight: 0,
+            votes: Vec::new(),
+            used: HashSet::new(),
+        }
+    }
+
+    /// Try to append a signature to a (partial) quorum.
+    pub fn append(
+        &mut self,
+        timeout: Timeout,
+        committee: &Committee,
+    ) -> DagResult<Option<TC>> {
+        let author = timeout.author;
+
+        // Ensure it is the first time this authority votes.
+        ensure!(
+            self.used.insert(author),
+            DagError::AuthorityReuse(author)
+        );
+
+        // Add the timeout to the accumulator.
+        self.votes
+            .push(timeout);
+        self.weight += committee.stake(&author);
+        if self.weight >= committee.quorum_threshold() {
+            self.weight = 0; // Ensures TC is only created once.
+            return Ok(Some(TC {
+                slot: timeout.slot,
+                view: timeout.view,
+                timeouts: self.votes.clone(),
+            }));
+        }
         Ok(None)
     }
 }
