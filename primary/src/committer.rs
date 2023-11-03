@@ -1,6 +1,8 @@
 use crate::error::DagResult;
-use crate::primary::{CHANNEL_CAPACITY, Slot};
-use crate::{Height, Certificate, Header};
+use crate::messages::ConsensusMessage;
+use crate::primary::{Slot, CHANNEL_CAPACITY};
+use crate::synchronizer::Synchronizer;
+use crate::{Certificate, Header, Height};
 //use crate::error::{ConsensusError, ConsensusResult};
 use config::Committee;
 use crypto::Hash as _;
@@ -8,11 +10,12 @@ use crypto::{Digest, PublicKey};
 use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
 use futures::future::try_join_all;
-use futures::stream::{FuturesOrdered, FuturesUnordered};
 use futures::stream::StreamExt as _;
+use futures::stream::{FuturesOrdered, FuturesUnordered};
 use log::{debug, error, info, log_enabled};
+use std::borrow::BorrowMut;
 use std::cmp::max;
-use std::collections::{HashMap, HashSet, BTreeSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryInto;
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -24,16 +27,18 @@ type Dag = HashMap<Height, HashMap<PublicKey, (Digest, Certificate)>>;
 struct State {
     /// The last committed round.
     last_committed_round: Height,
-    // Keeps the last committed round for each authority. This map is used to clean up the dag and
+    // Keeps the last committed height for each authority. This map is used to clean up the dag and
     // ensure we don't commit twice the same certificate.
-    last_committed: HashMap<PublicKey, Height>,
+    last_executed_heights: HashMap<PublicKey, Height>,
     /// Keeps the latest committed certificate (and its parents) for every authority. Anything older
     /// must be regularly cleaned up through the function `update`.
     dag: Dag,
     // Log containing slots and committed certificates
-    log: HashMap<Slot, Vec<Header>>,
+    log: HashMap<Slot, ConsensusMessage>,
     // The last executed slot
     last_executed_slot: Slot,
+    // Headers that were already committed
+    already_committed_headers: HashSet<Header>,
 }
 
 impl State {
@@ -45,24 +50,25 @@ impl State {
 
         Self {
             last_committed_round: 0,
-            last_committed: genesis.iter().map(|(x, (_, y))| (*x, y.height())).collect(),
+            last_executed_heights: genesis.iter().map(|(x, (_, y))| (*x, y.height())).collect(),
             dag: [(0, genesis)].iter().cloned().collect(),
             log: HashMap::new(),
             last_executed_slot: 0,
+            already_committed_headers: HashSet::new(),
         }
     }
 
     /// Update and clean up internal state base on committed certificates.
     fn update(&mut self, certificate: &Certificate, gc_depth: Height) {
-        self.last_committed
+        self.last_executed_heights
             .entry(certificate.origin())
             .and_modify(|r| *r = max(*r, certificate.height()))
             .or_insert_with(|| certificate.height());
 
-        let last_committed_round = *self.last_committed.values().max().unwrap();
+        let last_committed_round = *self.last_executed_heights.values().max().unwrap();
         self.last_committed_round = last_committed_round;
 
-        for (name, round) in &self.last_committed {
+        for (name, round) in &self.last_executed_heights {
             self.dag.retain(|r, authorities| {
                 authorities.retain(|n, _| n != name || r >= round);
                 !authorities.is_empty() && r + gc_depth >= last_committed_round
@@ -75,8 +81,10 @@ pub struct Committer {
     gc_depth: Height,
     rx_mempool: Receiver<Certificate>,
     rx_deliver: Receiver<Certificate>,
-    rx_commit_instance: Receiver<(Slot, Vec<Header>)>,
+    rx_commit_message: Receiver<ConsensusMessage>,
+    rx_committer_loopback: Receiver<ConsensusMessage>,
     tx_output: Sender<Header>,
+    synchronizer: Synchronizer,
     genesis: Vec<Certificate>,
 }
 
@@ -88,17 +96,18 @@ impl Committer {
         rx_mempool: Receiver<Certificate>,
         rx_commit: Receiver<Certificate>,
         rx_commit_instance: Receiver<(Slot, Vec<Header>)>,
+        rx_commit_message: Receiver<ConsensusMessage>,
+        rx_committer_loopback: Receiver<ConsensusMessage>,
         tx_output: Sender<Header>,
+        synchronizer: Synchronizer,
     ) {
         let (tx_deliver, rx_deliver) = channel(CHANNEL_CAPACITY);
 
-      
         let genesis = Certificate::genesis(&committee);
 
         //special blocks from round >1 can also have genesis as parent!!! ==> Solution: Write genesis to store
         //Alternatively, just store genesis digests and compare against
         let genesis_digests = genesis.clone().iter().map(|x| x.digest()).collect();
-
 
         tokio::spawn(async move {
             CertificateWaiter::spawn(store, rx_commit, tx_deliver, genesis_digests);
@@ -109,13 +118,68 @@ impl Committer {
                 gc_depth,
                 rx_mempool,
                 rx_deliver,
-                rx_commit_instance,
+                rx_commit_message,
+                rx_committer_loopback,
                 tx_output,
+                synchronizer,
                 genesis,
             }
             .run()
             .await;
         });
+    }
+
+    async fn process_commit_message(&mut self, state: &mut State, commit_message: ConsensusMessage) {
+        match commit_message.clone() {
+            ConsensusMessage::Commit{slot, view: _, qc: _, proposals: _} => {
+                if slot <= state.last_executed_slot {
+                    debug!("Already committed slot {}", slot);
+                    return;
+                }
+
+                // Store the commit message if all proposals are ready to be processed
+                state.log.insert(slot, commit_message);
+
+                while state.log.contains_key(&(state.last_executed_slot + 1)) {
+                    let current_commit_message = state.log.get(&slot).unwrap();
+                    match current_commit_message {
+                        ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals } => {
+                            for (pk, proposal) in proposals {
+                                let stop_height = *state.last_executed_heights.get(pk).unwrap();
+                                let headers = self.synchronizer.get_all_headers_for_proposal(proposal.clone(), pk, stop_height, current_commit_message.clone())
+                                    .await
+                                    .expect("should have ancestors by now");
+
+                                // Update last executed height for the lane
+                                if proposal.height > stop_height {
+                                    state.last_executed_heights.insert(*pk, stop_height);
+                                }
+
+                                // Commit all of the headers
+                                for header in headers {
+                                    info!("Committed {}", header);
+                                    #[cfg(feature = "benchmark")]
+                                    for digest in header.payload.keys() {
+                                        // NOTE: This log entry is used to compute performance.
+                                        info!("Committed {} -> {:?}", header, digest);
+                                    }
+                                    debug!("Finished Commit");
+                                    // Output the block to the top-level application.
+                                    if let Err(e) = self.tx_output.send(header.clone()).await {
+                                        debug!("Failed to send block through the output channel: {}", e);
+                                    }
+                                    debug!("Finish upcall");
+                                }
+                            }
+                            state.last_executed_slot += 1;
+                        },
+                        _ => {}
+                    }
+                }
+
+            },
+            _ => {},
+        };
     }
 
     async fn run(&mut self) {
@@ -126,87 +190,30 @@ impl Committer {
             tokio::select! {
                 Some(certificate) = self.rx_mempool.recv() => {
                     // Add the new certificate to the local storage.
-                    state.dag.entry(certificate.height()).or_insert_with(HashMap::new).insert(
+                    /*state.dag.entry(certificate.height()).or_insert_with(HashMap::new).insert(
                         certificate.origin(),
                         (certificate.digest(), certificate.clone()),
-                    );
+                    );*/
                 },
-                Some((slot, headers)) = self.rx_commit_instance.recv() => {
-                    if slot <= state.last_executed_slot {
-                        debug!("Already committed slot {}", slot);
-                        continue;
-                    }
-                    state.log.insert(slot, headers);
-                    while state.log.contains_key(&(state.last_executed_slot + 1)) {
-                        // Print the committed sequence in the right order.
-                        for header in state.log.get(&slot).unwrap() {
-                            info!("Committed {}", header);
-
-                            #[cfg(feature = "benchmark")]
-                            for digest in header.payload.keys() {
-                                // NOTE: This log entry is used to compute performance.
-                                info!("Committed {} -> {:?}", header, digest);
-                            }
-                            debug!("Finished Commit");
-                            // Output the block to the top-level application.
-                            if let Err(e) = self.tx_output.send(header.clone()).await {
-                                 debug!("Failed to send block through the output channel: {}", e);
-                            }
-                            debug!("Finish upcall");
-                        }
-
-                        state.last_executed_slot += 1;
-                    }
-                }
+                Some(commit_message) = self.rx_commit_message.recv() => {
+                    self.process_commit_message(state.borrow_mut(), commit_message);
+                },
                 Some(certificate) = self.rx_deliver.recv() => {
-                    debug!("Processing Delivered Commit {:?}", certificate);
-
-                    // Ensure we didn't already order this certificate.
-                    if let Some(r) = state.last_committed.get(&certificate.origin()) {
-                        if r >= &certificate.height() {
-                            debug!("Already ordered certificate");
-                            continue;
-                        }
-                    }
-
-                    // Flatten the sub-dag referenced by the certificate.
-                    let mut sequence = Vec::new();
-                    for x in self.order_dag(&certificate, &state) {
-                        debug!("updating Dag with: {:?}", x);
-                        // Update and clean up internal state.
-                        state.update(&x, self.gc_depth);
-
-                        // Add the certificate to the sequence.
-                        sequence.push(x);
-                    }
-
-                    // Log the latest committed round of every authority (for debug).
-                    if log_enabled!(log::Level::Debug) {
-                        for (name, round) in &state.last_committed {
-                            debug!("Latest commit of {}: Round {}", name, round);
-                        }
-                    }
-
-                    // Print the committed sequence in the right order.
-                    for certificate in sequence {
-                        
-                        //info!("Committed {}", certificate.header);
-
-                        // #[cfg(feature = "benchmark")]
-                        /*for digest in certificate.header.payload.keys() {
-                            // NOTE: This log entry is used to compute performance.
-                            //info!("Committed {} -> {:?}", certificate.header, digest);
-                        }*/
-                        debug!("Finished Commit");
-                         // Output the block to the top-level application.
-                        // if let Err(e) = self.tx_output.send(certificate.header).await {
-                        //     debug!("Failed to send block through the output channel: {}", e);
-                        // }
-                        debug!("Finish upcall");
-                    }
                 }
-                
+
             }
+        }
+    }
+
+    fn get_ancestors(&self, state: &State, commit_instance: ConsensusMessage) {
+        match commit_instance {
+            ConsensusMessage::Commit {
+                slot,
+                view: _,
+                qc: _,
+                proposals,
+            } => for (pk, cert) in proposals {},
+            _ => {}
         }
     }
 
@@ -218,7 +225,7 @@ impl Committer {
         /*let mut already_ordered = HashSet::new();
 
         let dummy = (Digest::default(), Certificate::default());
-    
+
 
         let mut buffer = vec![tip];
         while let Some(x) = buffer.pop() {
@@ -259,27 +266,27 @@ impl Committer {
                     already_ordered.insert(digest);
                     debug!("Adding Dag parent to sequence: {}", parent_digest);
                 }
-                
+
             }
 
             if x.header.is_special && x.header.special_parent.is_some() { // i.e. is special edge ==> manually hack the digest (only works because of requirement that header is from same node in prev round)
                 //Currently we can skip rounds. Header needs to include parent round to solve this.
                 //Note: process_header verifies that author and rounds are correct.
 
-                
+
                 //generate digest of dummy cert
                 let mut hasher = Sha512::new();
                 hasher.update(&x.header.special_parent.as_ref().unwrap()); //== parent_header.id
-                hasher.update(&x.header.special_parent_round.to_le_bytes()); 
+                hasher.update(&x.header.special_parent_round.to_le_bytes());
                 hasher.update(&x.header.origin()); //parent_header.origin = child_header_origin
                 let parent_digest = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
                 debug!("Trying to sequence special parent header: {}, dummy cert digest {}", x.header.special_parent.as_ref().unwrap(), parent_digest);
 
                 let round = x.header.special_parent_round;
 
-                let mut skip: bool = false; 
-                
-    
+                let mut skip: bool = false;
+
+
 
                 let (digest, certificate) = match state
                     .dag
@@ -320,8 +327,8 @@ impl Committer {
     }
 }
 
- //TODO: Create a sync call to request sync at the dag layer
-                    
+//TODO: Create a sync call to request sync at the dag layer
+
 /// Waits to receive all the ancestors of a certificate before sending it through the output
 /// channel. The outputs are in the same order as the input (FIFO).
 pub struct CertificateWaiter {
@@ -333,18 +340,21 @@ pub struct CertificateWaiter {
     tx_output: Sender<Certificate>,
 
     genesis_digests: BTreeSet<Digest>,
-
-
 }
 
 impl CertificateWaiter {
-    pub fn spawn(store: Store, rx_input: Receiver<Certificate>, tx_output: Sender<Certificate>, genesis_digests: BTreeSet<Digest>,) {
+    pub fn spawn(
+        store: Store,
+        rx_input: Receiver<Certificate>,
+        tx_output: Sender<Certificate>,
+        genesis_digests: BTreeSet<Digest>,
+    ) {
         tokio::spawn(async move {
             Self {
                 store,
                 rx_input,
                 tx_output,
-                genesis_digests
+                genesis_digests,
             }
             .run()
             .await
@@ -362,18 +372,17 @@ impl CertificateWaiter {
             .map(|(x, y)| y.notify_read(x.to_vec()))
             .collect();
 
-        let deliver_result = try_join_all(waiting)
-            .await?;
+        let deliver_result = try_join_all(waiting).await?;
         // let deliver_result = deliver_result
         //     .iter_mut()
         //     .map(|_| deliver.clone());
-            // .map_err(ConsensusError::from);
+        // .map_err(ConsensusError::from);
         debug!("Finished waiting, delivering {:?}", deliver);
         //deliver_result;
         Ok(deliver)
     }
 
-    async fn confirm_committment(&mut self, certificate: &Certificate){
+    async fn confirm_committment(&mut self, certificate: &Certificate) {
 
         //debug!("committing view: {}", certificate.header.view);
         //let committment = Committment {commit_view : certificate.header.view };
@@ -390,7 +399,7 @@ impl CertificateWaiter {
                     // _ => { debug!{"Reaching branch"};},
                     Ok(certificate) => {
                         debug!("Got all the history of {:?}", certificate);
-                    
+
                         //self.confirm_committment(&certificate).await;
 
                         self.tx_output.send(certificate).await.expect("Failed to send certificate");
@@ -399,7 +408,7 @@ impl CertificateWaiter {
                         error!("{}", e);
                         panic!("Storage failure: killing node.");
                     }
-                   
+
                 },*/
                 Some(certificate) = self.rx_input.recv() => {
                     // Skip genesis' children.
@@ -424,20 +433,20 @@ impl CertificateWaiter {
                         .cloned()
                         .map(|x| (x.to_vec(), self.store.clone()))
                         .collect();
-                        
+
                     debug!("Waiting for {} normal DAG parents", wait_for.len());
-                    
+
                      //Add a waiter for the special parent header.
                      if certificate.header.special_parent.is_some(){
                         let special_parent = certificate
                         .header
                         .special_parent
                         .as_ref().unwrap();
-                       
+
                         //create dummy digest
                         let mut hasher = Sha512::new();
                         hasher.update(special_parent); //== parent_header.id
-                        hasher.update(&certificate.header.special_parent_round.to_le_bytes()); 
+                        hasher.update(&certificate.header.special_parent_round.to_le_bytes());
                         hasher.update(&certificate.header.origin()); //parent_header.origin = child_header_origin
                         let special_wait_for = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
                         wait_for.push(  (special_wait_for.to_vec(), self.store.clone())  );
@@ -451,8 +460,8 @@ impl CertificateWaiter {
                     //     wait_for.push( (prev_committment.digest().to_vec()   , self.store.clone()));
                     //     debug!("Waiting for view {} consensus parent", certificate.header.view-1);
                     // }
-                   
-                    
+
+
                     let fut = Self::waiter(wait_for, certificate);
                     //waiting.push(fut);
                     waiting.push_back(fut);*/

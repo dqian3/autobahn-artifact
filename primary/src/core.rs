@@ -1,23 +1,25 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::aggregators::{VotesAggregator, QCMaker, TCMaker};
+use crate::aggregators::{QCMaker, TCMaker, VotesAggregator};
 //use crate::common::special_header;
 use crate::error::{DagError, DagResult};
 use crate::leader::LeaderElector;
-use crate::messages::{Certificate, Header, Vote, TC, Ticket, ConsensusInstance, Timeout};
-use crate::primary::{PrimaryMessage, Height, Slot, View};
+use crate::messages::{
+    Certificate, ConsensusMessage, Header, Proposal, Ticket, Timeout, Vote, QC, TC,
+};
+use crate::primary::{Height, PrimaryMessage, Slot, View};
 use crate::synchronizer::Synchronizer;
 use crate::timer::Timer;
 use async_recursion::async_recursion;
 use bytes::Bytes;
 use config::{Committee, Stake};
-use crypto::{Hash as _, Signature};
 use crypto::{Digest, PublicKey, SignatureService};
-use futures::{Future, StreamExt};
+use crypto::{Hash as _, Signature};
 use futures::stream::FuturesUnordered;
+use futures::{Future, StreamExt};
 use log::{debug, error, warn};
 use network::{CancelHandler, ReliableSender};
 //use tokio::time::error::Elapsed;
-use std::collections::{HashMap, HashSet, BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -25,7 +27,6 @@ use std::sync::Arc;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
 //use tokio::time::{sleep, Duration, Instant};
-
 
 //use crate::messages_consensus::{QC, TC};
 
@@ -41,6 +42,8 @@ pub struct Core {
     /// The persistent storage.
     store: Store,
     /// Handles synchronization with other nodes and our workers.
+    // TODO: Start syncing asynchronously once you receive a header, so that it's not on the
+    // critical path
     synchronizer: Synchronizer,
     /// Service to sign headers.
     signature_service: SignatureService,
@@ -54,7 +57,7 @@ pub struct Core {
     /// Receives loopback headers from the `HeaderWaiter`.
     rx_header_waiter: Receiver<Header>,
     /// Receives loopback instances from the 'HeaderWaiter'
-    rx_header_waiter_instances: Receiver<ConsensusInstance>,
+    rx_header_waiter_instances: Receiver<(Proposal, ConsensusMessage)>,
     /// Receives loopback certificates from the `CertificateWaiter`.
     rx_certificate_waiter: Receiver<Certificate>,
     /// Receives our newly created headers from the `Proposer`.
@@ -62,7 +65,7 @@ pub struct Core {
     /// Output special certificates to the consensus layer.
     tx_consensus: Sender<Certificate>,
     // Output all certificates to the consensus Dag view
-    tx_committer: Sender<(Slot, Vec<Header>)>,
+    tx_committer: Sender<ConsensusMessage>,
 
     /// Send valid a quorum of certificates' ids to the `Proposer` (along with their round).
     tx_proposer: Sender<Certificate>,
@@ -70,7 +73,7 @@ pub struct Core {
 
     rx_pushdown_cert: Receiver<Certificate>,
     // Receive sync requests for headers required at the consensus layer
-    rx_request_header_sync: Receiver<Digest>, 
+    rx_request_header_sync: Receiver<Digest>,
 
     /// The last garbage collected round.
     gc_round: Height,
@@ -84,9 +87,9 @@ pub struct Core {
 
     // Keeps track of current headers
     //TODO: Merge current_headers && processing.
-    //current_headers: HashMap<Height, HashMap<PublicKey, Header>>, ///HashMap<Digest, Header>, //Note, re-factored this map to do GC cleaner. 
+    //current_headers: HashMap<Height, HashMap<PublicKey, Header>>, ///HashMap<Digest, Header>, //Note, re-factored this map to do GC cleaner.
     // Hashmap containing votes aggregators
-    vote_aggregators: HashMap<Height, HashMap<Digest, Box<VotesAggregator>>>,  //HashMap<Digest, VotesAggregator>,
+    vote_aggregators: HashMap<Height, HashMap<Digest, Box<VotesAggregator>>>, //HashMap<Digest, VotesAggregator>,
     // /// Aggregates votes into a certificate.
     votes_aggregator: VotesAggregator,
 
@@ -97,23 +100,26 @@ pub struct Core {
     cancel_handlers: HashMap<Height, Vec<CancelHandler>>,
 
     tips: HashMap<PublicKey, Header>,
+    current_proposals: HashMap<PublicKey, Proposal>,
     current_certs: HashMap<PublicKey, Certificate>,
     views: HashMap<Slot, View>,
-    timers: HashSet<Slot>,
+    timers: HashSet<(Slot, View)>,
+    last_voted_consensus: HashSet<(Slot, View)>,
+    commit_messages: VecDeque<ConsensusMessage>,
     timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>,
-    qcs: HashMap<Slot, ConsensusInstance>,
+    // TODO: Add garbage collection, related to how deep pipeline (parameter k)
+    qcs: HashMap<Slot, ConsensusMessage>, // NOTE: Store the latest QC for each slot
     qc_makers: HashMap<Digest, QCMaker>,
+    current_qcs_formed: usize,
     tc_makers: HashMap<(Slot, View), TCMaker>,
-    current_consensus_instances: HashMap<Digest, ConsensusInstance>,
+    current_consensus_instances: HashMap<Digest, ConsensusMessage>,
     tcs: HashMap<Slot, TC>,
     tickets: VecDeque<Ticket>,
     already_proposed_slots: HashSet<Slot>,
-    committed: HashMap<Slot, ConsensusInstance>,
-    tx_info: Sender<ConsensusInstance>,
+    committed: HashMap<Slot, ConsensusMessage>,
+    tx_info: Sender<ConsensusMessage>,
     leader_elector: LeaderElector,
     timeout_delay: u64,
-
-
     // GC the vote aggregators and current headers
     // gc_map: HashMap<Round, Digest>,
 }
@@ -130,16 +136,16 @@ impl Core {
         gc_depth: Height,
         rx_primaries: Receiver<PrimaryMessage>,
         rx_header_waiter: Receiver<Header>,
-        rx_header_waiter_instances: Receiver<ConsensusInstance>,
+        rx_header_waiter_instances: Receiver<(Proposal, ConsensusMessage)>,
         rx_certificate_waiter: Receiver<Certificate>,
         rx_proposer: Receiver<Header>,
         tx_consensus: Sender<Certificate>,
-        tx_committer: Sender<(Slot, Vec<Header>)>,
+        tx_committer: Sender<ConsensusMessage>,
         tx_proposer: Sender<Certificate>,
         tx_special: Sender<Header>,
         rx_pushdown_cert: Receiver<Certificate>,
         rx_request_header_sync: Receiver<Digest>,
-        tx_info: Sender<ConsensusInstance>,
+        tx_info: Sender<ConsensusMessage>,
         leader_elector: LeaderElector,
         timeout_delay: u64,
     ) {
@@ -167,7 +173,9 @@ impl Core {
                 tx_info,
                 leader_elector,
                 gc_round: 0,
+                current_qcs_formed: 0,
                 last_voted: HashMap::with_capacity(2 * gc_depth as usize),
+                commit_messages: VecDeque::with_capacity(2 * gc_depth as usize),
                 processing: HashMap::with_capacity(2 * gc_depth as usize),
                 current_header: Header::default(),
                 votes_aggregator: VotesAggregator::new(),
@@ -176,9 +184,11 @@ impl Core {
                 cancel_handlers: HashMap::with_capacity(2 * gc_depth as usize),
                 already_proposed_slots: HashSet::new(),
                 tips: HashMap::with_capacity(2 * gc_depth as usize),
+                current_proposals: HashMap::with_capacity(2 * gc_depth as usize),
                 current_certs: HashMap::with_capacity(2 * gc_depth as usize),
                 views: HashMap::with_capacity(2 * gc_depth as usize),
                 timers: HashSet::with_capacity(2 * gc_depth as usize),
+                last_voted_consensus: HashSet::with_capacity(2 * gc_depth as usize),
                 qcs: HashMap::with_capacity(2 * gc_depth as usize),
                 qc_makers: HashMap::with_capacity(2 * gc_depth as usize),
                 tc_makers: HashMap::with_capacity(2 * gc_depth as usize),
@@ -196,17 +206,11 @@ impl Core {
     }
 
     async fn process_own_header(&mut self, header: Header) -> DagResult<()> {
-        // Reset the votes aggregator.
+        // Update the current header we are collecting votes for
         self.current_header = header.clone();
+
+        // Reset the votes aggregator.
         self.votes_aggregator = VotesAggregator::new();
-
-        //TODO: for all-to-all: Don't let other replicas insert into current_headers twice.
-
-        self.processing
-        .entry(header.height)
-        .or_insert_with(HashSet::new)
-        .insert(header.id.clone());
-
 
         // Broadcast the new header in a reliable manner.
         let addresses = self
@@ -232,18 +236,22 @@ impl Core {
         debug!("Processing {:?}", header);
         println!("Processing the header");
 
-        // Check the parent certificate. Ensure the parents form a quorum and are all from the previous round.
-        let stake: Stake = header.parent_cert.votes.iter().map(|(pk, _)| self.committee.stake(pk)).sum();
+        // Check the parent certificate. Ensure the certificate contains a quorum of votes and is
+        // at the preivous height
+        let stake: Stake = header
+            .parent_cert
+            .votes
+            .iter()
+            .map(|(pk, _)| self.committee.stake(pk))
+            .sum();
         ensure!(
             header.parent_cert.height() + 1 == header.height(),
             DagError::MalformedHeader(header.id.clone())
         );
-        println!("height is correct");
         ensure!(
-            stake >= self.committee.validity_threshold() || header.parent_cert == Certificate::genesis_cert(&self.committee),
+            stake >= self.committee.validity_threshold() || header.parent_cert.height() == 0,
             DagError::HeaderRequiresQuorum(header.id.clone())
         );
-        println!("stake is correct");
 
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
         // reschedule processing of this header once we have it.
@@ -253,12 +261,31 @@ impl Core {
             return Ok(());
         }
 
-        // Store the header.
-        let bytes = bincode::serialize(&header).expect("Failed to serialize header");
-        self.store.write(header.id.to_vec(), bytes).await;
+        // By FIFO should have all ancestors, reschedule for processing if we don't
+        if self
+            .synchronizer
+            .get_parent_header(&header)
+            .await?
+            .is_none()
+        {
+            return Ok(());
+        }
 
+        // Store the header since we have the parents (recursively).
+        let bytes = bincode::serialize(&header).expect("Failed to serialize header");
+        self.store.write(header.digest().to_vec(), bytes).await;
+
+        // If the header received is at a greater height then add it to our local tips and
+        // proposals
         if header.height() > self.tips.get(&header.origin()).unwrap().height() {
             self.tips.insert(header.origin(), header.clone());
+            self.current_proposals.insert(
+                header.origin(),
+                Proposal {
+                    header_digest: header.digest(),
+                    height: header.height(),
+                },
+            );
         }
 
         // Process the parent certificate
@@ -271,8 +298,20 @@ impl Core {
             .or_insert_with(HashSet::new)
             .insert(header.author)
         {
-            let consensus_sigs = self.process_consensus_instances(&header, &header.consensus_instances).await?;
-            let vote = Vote::new(&header, &self.name, &mut self.signature_service, consensus_sigs).await;
+            // Process the consensus instances contained in the header (if any)
+            let consensus_sigs = self
+                .process_consensus_messages(&header, &header.consensus_instances)
+                .await?;
+
+            // Create a vote for the header and any valid consensus instances
+            let vote = Vote::new(
+                &header,
+                &self.name,
+                &mut self.signature_service,
+                consensus_sigs,
+            )
+            .await;
+            println!("Created vote");
             debug!("Created Vote {:?}", vote);
 
             if vote.origin == self.name {
@@ -300,66 +339,121 @@ impl Core {
     #[async_recursion]
     async fn process_vote(&mut self, vote: Vote) -> DagResult<()> {
         debug!("Processing Vote {:?}", vote);
-        println!("processing the vote");
 
+        // Iterate through all votes for each consensus instance
         for (digest, sig) in vote.consensus_sigs.iter() {
+            // TODO: Only process instance if we are the leader for it, sanity check with leader
+            // elector
+            // If not already a qc maker for this consensus instance message, create one
             match self.qc_makers.get(&digest) {
-                Some(_) => {},
+                Some(_) => {}
                 None => {
                     self.qc_makers.insert(digest.clone(), QCMaker::new());
                 }
             }
 
+            // Otherwise get the qc maker for this instance
             let qc_maker = self.qc_makers.get_mut(&digest).unwrap();
 
-            if let Some(qc) = qc_maker.append(vote.origin, (digest.clone(), sig.clone()), &self.committee)? {
-                let current_instance = self.current_consensus_instances.get(&digest).unwrap();
+            // Add vote to qc maker, if a QC forms then create a new consensus instance
+            // TODO: Put fast path logic in qc maker (decide whether to wait timeout etc.), add
+            // external messages
+            if let Some(qc) =
+                qc_maker.append(vote.origin, (digest.clone(), sig.clone()), &self.committee)?
+            {
+                self.current_qcs_formed += 1;
+
+                let current_instance = self
+                    .current_header
+                    .consensus_instances
+                    .get(&digest)
+                    .unwrap();
                 match current_instance {
-                    ConsensusInstance::Prepare { slot, view, ticket: _, proposals } => {
-                        let new_instance = ConsensusInstance::Confirm { slot: *slot, view: *view, qc, proposals: proposals.clone() };
+                    ConsensusMessage::Prepare {
+                        slot,
+                        view,
+                        ticket: _,
+                        proposals,
+                    } => {
+                        // Create a tip proposal for the header which contains the prepare message,
+                        // so that it can be committed as part of the proposals
+                        let leader_tip_proposal: Proposal = Proposal {
+                            header_digest: self.current_header.digest(),
+                            height: self.current_header.height(),
+                        };
+                        // Add this cert to the proposals for this instance
+                        let mut new_proposals = proposals.clone();
+                        new_proposals.insert(self.name, leader_tip_proposal);
 
+                        let new_instance = ConsensusMessage::Confirm {
+                            slot: *slot,
+                            view: *view,
+                            qc,
+                            proposals: new_proposals,
+                        };
+
+                        // Send this new instance to the proposer
                         self.tx_info
                             .send(new_instance)
                             .await
                             .expect("Failed to send info");
+                    }
+                    ConsensusMessage::Confirm {
+                        slot,
+                        view,
+                        qc: _,
+                        proposals,
+                    } => {
+                        let new_instance = ConsensusMessage::Commit {
+                            slot: *slot,
+                            view: *view,
+                            qc,
+                            proposals: proposals.clone(),
+                        };
 
-                    },
-                    ConsensusInstance::Confirm { slot, view, qc: _, proposals} => {
-                        let new_instance = ConsensusInstance::Commit { slot: *slot, view: *view, qc, proposals: proposals.clone() };
+                        // Add this instance to our local view of the current consensus instances
+                        self.current_consensus_instances
+                            .insert(new_instance.digest(), new_instance.clone());
 
+                        // Send this new instance to the proposer
                         self.tx_info
                             .send(new_instance)
                             .await
                             .expect("Failed to send info");
-
-                    },
-                    ConsensusInstance::Commit { slot: _, view: _, qc: _, proposals: _} => {},
+                    }
+                    ConsensusMessage::Commit {
+                        slot: _,
+                        view: _,
+                        qc: _,
+                        proposals: _,
+                    } => {}
                 };
             }
         }
 
-        let (dissemination_cert, consensus_cert) = self.votes_aggregator.append(vote, &self.committee, &self.current_header)?;
-        let use_dissemination: bool = self.current_header.consensus_instances.is_empty() && dissemination_cert.is_some();
-        let use_consensus: bool = !self.current_header.consensus_instances.is_empty() && consensus_cert.is_some();
+        // Add the vote to the votes aggregator for the actual header
+        let dissemination_cert =
+            self.votes_aggregator
+                .append(vote, &self.committee, &self.current_header)?;
+        // If there are no consensus instances in the header then only wait for the dissemination
+        // cert (f+1) votes
+        let dissemination_ready: bool =
+            self.current_header.consensus_instances.is_empty() && dissemination_cert.is_some();
+        // If there are some consensus instances in the header then wait for 2f+1 votes to form QCs
+        let consensus_ready: bool = self.current_qcs_formed == self.current_header.consensus_instances.len();
 
-        if use_dissemination {
+        if dissemination_ready || consensus_ready {
             //debug!("Assembled {:?}", dissemination_cert.unwrap());
             self.process_certificate(dissemination_cert.unwrap())
                 .await
                 .expect("Failed to process valid certificate");
+            self.current_qcs_formed = 0;
         }
 
-        if use_consensus {
-            //debug!("Assembled {:?}", consensus_cert.unwrap());
-            self.process_certificate(consensus_cert.unwrap())
-                .await
-                .expect("Failed to process valid certificate");
-        }
-
-        // TODO: Handle invalidated case
+        // TODO: Handle invalidated case where possibly want to send consensus message externally
         Ok(())
     }
-    
+
 
     #[async_recursion]
     async fn process_certificate(&mut self, certificate: Certificate) -> DagResult<()> {
@@ -369,7 +463,8 @@ impl Core {
         let bytes = bincode::serialize(&certificate).expect("Failed to serialize certificate");
         self.store.write(certificate.digest().to_vec(), bytes).await;
 
-        // Check if we have enough certificates to enter a new dag round and propose a header.
+        // If we receive a new certificate from ourself, then send to the proposer, so it can make
+        // a new header
         if certificate.origin() == self.name {
             // Send it to the `Proposer`.
             self.tx_proposer
@@ -378,139 +473,315 @@ impl Core {
                 .expect("Failed to send certificate");
         }
 
+        println!("Current certs are {:?}", self.current_certs);
+        println!("Certificate origin is {:?}", certificate.origin());
 
-        if certificate.height() > self.current_certs.get(&certificate.origin()).unwrap().height() {
-            self.current_certs.insert(certificate.origin(), certificate.clone());
+        // If we receive a new cert then check to see whether there is enough coverage for any of
+        // the tickets we have
+        if certificate.height()
+            > self
+                .current_certs
+                .get(&certificate.origin())
+                .unwrap()
+                .height()
+        {
+            self.current_certs
+                .insert(certificate.origin(), certificate.clone());
 
-            if !self.tickets.is_empty() {
-                let ticket = self.tickets.get(0).unwrap();
-                if self.enough_coverage(ticket, &self.current_certs) && !self.already_proposed_slots.contains(&(ticket.slot + 1)) {
-                    let new_prepare_instance = ConsensusInstance::Prepare { slot: ticket.slot + 1, view: 1, ticket: ticket.clone(), proposals: self.current_certs }; 
-                    self.already_proposed_slots.insert(ticket.slot + 1);
-                    self.tickets.pop_front();
-                    self.tx_info
-                        .send(new_prepare_instance)
-                        .await
-                        .expect("failed to send info to proposer");
-
-                }
-            }
+            // If we have pending tickets that don't have enough coverage check to see if we can
+            // propose a new prepare instance
+            self.is_ticket_ready().await;
         }
 
-
-        //forward cert to Consensus Dag view. NOTE: Forwards cert with whatever special_valids are available. This might not be the ones we use for a special block that is passed up
-        //Currently this is safe/compatible because neither votes, norspecial_valids are part of the cert digest and equality definition (I consider special_valids to be "extra" info of the signatures)
-        
-        //debug!("Committer Received {:?}", certificate);
-        /*self.tx_committer
-                .send(certificate.clone())
-                .await
-                .expect("Failed to send certificate to committer");*/
-        
         Ok(())
     }
 
+    async fn is_ticket_ready(&mut self) {
+        if !self.tickets.is_empty() {
+            let ticket = self.tickets.pop_front().unwrap();
+            let new_proposals = self.current_proposals.clone();
+
+            // If there is enough coverage and we haven't already proposed then create a new
+            // prepare message
+            if self.enough_coverage(&ticket, &new_proposals)
+                && !self.already_proposed_slots.contains(&(ticket.slot + 1))
+                && self.name == self.leader_elector.get_leader(ticket.slot + 1, 1)
+            {
+                let new_prepare_instance = ConsensusMessage::Prepare {
+                    slot: ticket.slot + 1,
+                    view: 1,
+                    ticket: ticket.clone(),
+                    proposals: new_proposals,
+                };
+                self.already_proposed_slots.insert(ticket.slot + 1);
+                self.tickets.pop_front();
+                self.current_consensus_instances
+                    .insert(new_prepare_instance.digest(), new_prepare_instance.clone());
+
+                self.tx_info
+                    .send(new_prepare_instance)
+                    .await
+                    .expect("failed to send info to proposer");
+            } else {
+                self.tickets.push_front(ticket);
+            }
+        }
+    }
+
+    // TODO: Double check these are comprehensive enough
+    fn is_valid(&mut self, consensus_message: &ConsensusMessage) -> bool {
+        match consensus_message {
+            ConsensusMessage::Prepare { slot, view, ticket, proposals: _ } => {
+                !self.last_voted_consensus.contains(&(*slot, *view)) && ticket.slot + 1 == *slot && self.views.get(slot).unwrap() == view
+            },
+            ConsensusMessage::Confirm { slot, view, qc, proposals: _ } => {
+                qc.verify(&self.committee).is_ok() && self.views.get(slot).unwrap() == view
+            },
+            ConsensusMessage::Commit { slot, view, qc, proposals: _ } => {
+                qc.verify(&self.committee).is_ok() && self.views.get(slot).unwrap() == view
+            },
+        }
+    }
+
     #[async_recursion]
-    async fn process_consensus_instances(&mut self, header: &Header, consensus_instances: &Vec<ConsensusInstance>) -> DagResult<Vec<(Digest, Signature)>> {
-        //1) Header signature correct => If false, dont need to reply
+    async fn process_consensus_messages(
+        &mut self,
+        header: &Header,
+        consensus_messages: &HashMap<Digest, ConsensusMessage>,
+    ) -> DagResult<Vec<(Digest, Signature)>> {
+        // Map between consensus instance digest and a signature indicating a vote for that
+        // instance
         let mut consensus_sigs: Vec<(Digest, Signature)> = Vec::new();
 
-        for consensus_instance in consensus_instances {
+        for (digest, consensus_message) in consensus_messages {
             println!("processing instance");
-            match consensus_instance {
-                ConsensusInstance::Prepare { slot, view: _, ticket: _, proposals: _ } => {
-                    // TODO: Add validity checks
-                    let has_proposed = self.already_proposed_slots.contains(&(slot + 1));
-                    if self.name == self.leader_elector.get_leader(slot + 1, 1) && !has_proposed {
-                        let ticket = Ticket::new(Some(header.clone()), None, 1, BTreeMap::new()).await;
-                        if self.enough_coverage(&ticket, &self.current_certs) {
-                            let new_prepare_instance = ConsensusInstance::Prepare { slot: slot + 1, view: 1, ticket, proposals: self.current_certs }; 
-                            self.already_proposed_slots.insert(slot + 1);
-                            self.tx_info
-                                .send(new_prepare_instance)
-                                .await
-                                .expect("failed to send info to proposer");
-                        } else {
-                            self.tickets.push_back(ticket);
+            if self.is_valid(consensus_message) {
+                match consensus_message {
+                    ConsensusMessage::Prepare {
+                        slot,
+                        view,
+                        ticket,
+                        proposals,
+                    } => {
+                        for (pk, proposal) in proposals {
+                            self.synchronizer.start_proposal_sync(proposal.clone(), &pk, consensus_message.clone());
                         }
-
-                        if !self.timers.contains(&(slot+1)) {
-                            // TODO: also forward the ticket to other replicas
-                            let timer = Timer::new(slot+1, 1, self.timeout_delay);
-                            self.timer_futures.push(Box::pin(timer));
-                            self.timers.insert(slot + 1);
-                        }
+                        self.process_prepare_message(consensus_message, header, &consensus_sigs);
+                        self.last_voted_consensus.insert((*slot, *view));
                     }
-
-                    let sig = self.signature_service.request_signature(consensus_instance.digest()).await;
-                    consensus_sigs.push((consensus_instance.digest(), sig));
-                },
-                ConsensusInstance::Confirm { slot, view, qc: _, proposals: _ } => {
-                    // TODO: Add validity checks
-                    match self.qcs.get(slot) {
-                        Some(consensus_metadata) => {
-                            match consensus_metadata {
-                                ConsensusInstance::Confirm { slot: _, view: other_view, qc: _, proposals: _ } => {
-                                    if view > other_view {
-                                        self.qcs.insert(*slot, consensus_metadata.clone());
-                                    }
-                                },
-                                _ => {},
-                            }
-                        },
-                        None => {
-                            self.qcs.insert(*slot, consensus_instance.clone());
+                    ConsensusMessage::Confirm {
+                        slot,
+                        view,
+                        qc,
+                        proposals,
+                    } => {
+                        for (pk, proposal) in proposals {
+                            self.synchronizer.start_proposal_sync(proposal.clone(), &pk, consensus_message.clone());
                         }
-                    }
 
-                    let sig = self.signature_service.request_signature(consensus_instance.digest()).await;
-                    consensus_sigs.push((consensus_instance.digest(), sig));
-                },
-                ConsensusInstance::Commit { slot: _, view: _, qc: _, proposals: _ } => {
-                    // TODO: Add validity checks
-                    self.process_commit_instance(consensus_instance.clone());
-                },
+                        self.process_confirm_message(consensus_message, &consensus_sigs);
+                    }
+                    ConsensusMessage::Commit {
+                        slot,
+                        view,
+                        qc,
+                        proposals,
+                    } => {
+                        for (pk, proposal) in proposals {
+                            self.synchronizer.start_proposal_sync(proposal.clone(), &pk, consensus_message.clone());
+                        }
+
+                        self.process_commit_message(consensus_message.clone());
+                    }
+                }
             }
         }
 
         Ok(consensus_sigs)
     }
 
-    fn enough_coverage(&mut self, ticket: &Ticket, current_certs: &HashMap<PublicKey, Certificate>) -> bool {
-        let new_tips: HashMap<&PublicKey, &Certificate> = current_certs.iter()
-            .filter(|(pk, cert)| cert.height() > ticket.proposals.get(&pk).unwrap().height())
-            .collect();
-        
-        new_tips.len() as u32 >= self.committee.quorum_threshold()
+    #[async_recursion]
+    async fn process_prepare_message(
+        &mut self,
+        prepare_message: &ConsensusMessage,
+        header: &Header,
+        consensus_sigs: &Vec<(Digest, Signature)>,
+    ) {
+        match prepare_message {
+            ConsensusMessage::Prepare {
+                slot,
+                view: _,
+                ticket: _,
+                proposals,
+            } => {
+                let has_proposed = self.already_proposed_slots.contains(&(slot + 1));
+                // If we are the leader of the next slot and haven't already proposed then
+                // receiving a Prepare for slot is our ticket to propose for next slot
+                // TODO: Separate this to a new function for ticket related processing
+                if self.name == self.leader_elector.get_leader(slot + 1, 1) && !has_proposed {
+                    let ticket =
+                        Ticket::new(Some(header.clone()), None, *slot, proposals.clone()).await;
+                    let new_proposals = self.current_proposals.clone();
+                    // If there are enough new proposals received then create a prepare message
+                    // for the next slot
+                    if self.enough_coverage(&ticket, &new_proposals) {
+                        let new_prepare_instance = ConsensusMessage::Prepare {
+                            slot: slot + 1,
+                            view: 1,
+                            ticket,
+                            proposals: new_proposals,
+                        };
+                        self.already_proposed_slots.insert(slot + 1);
+                        self.current_consensus_instances
+                            .insert(new_prepare_instance.digest(), new_prepare_instance.clone());
+                        self.tx_info
+                            .send(new_prepare_instance)
+                            .await
+                            .expect("failed to send info to proposer");
+                    } else {
+                        // Otherwise add the ticket to the queue, and wait later until there
+                        // are enough new certificates to propose
+                        self.tickets.push_back(ticket);
+                    }
+                }
+
+                // If we haven't already started the timer for the next slot, start it
+                if !self.timers.contains(&(slot + 1, 1)) {
+                    // TODO: also forward the ticket to the leader (to tolerate byzantine
+                    // proposers)
+                    let timer = Timer::new(slot + 1, 1, self.timeout_delay);
+                    timer.reset();
+                    self.timer_futures.push(Box::pin(timer));
+                    self.timers.insert((slot + 1, 1));
+                }
+
+                // Indicate that we vote for this instance's prepare message
+                let sig = self
+                    .signature_service
+                    .request_signature(prepare_message.digest())
+                    .await;
+                consensus_sigs.push((prepare_message.digest(), sig));
+            }
+            _ => {}
+        }
     }
 
     #[async_recursion]
-    async fn process_commit_instance(&mut self, consensus_instance: ConsensusInstance) -> DagResult<()> {
-        match &consensus_instance {
-            ConsensusInstance::Prepare { slot: _, view: _, ticket: _, proposals: _ } => {},
-            ConsensusInstance::Confirm { slot: _, view: _, qc: _, proposals: _ } => {},
-            ConsensusInstance::Commit { slot, view: _, qc: _, proposals } => {
-                let mut all_ancestors: Vec<Header> = Vec::new();
-                for (pk, certificate) in proposals {
-                    let mut ancestors = self.synchronizer.get_ancestors(certificate.header_digest.clone(), &pk, &certificate.height(), &consensus_instance).await?;
-                    if ancestors.is_empty() {
-                        debug!("Process suspended, missing ancestors");
-                        return Ok(());
-                    }
-                    all_ancestors.append(&mut ancestors);
-                }
-                // Send headers to the committer
-                self.tx_committer.send((*slot, all_ancestors)).await.expect("Failed to send headers");
+    async fn process_confirm_message(
+        &mut self,
+        confirm_message: &ConsensusMessage,
+        consensus_sigs: &Vec<(Digest, Signature)>,
+    ) {
+        match confirm_message {
+            ConsensusMessage::Confirm {
+                slot,
+                view,
+                qc,
+                proposals,
+            } => {
+                self.qcs.insert(*slot, confirm_message.clone());
+
+                // Indicate that we vote for this instance's confirm message
+                let sig = self
+                    .signature_service
+                    .request_signature(confirm_message.digest())
+                    .await;
+                consensus_sigs.push((confirm_message.digest(), sig));
             }
+            _ => {}
+        }
+    }
+
+    fn enough_coverage(
+        &mut self,
+        ticket: &Ticket,
+        current_proposals: &HashMap<PublicKey, Proposal>,
+    ) -> bool {
+        // Checks whether there have been n-f new certs from the proposals from the ticket
+        let new_tips: HashMap<&PublicKey, &Proposal> = current_proposals
+            .iter()
+            .filter(|(pk, proposal)| proposal.height > ticket.proposals.get(&pk).unwrap().height)
+            .collect();
+
+        new_tips.len() as u32 >= self.committee.quorum_threshold()
+    }
+
+    async fn is_commit_ready(&mut self, commit_message: &ConsensusMessage) -> bool {
+        match commit_message {
+            ConsensusMessage::Commit {
+                slot: _,
+                view: _,
+                qc: _,
+                proposals,
+            } => {
+                let mut is_ready: bool = true;
+
+                // Check if all proposals are in the store
+                for (_, proposal) in proposals.clone() {
+                    // Suspend processing if any proposal is not ready
+                    is_ready = is_ready && self.synchronizer.is_proposal_ready(proposal).await.unwrap();
+                }
+
+                is_ready
+            }
+            _ => false,
+        }
+    }
+
+    #[async_recursion]
+    async fn process_commit_message(&mut self, commit_message: ConsensusMessage) -> DagResult<()> {
+        match &commit_message {
+            ConsensusMessage::Commit {
+                slot,
+                view: _,
+                qc: _,
+                proposals,
+            } => {
+                // Only send to committer once proposals are ready
+                if self.is_commit_ready(&commit_message).await {
+                    // Send headers to the committer
+                    self.tx_committer
+                        .send(commit_message)
+                        .await
+                        .expect("Failed to send headers");
+                } else {
+                    // Otherwise add to pending commit messages
+                    self.commit_messages.push_back(commit_message);
+                }
+            }
+            _ => {}
         }
 
         Ok(())
     }
 
+    #[async_recursion]
+    async fn process_loopback(&mut self) -> DagResult<()> {
+        let consensus_message = self.commit_messages.front();
+        match consensus_message {
+            Some(commit_message) => {
+                if self.is_commit_ready(commit_message).await {
+                    // Send commit message to the committer
+                    self.tx_committer
+                        .send(*commit_message)
+                        .await
+                        .expect("Failed to send headers");
+                    // Remove the commit message from pending queue
+                    self.commit_messages.pop_front();
+                }
+                Ok(())
+            },
+            None => Ok(()),
+        } 
+    }
+
+
     async fn local_timeout_round(&mut self, slot: Slot, view: View) -> DagResult<()> {
         warn!("Timeout reached for slot {}, view {}", slot, view);
+        // TODO: If smaller view then return early
 
-        // Make a timeout message.
+        // Make a timeout message.for the slot, view, containing the highest QC this replica has
+        // seen
         let timeout = Timeout::new(
             slot,
             view,
@@ -541,23 +812,30 @@ impl Core {
 
     async fn handle_timeout(&mut self, timeout: &Timeout) -> DagResult<()> {
         debug!("Processing {:?}", timeout);
+        // Don't process timeout messages for old views
         match self.views.get(&timeout.slot) {
             Some(view) => {
                 if timeout.view < *view {
-                    return Ok(())
-                } 
-            },
-            _ => {},
+                    return Ok(());
+                }
+            }
+            _ => {}
         };
 
         // Ensure the timeout is well formed.
         timeout.verify(&self.committee)?;
 
+        // If we haven't seen a timeout for this slot, view, then create a new TC maker for it.
         if self.tc_makers.get(&(timeout.slot, timeout.view)).is_none() {
-            self.tc_makers.insert((timeout.slot, timeout.view), TCMaker::new());
+            self.tc_makers
+                .insert((timeout.slot, timeout.view), TCMaker::new());
         }
 
-        let tc_maker = self.tc_makers.get_mut(&(timeout.slot, timeout.view)).unwrap();
+        // Otherwise, get the TC maker for this slot, view.
+        let tc_maker = self
+            .tc_makers
+            .get_mut(&(timeout.slot, timeout.view))
+            .unwrap();
 
         // Add the new vote to our aggregator and see if we have a quorum.
         if let Some(tc) = tc_maker.append(timeout.clone(), &self.committee)? {
@@ -565,6 +843,10 @@ impl Core {
 
             // Try to advance the view
             self.views.insert(timeout.slot, timeout.view + 1);
+
+            // Start the new view timer
+            let timer = Timer::new(tc.slot, tc.view + 1, self.timeout_delay);
+            self.timer_futures.push(Box::pin(timer));
 
             // Broadcast the TC.
             debug!("Broadcasting {:?}", tc);
@@ -580,42 +862,175 @@ impl Core {
                 .broadcast(addresses, Bytes::from(message))
                 .await;
 
-            // Make a new block if we are the next leader.
-            if self.name == self.leader_elector.get_leader(timeout.slot, timeout.view + 1) {
-                // TODO: Generate ticket
+            // Make a new header if we are the next leader.
+            if self.name
+                == self
+                    .leader_elector
+                    .get_leader(timeout.slot, timeout.view + 1)
+            {
+                // TODO: Wrap this in a function
+                // TODO: For fast path add prepare
+                // TODO: Add latest commit message as well for early termination
                 let mut winning_proposals = HashMap::new();
-                let mut winning_timeout = tc.timeouts.get(0).unwrap();
+                let mut winning_view = 0;
 
+                // Find the timeout message containing the highest QC, and use that as the winning
+                // proposal for the view change
                 for timeout in &tc.timeouts {
                     match &timeout.high_qc {
                         Some(qc) => {
                             match qc {
-                                ConsensusInstance::Confirm { slot: _, view: other_view, qc: _, proposals } => {
-                                    if other_view > &winning_timeout.view {
-                                        winning_timeout = &timeout;
+                                ConsensusMessage::Confirm {
+                                    slot: _,
+                                    view: other_view,
+                                    qc: _,
+                                    proposals,
+                                } => {
+                                    // Update the highest QC view if we see a higher one
+                                    if other_view > &winning_view {
+                                        winning_view = timeout.view;
                                         winning_proposals = proposals.clone();
                                     }
-                                },
-                                _ => {},
+                                }
+                                _ => {}
                             }
-                        },
-                        None => {},
+                        }
+                        None => {}
                     };
                 }
 
-                let ticket: Ticket = Ticket { header: None, tc: Some(tc), slot: timeout.slot, proposals: BTreeMap::new() };
+                // A TC is a ticket to propose in the next view
+                // TODO: Make proposals optional in ticket
+                let ticket: Ticket = Ticket {
+                    header: None,
+                    tc: Some(tc),
+                    slot: timeout.slot,
+                    proposals: winning_proposals.clone(),
+                };
 
+                // If there is no QC we have to propose, then use our current tips for our proposal
                 if winning_proposals.is_empty() {
-                    winning_proposals = self.current_certs.clone();
+                    winning_proposals = self.current_proposals.clone();
                 }
 
-                let prepare_instance: ConsensusInstance = ConsensusInstance::Prepare { slot: timeout.slot, view: timeout.view + 1, ticket, proposals: winning_proposals };
+                // Create a prepare message for the next view, containing the ticket and proposals
+                let prepare_instance: ConsensusMessage = ConsensusMessage::Prepare {
+                    slot: timeout.slot,
+                    view: timeout.view + 1,
+                    ticket: ticket.clone(),
+                    proposals: winning_proposals.clone(),
+                };
                 self.tx_info
                     .send(prepare_instance)
                     .await
                     .expect("Failed to send consensus instance");
+
+                // A TC could be a ticket for the next slot
+                // TODO: Comment it out
+                if !self.already_proposed_slots.contains(&(timeout.slot + 1))
+                    && self.enough_coverage(&ticket, &winning_proposals)
+                {
+                    let new_prepare_instance = ConsensusMessage::Prepare {
+                        slot: timeout.slot + 1,
+                        view: 1,
+                        ticket,
+                        proposals: winning_proposals,
+                    };
+                    self.already_proposed_slots.insert(timeout.slot + 1);
+                    self.current_consensus_instances
+                        .insert(new_prepare_instance.digest(), new_prepare_instance.clone());
+                    self.tx_info
+                        .send(new_prepare_instance)
+                        .await
+                        .expect("failed to send info to proposer");
+                } else {
+                    // Otherwise add the ticket to the queue, and wait later until there
+                    // are enough new certificates to propose
+                    self.tickets.push_back(ticket);
+                }
             }
         }
+        Ok(())
+    }
+
+    async fn handle_tc(&mut self, tc: &TC) -> DagResult<()> {
+        debug!("Processing {:?}", tc);
+
+        let slot = tc.slot;
+        let view = tc.view;
+
+        // Make a new header if we are the next leader.
+        if self.name == self.leader_elector.get_leader(slot, view + 1) {
+            // TODO: Generate ticket
+            let mut winning_proposals = HashMap::new();
+            let mut winning_timeout = tc.timeouts.get(0).unwrap();
+
+            for timeout in &tc.timeouts {
+                match &timeout.high_qc {
+                    Some(qc) => match qc {
+                        ConsensusMessage::Confirm {
+                            slot: _,
+                            view: other_view,
+                            qc: _,
+                            proposals,
+                        } => {
+                            if other_view > &winning_timeout.view {
+                                winning_timeout = &timeout;
+                                winning_proposals = proposals.clone();
+                            }
+                        }
+                        _ => {}
+                    },
+                    None => {}
+                };
+            }
+
+            let ticket: Ticket = Ticket {
+                header: None,
+                tc: Some(tc.clone()),
+                slot,
+                proposals: winning_proposals.clone(),
+            };
+
+            if winning_proposals.is_empty() {
+                winning_proposals = self.current_proposals.clone();
+            }
+
+            let prepare_instance: ConsensusMessage = ConsensusMessage::Prepare {
+                slot,
+                view: view + 1,
+                ticket: ticket.clone(),
+                proposals: winning_proposals.clone(),
+            };
+            self.tx_info
+                .send(prepare_instance)
+                .await
+                .expect("Failed to send consensus instance");
+
+            // A TC could be a ticket for the next slot
+            if !self.already_proposed_slots.contains(&(slot + 1))
+                && self.enough_coverage(&ticket, &winning_proposals)
+            {
+                let new_prepare_instance = ConsensusMessage::Prepare {
+                    slot: slot + 1,
+                    view: 1,
+                    ticket,
+                    proposals: winning_proposals,
+                };
+                self.already_proposed_slots.insert(slot + 1);
+                self.current_consensus_instances
+                    .insert(new_prepare_instance.digest(), new_prepare_instance.clone());
+                self.tx_info
+                    .send(new_prepare_instance)
+                    .await
+                    .expect("failed to send info to proposer");
+            } else {
+                // Otherwise add the ticket to the queue, and wait later until there
+                // are enough new certificates to propose
+                self.tickets.push_back(ticket);
+            }
+        }
+
         Ok(())
     }
 
@@ -634,7 +1049,6 @@ impl Core {
     }
 
     fn sanitize_vote(&mut self, vote: &Vote) -> DagResult<()> {
-
         //println!("Received vote for origin: {}, header id {}, round {}. Vote sent by replica {}", vote.origin.clone(), vote.id.clone(), vote.round.clone(), vote.author.clone());
         /*ensure!(
             self.current_headers.get(&vote.height) != None,
@@ -644,7 +1058,7 @@ impl Core {
         //     self.current_header.round <= vote.round,
         //     DagError::VoteTooOld(vote.digest(), vote.round)
         // );
-       
+
         // Ensure we receive a vote on the expected header.
         /*let current_header = self.current_headers.entry(vote.height).or_insert_with(HashMap::new).get(&vote.author);
         ensure!(
@@ -657,13 +1071,12 @@ impl Core {
         //         && vote.round == self.current_header.round,
         //     DagError::UnexpectedVote(vote.id.clone())
         // );
-        
-    
-        //Deprecated code for Invalid vote proofs 
+
+        //Deprecated code for Invalid vote proofs
         // if false && self.current_header.is_special && vote.special_valid == 0 {
         //     match &vote.tc {
         //         Some(tc) => { //invalidation proof = a TC that formed for the current view (or a future one). Implies one cannot vote in this view anymore.
-        //             ensure!( 
+        //             ensure!(
         //                 tc.view >= self.current_header.view,
         //                 DagError::InvalidVoteInvalidation
         //             );
@@ -671,10 +1084,10 @@ impl Core {
         //                 Ok(()) => {},
         //                 _ => return Err(DagError::InvalidVoteInvalidation)
         //             }
-                    
-        //          }, 
-        //         None => { 
-        //             match &vote.qc { 
+
+        //          },
+        //         None => {
+        //             match &vote.qc {
         //                 Some(qc) => { //invalidation proof = a QC that formed for a future view (i.e. an extension of some TC in current view or future)
         //                     ensure!( //proof is actually showing a conflict.
         //                         qc.view > self.current_header.view,
@@ -687,10 +1100,10 @@ impl Core {
         //                 }
         //                 None => { return Err(DagError::InvalidVoteInvalidation)}
         //             }
-        //         }, 
+        //         },
         //     }
-        // } 
-       
+        // }
+
         // Verify the vote.
         vote.verify(&self.committee).map_err(DagError::from)
     }
@@ -702,13 +1115,16 @@ impl Core {
         );
 
         println!("Past first ensure");
-        
+
         // Verify the certificate (and the embedded header).
         certificate.verify(&self.committee).map_err(DagError::from)
     }
 
     // Main loop listening to incoming messages.
     pub async fn run(&mut self) {
+        self.tips = Header::genesis_headers(&self.committee);
+        self.current_certs = Certificate::genesis_certs(&self.committee);
+
         loop {
             let result = tokio::select! {
                 // We receive here messages from other primaries.
@@ -733,14 +1149,14 @@ impl Core {
                         },
                         PrimaryMessage::Certificate(certificate) => {
                             match self.sanitize_certificate(&certificate) {
-                                Ok(()) => self.process_certificate(certificate).await, //self.receive_certificate(certificate).await, 
+                                Ok(()) => self.process_certificate(certificate).await, //self.receive_certificate(certificate).await,
                                 error => {
                                     error
                                 }
                             }
                         },
                         PrimaryMessage::Timeout(timeout) => self.handle_timeout(&timeout).await,
-                        PrimaryMessage::TC(tc) => self.process_tc(&tc).await,
+                        PrimaryMessage::TC(tc) => self.handle_tc(&tc).await,
                         _ => panic!("Unexpected core message")
                     }
                 },
@@ -753,17 +1169,17 @@ impl Core {
                 Some(header) = self.rx_header_waiter.recv() => self.process_header(header).await,
 
                 // Loopback for committed instance that hasn't had all of it ancestors yet
-                Some(consensus_instance) = self.rx_header_waiter_instances.recv() => self.process_commit_instance(consensus_instance).await,
+                Some((_, _)) = self.rx_header_waiter_instances.recv() => self.process_loopback().await,
                 //Loopback for special headers that were validated by consensus layer.
-                //Some((header, consensus_sigs)) = self.rx_validation.recv() => self.create_vote(header, consensus_sigs).await,               
+                //Some((header, consensus_sigs)) = self.rx_validation.recv() => self.create_vote(header, consensus_sigs).await,
                 //i.e. core requests validation from consensus (check if ticket valid; wait to receive ticket if we don't have it yet -- should arrive: using all to all or forwarding)
 
                 Some(header_digest) = self.rx_request_header_sync.recv() => self.synchronizer.fetch_header(header_digest).await,
-                
+
                 // We receive here loopback certificates from the `CertificateWaiter`. Those are certificates for which
                 // we interrupted execution (we were missing some of their ancestors) and we are now ready to resume
                 // processing.
-                Some(certificate) = self.rx_certificate_waiter.recv() => self.process_certificate(certificate).await,
+                //Some(certificate) = self.rx_certificate_waiter.recv() => self.process_certificate(certificate).await,
 
                 // We receive an event that timer expired
                 Some((slot, view)) = self.timer_futures.next() => self.local_timeout_round(slot, view).await,

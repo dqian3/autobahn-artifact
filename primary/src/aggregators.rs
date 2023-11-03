@@ -7,7 +7,6 @@ use std::collections::HashSet;
 
 /// Aggregates votes for a particular header into a certificate.
 pub struct VotesAggregator {
-    consensus_weight: Stake,
     dissemination_weight: Stake,
     pub votes: Vec<(PublicKey, Signature)>,
     used: HashSet<PublicKey>,
@@ -16,7 +15,6 @@ pub struct VotesAggregator {
 impl VotesAggregator {
     pub fn new() -> Self {
         Self {
-            consensus_weight: 0,
             dissemination_weight: 0,
             votes: Vec::new(),
             used: HashSet::new(),
@@ -28,15 +26,13 @@ impl VotesAggregator {
         vote: Vote,
         committee: &Committee,
         header: &Header,
-    ) -> DagResult<(Option<Certificate>, Option<Certificate>)> {
+    ) -> DagResult<Option<Certificate>> {
         let author = vote.author;
-
         // Ensure it is the first time this authority votes.
         ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
         
         self.votes.push((author, vote.signature));
         self.dissemination_weight += committee.stake(&author);
-        self.consensus_weight += committee.stake(&author);
 
         if self.dissemination_weight >= committee.validity_threshold() {
             self.dissemination_weight = 0;
@@ -46,20 +42,10 @@ impl VotesAggregator {
                 height: header.height(),
                 votes: self.votes.clone(),
             };
-            return Ok((Some(dissemination_cert), None));
+            return Ok(Some(dissemination_cert));
         }
 
-        if self.consensus_weight >= committee.quorum_threshold() {
-            self.consensus_weight = 0;
-            let consensus_cert: Certificate = Certificate { 
-                author: header.origin(), 
-                header_digest: header.digest(), 
-                height: header.height(), 
-                votes: self.votes.clone() };
-            return Ok((None, Some(consensus_cert)));
-        }
-
-        Ok((None, None))
+        Ok(None)
     }
 }
 
@@ -67,7 +53,7 @@ impl VotesAggregator {
 /// Aggregate consensus info votes and check if we reach a quorum.
 pub struct QCMaker {
     weight: Stake,
-    votes: Vec<(PublicKey, Signature)>,
+    pub votes: Vec<(PublicKey, Signature)>,
     used: HashSet<PublicKey>,
 }
 
@@ -129,6 +115,9 @@ impl TCMaker {
             DagError::AuthorityReuse(author)
         );
 
+        let slot = timeout.slot;
+        let view = timeout.view;
+
         // Add the timeout to the accumulator.
         self.votes
             .push(timeout);
@@ -136,8 +125,8 @@ impl TCMaker {
         if self.weight >= committee.quorum_threshold() {
             self.weight = 0; // Ensures TC is only created once.
             return Ok(Some(TC {
-                slot: timeout.slot,
-                view: timeout.view,
+                slot,
+                view,
                 timeouts: self.votes.clone(),
             }));
         }

@@ -7,7 +7,7 @@ use crate::garbage_collector::GarbageCollector;
 use crate::header_waiter::HeaderWaiter;
 use crate::helper::Helper;
 use crate::leader::LeaderElector;
-use crate::messages::{Certificate, Header, Vote, Timeout, TC};
+use crate::messages::{Certificate, Header, Vote, Timeout, TC, Proposal};
 use crate::payload_receiver::PayloadReceiver;
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
+use std::time::Duration;
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
@@ -44,6 +45,7 @@ pub enum PrimaryMessage {
     TC(TC),
     CertificatesRequest(Vec<Digest>, /* requestor */ PublicKey),
     HeadersRequest(Vec<Digest>, /* requestor */ PublicKey),
+    ProposalHeadersRequest(Proposal, Height, /* requestor */ PublicKey),
 }
 
 /// The messages sent by the primary to its workers.
@@ -155,6 +157,8 @@ impl Primary {
             /* tx_certificate_waiter */ tx_sync_certificates,
         );
 
+        let timeout_delay = 1000;
+
         // The `Core` receives and handles headers, votes, and certificates from the other primaries.
         Core::spawn(
             name,
@@ -177,6 +181,7 @@ impl Primary {
             rx_request_header_sync,
             tx_instance,
             LeaderElector::new(committee.clone()),
+            timeout_delay,
         );
 
         Committer::spawn(committee.clone(), store.clone(), parameters.gc_depth, rx_mempool, rx_committer, rx_commit, tx_output);

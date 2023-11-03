@@ -1,5 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::messages::{Certificate, Header, ConsensusInstance};
+use crate::messages::{Certificate, Header, ConsensusMessage};
 use crate::primary::Height;
 use config::{Committee, WorkerId};
 use crypto::{Digest, PublicKey, SignatureService};
@@ -31,7 +31,7 @@ pub struct Proposer {
     /// Receives the batches' digests from our workers.
     rx_workers: Receiver<(Digest, WorkerId)>,
     // Receives new consensus instance
-    rx_instance: Receiver<ConsensusInstance>,
+    rx_instance: Receiver<ConsensusMessage>,
     /// Sends newly created headers to the `Core`.
     tx_core: Sender<Header>,
    
@@ -40,7 +40,7 @@ pub struct Proposer {
     /// Holds the certificate waiting to be included in the next header
     last_parent: Option<Certificate>,
     // Holds the consensus info for the last special header
-    consensus_instances: Vec<ConsensusInstance>,
+    consensus_instances: Vec<ConsensusMessage>,
     /// Holds the batches' digests waiting to be included in the next header.
     digests: Vec<(Digest, WorkerId)>,
     /// Keeps track of the size (in bytes) of batches' digests that we received so far.
@@ -57,7 +57,7 @@ impl Proposer {
         max_header_delay: u64,
         rx_core: Receiver<Certificate>,
         rx_workers: Receiver<(Digest, WorkerId)>,
-        rx_instance: Receiver<ConsensusInstance>,
+        rx_instance: Receiver<ConsensusMessage>,
         tx_core: Sender<Header>,
     ) {
         /*let genesis: Vec<Digest> = Certificate::genesis(&committee)
@@ -172,7 +172,7 @@ impl Proposer {
                         continue;
                     }
 
-                    // Advance to the next round.
+                    // Advance to the next height.
                     self.height += 1;
                     debug!("Chain moved to height {}", self.height);
 

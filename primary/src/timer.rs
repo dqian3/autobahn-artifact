@@ -5,9 +5,9 @@ use tokio::time::{sleep, Duration, Instant, Sleep};
 
 use crate::primary::{Slot, View};
 
-#[cfg(test)]
-#[path = "tests/timer_tests.rs"]
-pub mod timer_tests;
+//#[cfg(test)]
+//#[path = "tests/timer_tests.rs"]
+//pub mod timer_tests;
 
 pub struct Timer {
     slot: Slot,

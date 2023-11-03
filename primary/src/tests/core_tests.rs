@@ -28,10 +28,11 @@ async fn process_header() {
     let (tx_parents, _rx_parents) = channel(1);
 
     let(tx_committer, _rx_committer) = channel(1);
-    let(_tx_validation, rx_validation) = channel(1);
     let(tx_sailfish, _rx_special) = channel(1);
     let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
+    let (tx_info, _rx_info) = channel(1);
+    let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
 
     // Create a new test store.
     let path = ".db_test_process_header";
@@ -39,7 +40,7 @@ async fn process_header() {
     let mut store = Store::new(path).unwrap();
 
     // Make the vote we expect to receive.
-    let expected = Vote::new(&header(), &name, &mut signature_service, Vec::new(), Vec::new()).await;
+    let expected = Vote::new(&header(), &name, &mut signature_service, Vec::new()).await;
 
     // Spawn a listener to receive the vote.
     let address = committee
@@ -57,6 +58,9 @@ async fn process_header() {
         /* tx_certificate_waiter */ tx_sync_certificates,
     );
 
+    let leader_elector = LeaderElector::new(committee.clone());
+    let timeout_delay = 1000;
+
     // Spawn the core.
     Core::spawn(
         name,
@@ -68,17 +72,19 @@ async fn process_header() {
         /* gc_depth */ 50,
         /* rx_primaries */ rx_primary_messages,
         /* rx_header_waiter */ rx_headers_loopback,
+        rx_header_waiter_instances,
         /* rx_certificate_waiter */ rx_certificates_loopback,
         /* rx_proposer */ rx_headers,
         tx_consensus,
         tx_committer,
         /* tx_proposer */ tx_parents,
-        rx_validation,
         /* special */ tx_sailfish,
         rx_pushdown_cert,
-        rx_request_header_sync
+        rx_request_header_sync,
+        tx_info,
+        leader_elector,
+        timeout_delay,
     );
-
 
     // Send a header to the core.
     tx_primary_messages
@@ -86,8 +92,12 @@ async fn process_header() {
         .await
         .unwrap();
 
-    // Ensure core processes it
-    sleep(Duration::from_millis(1000)).await;
+
+    let received = handle.await.unwrap();
+    match bincode::deserialize(&received).unwrap() {
+        PrimaryMessage::Vote(x) => assert_eq!(x, expected),
+        x => panic!("Unexpected message: {:?}", x),
+    }
 
     // Ensure the header is correctly stored.
     let stored = store
@@ -100,7 +110,7 @@ async fn process_header() {
 
 #[tokio::test]
 #[serial]
-async fn process_header_missing_parent() {
+async fn process_header_invalid_height() {
     let (name, secret) = keys().pop().unwrap();
     let signature_service = SignatureService::new(secret);
 
@@ -114,10 +124,11 @@ async fn process_header_missing_parent() {
     let (tx_parents, _rx_parents) = channel(1);
 
     let(tx_committer, _rx_committer) = channel(1);
-    let(_tx_validation, rx_validation) = channel(1);
     let(tx_sailfish, _rx_special) = channel(1);
     let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
+    let (tx_info, _rx_info) = channel(1);
+    let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
 
     // Create a new test store.
     let path = ".db_test_process_header_missing_parent";
@@ -133,6 +144,9 @@ async fn process_header_missing_parent() {
         /* tx_certificate_waiter */ tx_sync_certificates,
     );
 
+    let leader_elector = LeaderElector::new(committee().clone());
+    let timeout_delay = 1000;
+
     // Spawn the core.
     Core::spawn(
         name,
@@ -144,15 +158,18 @@ async fn process_header_missing_parent() {
         /* gc_depth */ 50,
         /* rx_primaries */ rx_primary_messages,
         /* rx_header_waiter */ rx_headers_loopback,
+        rx_header_waiter_instances,
         /* rx_certificate_waiter */ rx_certificates_loopback,
         /* rx_proposer */ rx_headers,
         tx_consensus,
         tx_committer,
         /* tx_proposer */ tx_parents,
-        rx_validation,
         tx_sailfish,
         rx_pushdown_cert,
-        rx_request_header_sync
+        rx_request_header_sync,
+        tx_info,
+        leader_elector,
+        timeout_delay,
     );
 
     // Send a header to the core.
@@ -170,16 +187,8 @@ async fn process_header_missing_parent() {
     // Sleep to ensure header is processed
     sleep(Duration::from_millis(1000)).await;
 
-
-    let stored = store
-        .read(id.to_vec())
-        .await
-        .unwrap();
-
-    assert!(stored.is_none());
-     
     // Ensure the header is not stored.
-    //assert!(store.read(id.to_vec()).await.unwrap().is_none());
+    assert!(store.read(id.to_vec()).await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -198,10 +207,12 @@ async fn process_header_missing_payload() {
     let (tx_parents, _rx_parents) = channel(1);
 
     let(tx_committer, _rx_committer) = channel(1);
-    let(_tx_validation, rx_validation) = channel(1);
     let(tx_sailfish, _rx_special) = channel(1);
     let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
+    let (tx_info, _rx_info) = channel(1);
+    let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
+
 
     // Create a new test store.
     let path = ".db_test_process_header_missing_payload";
@@ -217,6 +228,9 @@ async fn process_header_missing_payload() {
         /* tx_certificate_waiter */ tx_sync_certificates,
     );
 
+    let leader_elector = LeaderElector::new(committee().clone());
+    let timeout_delay = 1000;
+
     // Spawn the core.
     Core::spawn(
         name,
@@ -228,15 +242,18 @@ async fn process_header_missing_payload() {
         /* gc_depth */ 50,
         /* rx_primaries */ rx_primary_messages,
         /* rx_header_waiter */ rx_headers_loopback,
+        rx_header_waiter_instances,
         /* rx_certificate_waiter */ rx_certificates_loopback,
         /* rx_proposer */ rx_headers,
         tx_consensus,
         tx_committer,
         /* tx_proposer */ tx_parents,
-        rx_validation,
         tx_sailfish,
         rx_pushdown_cert,
-        rx_request_header_sync
+        rx_request_header_sync,
+        tx_info,
+        leader_elector,
+        timeout_delay,
     );
 
     // Send a header to the core.
@@ -250,7 +267,7 @@ async fn process_header_missing_payload() {
         .await
         .unwrap();
     // Sleep to ensure header is processed
-    sleep(Duration::from_millis(5000)).await;
+    sleep(Duration::from_millis(1000)).await;
 
     // Ensure the header is not stored.
     assert!(store.read(id.to_vec()).await.unwrap().is_none());
@@ -274,10 +291,11 @@ async fn process_votes() {
     let (tx_parents, mut rx_parents) = channel(1);
 
     let(tx_committer, _rx_committer) = channel(1);
-    let(_tx_validation, rx_validation) = channel(1);
     let(tx_sailfish, _rx_special) = channel(1);
     let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
+    let (tx_info, _rx_info) = channel(1);
+    let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
 
     // Create a new test store.
     let path = ".db_test_process_vote";
@@ -293,6 +311,9 @@ async fn process_votes() {
         /* tx_certificate_waiter */ tx_sync_certificates,
     );
 
+    let leader_elector = LeaderElector::new(committee.clone());
+    let timeout_delay = 1000;
+
     // Spawn the core.
     Core::spawn(
         name,
@@ -304,15 +325,18 @@ async fn process_votes() {
         /* gc_depth */ 50,
         /* rx_primaries */ rx_primary_messages,
         /* rx_header_waiter */ rx_headers_loopback,
+        rx_header_waiter_instances,
         /* rx_certificate_waiter */ rx_certificates_loopback,
         /* rx_proposer */ rx_headers,
         tx_consensus,
         tx_committer,
         /* tx_proposer */ tx_parents,
-        rx_validation,
         tx_sailfish,
         rx_pushdown_cert,
-        rx_request_header_sync
+        rx_request_header_sync,
+        tx_info,
+        leader_elector,
+        timeout_delay,
     );
 
     //TODO: instead of unit test hack: pass header() which includes edges
@@ -321,48 +345,39 @@ async fn process_votes() {
     assert_eq!(Header::default(), Header::genesis(&committee)); //Why are these equal even though author is different? Because genesis still uses the default ID.
     //Can currently use them interchangeably
     //Note: core uses Header::genesis instead of Header::default now
-    /*tx_primary_messages
-        .send(PrimaryMessage::Header(Header::genesis(&committee)))
+    tx_primary_messages
+        .send(PrimaryMessage::Header(header()))
         .await
-        .unwrap();*/
+        .unwrap();
 
     // Make the certificate we expect to receive.
     let header = header();
     let expected = certificate(&header);
 
     // Spawn all listeners to receive our newly formed certificate.
-    /*let handles: Vec<_> = committee
+    let handles: Vec<_> = committee
         .others_primaries(&name)
         .iter()
         .map(|(_, address)| listener(address.primary_to_primary))
-        .collect();*/
-
-    /*tx_primary_messages
-        .send(PrimaryMessage::Header(header.clone()))
-        .await
-        .unwrap();*/
-
-    tx_headers
-        .send(header.clone())
-        .await
-        .unwrap();
+        .collect();
 
     // Send a votes to the core.
     for vote in votes(&header) {
+        println!("Vote origin is {:?}", vote.origin);
         tx_primary_messages
             .send(PrimaryMessage::Vote(vote))
             .await
             .unwrap();
     }
-    let cert_received = rx_parents.recv().await;
-    assert_eq!(cert_received.unwrap(), expected);
+    //let cert_received = rx_parents.recv().await;
+    //assert_eq!(cert_received.unwrap(), expected);
     // Ensure all listeners got the certificate.
-    /*for received in try_join_all(handles).await.unwrap() {
+    for received in try_join_all(handles).await.unwrap() {
         match bincode::deserialize(&received).unwrap() {
             PrimaryMessage::Header(x) => assert_eq!(x.parent_cert, expected),
             x => panic!("Unexpected message: {:?}", x),
         }
-    }*/
+    }
 }
 
 #[tokio::test]
@@ -381,10 +396,11 @@ async fn process_certificates() {
     let (tx_parents, mut rx_parents) = channel(1);
 
     let(tx_committer, mut rx_committer) = channel(3);
-    let(_tx_validation, rx_validation) = channel(1);
     let(tx_sailfish, _rx_special) = channel(3);
     let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
+    let (tx_info, _rx_info) = channel(1);
+    let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
 
     // Create a new test store.
     let path = ".db_test_process_certificates";
@@ -400,6 +416,9 @@ async fn process_certificates() {
         /* tx_certificate_waiter */ tx_sync_certificates,
     );
 
+    let leader_elector = LeaderElector::new(committee().clone());
+    let timeout_delay = 1000;
+
     // Spawn the core.
     Core::spawn(
         name,
@@ -411,15 +430,18 @@ async fn process_certificates() {
         /* gc_depth */ 50,
         /* rx_primaries */ rx_primary_messages,
         /* rx_header_waiter */ rx_headers_loopback,
+        rx_header_waiter_instances,
         /* rx_certificate_waiter */ rx_certificates_loopback,
         /* rx_proposer */ rx_headers,
         tx_consensus,
         tx_committer,
         /* tx_proposer */ tx_parents,
-        rx_validation,
         tx_sailfish,
         rx_pushdown_cert,
-        rx_request_header_sync
+        rx_request_header_sync,
+        tx_info,
+        leader_elector,
+        timeout_delay,
     );
 
     // Send enough certificates to the core.

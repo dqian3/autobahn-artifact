@@ -93,7 +93,7 @@ pub fn header() -> Header {
     let header = Header {
         author,
         height: 1,
-        parent_cert: Certificate::genesis_cert(&committee()),//.get(keys().len()).unwrap().clone(),
+        parent_cert: Certificate::genesis_certs(&committee()).get(&author).unwrap().clone(),
         /*parent_cert_digest: Certificate::genesis(&committee())
             .iter()
             .map(|x| x.digest())
@@ -163,10 +163,7 @@ pub fn votes(header: &Header) -> Vec<Vote> {
                 origin: header.author,
                 author,
                 signature: Signature::default(),
-                prepare_special_valids: Vec::new(),
-                confirm_special_valids: Vec::new(),
-                //qc: None,
-                //tc: None,
+                consensus_sigs: Vec::new(),
             };
             Vote {
                 signature: Signature::new(&vote.digest(), &secret),
@@ -187,8 +184,7 @@ pub fn special_votes(header: &Header) -> Vec<Vote> {
                 origin: header.author,
                 author,
                 signature: Signature::default(),
-                prepare_special_valids: Vec::new(),
-                confirm_special_valids: Vec::new(),
+                consensus_sigs: Vec::new(),
 
                 //qc: None,
                 //tc: None,
@@ -207,8 +203,6 @@ pub fn certificate(header: &Header) -> Certificate {
         author: header.origin(),
         header_digest: header.digest(),
         height: header.height,
-        special_valids: Vec::new(),
-        confirm_info_list: Vec::new(),
         votes: votes(&header)
             .into_iter()
             .map(|x| (x.author, x.signature))
@@ -222,8 +216,6 @@ pub fn special_certificate(header: &Header) -> Certificate {
         author: header.origin(),
         header_digest: header.digest(),
         height: header.height,
-        special_valids: Vec::new(),
-        confirm_info_list: Vec::new(),
         votes: special_votes(&header)
             .into_iter()
             .map(|x| (x.author, x.signature))
