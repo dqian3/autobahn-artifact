@@ -56,7 +56,7 @@ pub struct HeaderWaiter {
     /// Loops back to the core headers for which we got all parents and batches.
     tx_core: Sender<Header>,
     /// Loops back commit messages to the committer for reprocessing
-    tx_consensus_loopback: Sender<ConsensusMessage>,
+    tx_consensus_loopback: Sender<(Proposal, ConsensusMessage)>,
 
     /// Network driver allowing to send messages.
     network: SimpleSender,
@@ -86,7 +86,7 @@ impl HeaderWaiter {
         sync_retry_nodes: usize,
         rx_synchronizer: Receiver<WaiterMessage>,
         tx_core: Sender<Header>,
-        tx_core_instances: Sender<ConsensusMessage>,
+        tx_core_instances: Sender<(Proposal, ConsensusMessage)>,
     ) {
         tokio::spawn(async move {
             Self {

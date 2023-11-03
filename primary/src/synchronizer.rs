@@ -12,6 +12,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 /// The `Synchronizer` checks if we have all batches and parents referenced by a header. If we don't, it sends
 /// a command to the `Waiter` to request the missing data.
+#[derive(Clone)]
 pub struct Synchronizer {
     /// The public key of this primary.
     name: PublicKey,
@@ -291,12 +292,12 @@ impl Synchronizer {
         Ok((None, false))
     }
 
-    pub async fn is_proposal_ready(&mut self, proposal: Proposal) -> DagResult<bool> {
+    pub async fn is_proposal_ready(&mut self, proposal: &Proposal) -> DagResult<bool> {
         Ok(self.store.read(proposal.header_digest.to_vec()).await?.is_some())
     }
 
     pub async fn start_proposal_sync(&mut self, proposal: Proposal, author: &PublicKey, consensus_message: ConsensusMessage) {
-        let is_ready = self.is_proposal_ready(proposal.clone()).await.expect("should return true or false");
+        let is_ready = self.is_proposal_ready(&proposal).await.expect("should return true or false");
         if !is_ready {
             if let Err(e) = self
                 .tx_header_waiter
@@ -315,43 +316,22 @@ impl Synchronizer {
     pub async fn get_all_headers_for_proposal(
         &mut self,
         proposal: Proposal,
-        author: &PublicKey,
         stop_height: Height,
-        consensus_message: ConsensusMessage,
     ) -> DagResult<Vec<Header>> {
         // The list of blocks for this proposal
         let mut ancestors: Vec<Header> = Vec::new();
 
-        // First check if we have the corresponding header in the store
-        let mut header: Option<Header> = match self.store.read(proposal.header_digest.to_vec()).await? {
-            Some(bytes) => Some(bincode::deserialize(&bytes)?),
-            None => {
-                if let Err(e) = self
-                    .tx_header_waiter
-                    .send(WaiterMessage::SyncProposalHeaders(
-                        proposal.clone(),
-                        *author,
-                        consensus_message,
-                    ))
-                    .await
-                {
-                    panic!("Failed to send request to header waiter: {}", e);
-                }
-                None
-            }
-        };
-
-        // Reschedule processing if we don't have it
-        if header.is_none() {
-            return Ok(Vec::new());
-        }
+        // NOTE: Before calling, must check if proposal is ready, assumes that proposal is ready
+        // before calling
+        ensure!(self.is_proposal_ready(&proposal).await.unwrap(), DagError::InvalidHeaderId);
+        let mut header: Header = self.get_header(proposal.header_digest).await.expect("already synced should have header").unwrap();
 
         // Otherwise we have the header and all of its ancestors
         let mut current_height = proposal.height;
         while current_height < stop_height {
-            ancestors.push(header.clone().unwrap());
-            header = Some(self.get_parent_header(&header.unwrap()).await?.expect("should have parent by now"));
-            current_height = header.as_ref().unwrap().height();
+            ancestors.push(header.clone());
+            header = self.get_parent_header(&header).await?.expect("should have parent by now");
+            current_height = header.height();
         }
 
         Ok(ancestors)

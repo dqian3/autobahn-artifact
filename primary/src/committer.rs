@@ -82,7 +82,6 @@ pub struct Committer {
     rx_mempool: Receiver<Certificate>,
     rx_deliver: Receiver<Certificate>,
     rx_commit_message: Receiver<ConsensusMessage>,
-    rx_committer_loopback: Receiver<ConsensusMessage>,
     tx_output: Sender<Header>,
     synchronizer: Synchronizer,
     genesis: Vec<Certificate>,
@@ -95,9 +94,7 @@ impl Committer {
         gc_depth: Height,
         rx_mempool: Receiver<Certificate>,
         rx_commit: Receiver<Certificate>,
-        rx_commit_instance: Receiver<(Slot, Vec<Header>)>,
         rx_commit_message: Receiver<ConsensusMessage>,
-        rx_committer_loopback: Receiver<ConsensusMessage>,
         tx_output: Sender<Header>,
         synchronizer: Synchronizer,
     ) {
@@ -119,7 +116,6 @@ impl Committer {
                 rx_mempool,
                 rx_deliver,
                 rx_commit_message,
-                rx_committer_loopback,
                 tx_output,
                 synchronizer,
                 genesis,
@@ -146,7 +142,7 @@ impl Committer {
                         ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals } => {
                             for (pk, proposal) in proposals {
                                 let stop_height = *state.last_executed_heights.get(pk).unwrap();
-                                let headers = self.synchronizer.get_all_headers_for_proposal(proposal.clone(), pk, stop_height, current_commit_message.clone())
+                                let headers = self.synchronizer.get_all_headers_for_proposal(proposal.clone(), stop_height)
                                     .await
                                     .expect("should have ancestors by now");
 
@@ -202,18 +198,6 @@ impl Committer {
                 }
 
             }
-        }
-    }
-
-    fn get_ancestors(&self, state: &State, commit_instance: ConsensusMessage) {
-        match commit_instance {
-            ConsensusMessage::Commit {
-                slot,
-                view: _,
-                qc: _,
-                proposals,
-            } => for (pk, cert) in proposals {},
-            _ => {}
         }
     }
 

@@ -164,7 +164,7 @@ impl Primary {
             name,
             committee.clone(),
             store.clone(),
-            synchronizer,
+            synchronizer.clone(),
             signature_service.clone(),
             consensus_round.clone(),
             parameters.gc_depth,
@@ -184,7 +184,7 @@ impl Primary {
             timeout_delay,
         );
 
-        Committer::spawn(committee.clone(), store.clone(), parameters.gc_depth, rx_mempool, rx_committer, rx_commit, tx_output);
+        Committer::spawn(committee.clone(), store.clone(), parameters.gc_depth, rx_mempool, rx_committer, rx_commit, tx_output, synchronizer);
 
         // Keeps track of the latest consensus round and allows other tasks to clean up their their internal state
         GarbageCollector::spawn(

@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::messages::{Certificate, Header, ConsensusMessage};
 use crate::primary::Height;
 use config::{Committee, WorkerId};
-use crypto::{Digest, PublicKey, SignatureService};
+use crypto::{Digest, PublicKey, SignatureService, Hash};
 use log::debug;
 #[cfg(feature = "benchmark")]
 use log::info;
@@ -40,7 +42,7 @@ pub struct Proposer {
     /// Holds the certificate waiting to be included in the next header
     last_parent: Option<Certificate>,
     // Holds the consensus info for the last special header
-    consensus_instances: Vec<ConsensusMessage>,
+    consensus_instances: HashMap<Digest, ConsensusMessage>,
     /// Holds the batches' digests waiting to be included in the next header.
     digests: Vec<(Digest, WorkerId)>,
     /// Keeps track of the size (in bytes) of batches' digests that we received so far.
@@ -81,7 +83,7 @@ impl Proposer {
                 tx_core,
                 height: 1,
                 last_parent: Some(genesis),
-                consensus_instances: Vec::new(),
+                consensus_instances: HashMap::new(),
                 digests: Vec::with_capacity(2 * header_size),
                 payload_size: 0,
             }
@@ -161,7 +163,7 @@ impl Proposer {
             tokio::select! {
                 // Received info from consensus
                 Some(info) = self.rx_instance.recv() => {
-                    self.consensus_instances.push(info);
+                    self.consensus_instances.insert(info.digest(), info);
                 }
 
                 // Receive own certificate from core (we are the author)

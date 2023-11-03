@@ -566,7 +566,7 @@ impl Core {
                         for (pk, proposal) in proposals {
                             self.synchronizer.start_proposal_sync(proposal.clone(), &pk, consensus_message.clone());
                         }
-                        self.process_prepare_message(consensus_message, header, &consensus_sigs);
+                        self.process_prepare_message(consensus_message, header, consensus_sigs.as_mut());
                         self.last_voted_consensus.insert((*slot, *view));
                     }
                     ConsensusMessage::Confirm {
@@ -579,7 +579,7 @@ impl Core {
                             self.synchronizer.start_proposal_sync(proposal.clone(), &pk, consensus_message.clone());
                         }
 
-                        self.process_confirm_message(consensus_message, &consensus_sigs);
+                        self.process_confirm_message(consensus_message, consensus_sigs.as_mut());
                     }
                     ConsensusMessage::Commit {
                         slot,
@@ -605,7 +605,7 @@ impl Core {
         &mut self,
         prepare_message: &ConsensusMessage,
         header: &Header,
-        consensus_sigs: &Vec<(Digest, Signature)>,
+        consensus_sigs: &mut Vec<(Digest, Signature)>,
     ) {
         match prepare_message {
             ConsensusMessage::Prepare {
@@ -650,7 +650,6 @@ impl Core {
                     // TODO: also forward the ticket to the leader (to tolerate byzantine
                     // proposers)
                     let timer = Timer::new(slot + 1, 1, self.timeout_delay);
-                    timer.reset();
                     self.timer_futures.push(Box::pin(timer));
                     self.timers.insert((slot + 1, 1));
                 }
@@ -670,7 +669,7 @@ impl Core {
     async fn process_confirm_message(
         &mut self,
         confirm_message: &ConsensusMessage,
-        consensus_sigs: &Vec<(Digest, Signature)>,
+        consensus_sigs: &mut Vec<(Digest, Signature)>,
     ) {
         match confirm_message {
             ConsensusMessage::Confirm {
@@ -719,7 +718,7 @@ impl Core {
                 // Check if all proposals are in the store
                 for (_, proposal) in proposals.clone() {
                     // Suspend processing if any proposal is not ready
-                    is_ready = is_ready && self.synchronizer.is_proposal_ready(proposal).await.unwrap();
+                    is_ready = is_ready && self.synchronizer.is_proposal_ready(&proposal).await.unwrap();
                 }
 
                 is_ready
@@ -757,22 +756,23 @@ impl Core {
 
     #[async_recursion]
     async fn process_loopback(&mut self) -> DagResult<()> {
-        let consensus_message = self.commit_messages.front();
-        match consensus_message {
-            Some(commit_message) => {
-                if self.is_commit_ready(commit_message).await {
-                    // Send commit message to the committer
-                    self.tx_committer
-                        .send(*commit_message)
-                        .await
-                        .expect("Failed to send headers");
-                    // Remove the commit message from pending queue
-                    self.commit_messages.pop_front();
-                }
-                Ok(())
-            },
-            None => Ok(()),
-        } 
+        if !self.commit_messages.is_empty() {
+            let commit_message = self.commit_messages.pop_front().unwrap();
+
+            if self.is_commit_ready(&commit_message).await {
+                // Send commit message to the committer
+                self.tx_committer
+                    .send(commit_message.clone())
+                    .await
+                    .expect("Failed to send headers");
+                // Remove the commit message from pending queue
+                self.commit_messages.pop_front();
+            } else {
+                // Reinsert the commit message to the front
+                self.commit_messages.push_front(commit_message);
+            }
+        }
+        Ok(())
     }
 
 
