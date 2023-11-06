@@ -25,7 +25,7 @@ pub struct Synchronizer {
     /// The genesis and its digests.
     genesis: Vec<(Digest, Certificate)>,
     /// Genesis header
-    genesis_header: Header,
+    genesis_header: HashMap<PublicKey, Header>,
 }
 
 impl Synchronizer {
@@ -45,7 +45,7 @@ impl Synchronizer {
                 .into_iter()
                 .map(|x| (x.digest(), x))
                 .collect(),
-            genesis_header: Header::genesis(committee),
+            genesis_header: Header::genesis_headers(committee),
         }
     }
 
@@ -226,72 +226,6 @@ impl Synchronizer {
         Ok(true)
     }
 
-    //Checks whether we have special parent cert or header (based on header.id)
-    // If we have special parent cert ==> do nothing.
-    // If we have only special parent header ==> send dummy cert to committer
-    // If we have neither, return error or sync.
-
-    pub async fn deliver_special_certificate(
-        &mut self,
-        certificate: &Certificate,
-        sync: bool,
-    ) -> DagResult<(Option<Certificate>, bool)> {
-        //bool value indicates that we have real_cert. No sync or error necessary
-
-        let digest = certificate.header_digest.clone(); //.as_ref().unwrap();//header.parents.iter().next().unwrap().clone();
-
-        if digest == self.genesis_header.digest() {
-            //Note: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
-            //parents.push(self.genesis_header.clone());
-            //let dummy_parent_genesis_cert = Certificate::genesis_cert(&self.committee);
-            //TODO: alternativey: pick first cert from genesis == genesis_cert
-            let dummy_parent_cert = Certificate {
-                header_digest: self.genesis_header.digest(),
-                ..Certificate::default()
-            };
-            return Ok((Some(dummy_parent_cert), true));
-        } else {
-            match self.store.read(digest.to_vec()).await? {
-                Some(special_parent_header) => {
-                    //Create dummy cert for parent
-                    let dummy_parent_cert = Certificate {
-                        header_digest: bincode::deserialize(&special_parent_header)?,
-                        ..Certificate::default()
-                    };
-
-                    //Lookup whether real cert exists. Abusing the fact that dummy_cert and real_cert have the same digest (since votes and special_valids are not part of digest.)
-                    match self.store.read(dummy_parent_cert.digest().to_vec()).await? {
-                        Some(_) => {
-                            //Some(real_cert)
-                            //let real_special_parent_cert = bincode::deserialize(&real_cert)?;
-                            return Ok((None, true));
-                        }
-                        None => {
-                            return Ok((Some(dummy_parent_cert), true));
-                        }
-                    }
-                }
-
-                None => {}
-            };
-        }
-
-        if !sync {
-            return Err(DagError::InvalidSpecialParent);
-            //return Ok((None, false));
-        }
-
-        //if we dont have special parent: ignore request --> should be there when using FIFO channels ==> TCP is FIFO, and individual channels are FIFO (e.g. channel for receiving new header proposal)
-
-        //TODO: Start a waiter for it. FIXME: currently SyncParents requests certs. But we just want to request a header. ==> certificate waiter needs to be modified to check special parent too.
-
-        self.tx_certificate_waiter
-            .send(certificate.clone()) //TODO: send message to header.author to request previous header digest.
-            .await
-            .expect("Failed to send sync special parent request");
-        Ok((None, false))
-    }
-
     pub async fn is_proposal_ready(&mut self, proposal: &Proposal) -> DagResult<bool> {
         Ok(self.store.read(proposal.header_digest.to_vec()).await?.is_some())
     }
@@ -338,8 +272,8 @@ impl Synchronizer {
     }
 
     pub async fn get_parent_header(&mut self, header: &Header) -> DagResult<Option<Header>> {
-        if header.parent_cert.header_digest == self.genesis_header.digest() {
-            return Ok(Some(self.genesis_header.clone()));
+        if header.parent_cert.header_digest == self.genesis_header.get(&header.author).unwrap().digest() {
+            return Ok(Some(self.genesis_header.get(&header.author).unwrap().clone()));
         }
 
         let parent = header.parent_cert.header_digest.clone();
@@ -353,10 +287,6 @@ impl Synchronizer {
 
 
     pub async fn get_header(&mut self, header_digest: Digest) -> DagResult<Option<Header>> {
-        if header_digest == self.genesis_header.digest() {
-            return Ok(Some(self.genesis_header.clone()));
-        }
-
         match self.store.read(header_digest.to_vec()).await? {
             Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
             None => {

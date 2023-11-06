@@ -168,7 +168,7 @@ async fn propose_special_ticket_first() {
     //Send ticket to form a special header
     let gen_header = Header::genesis(&committee());
 
-    let ticket: Ticket = Ticket::new(Some(gen_header), None, 1, BTreeMap::new()).await;
+    let ticket: Ticket = Ticket::new(Some(gen_header), None, 1, HashMap::new()).await;
     /*let consensus_info: InstanceInfo = InstanceInfo { slot: 2, view: 1 };
     let prepare_info: PrepareInfo = PrepareInfo { consensus_info, ticket, proposals: HashMap::new() };*/
 

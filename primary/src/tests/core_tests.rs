@@ -1,9 +1,9 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use super::*;
-use crate::common::{
-    certificate, committee, committee_with_base_port, header, headers, keys, listener, votes, special_header, special_certificate, special_votes,
-};
-use futures::future::try_join_all;
+use crate::{common::{
+    certificate, committee, committee_with_base_port, header, headers, keys, listener, votes, special_header, special_votes, header_from_cert,
+}, proposer::Proposer};
+use crypto::{Hash, Signature};
 use std::{fs, time::Duration};
 use tokio::{sync::mpsc::channel, time::sleep};
 use serial_test::serial;
@@ -107,6 +107,92 @@ async fn process_header() {
         .map(|x| bincode::deserialize(&x).unwrap());
     assert_eq!(stored, Some(header()));
 }
+
+#[tokio::test]
+#[serial]
+async fn process_header_missing_parent() {
+    let mut keys = keys();
+    let _ = keys.pop().unwrap(); // Skip the header' author.
+    let (name, secret) = keys.pop().unwrap();
+    let mut signature_service = SignatureService::new(secret);
+
+    let committee = committee_with_base_port(13_000);
+
+    let (tx_sync_headers, _rx_sync_headers) = channel(1);
+    let (tx_sync_certificates, _rx_sync_certificates) = channel(1);
+    let (tx_primary_messages, rx_primary_messages) = channel(1);
+    let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
+    let (_tx_certificates_loopback, rx_certificates_loopback) = channel(1);
+    let (_tx_headers, rx_headers) = channel(1);
+    let (tx_consensus, _rx_consensus) = channel(1);
+    let (tx_parents, _rx_parents) = channel(1);
+
+    let(tx_committer, _rx_committer) = channel(1);
+    let(tx_sailfish, _rx_special) = channel(1);
+    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
+    let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
+    let (tx_info, _rx_info) = channel(1);
+    let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
+
+    // Create a new test store.
+    let path = ".db_test_process_header";
+    let _ = fs::remove_dir_all(path);
+    let mut store = Store::new(path).unwrap();
+
+    // Make a synchronizer for the core.
+    let synchronizer = Synchronizer::new(
+        name,
+        &committee,
+        store.clone(),
+        /* tx_header_waiter */ tx_sync_headers,
+        /* tx_certificate_waiter */ tx_sync_certificates,
+    );
+
+    let leader_elector = LeaderElector::new(committee.clone());
+    let timeout_delay = 1000;
+
+    // Spawn the core.
+    Core::spawn(
+        name,
+        committee,
+        store.clone(),
+        synchronizer,
+        signature_service,
+        /* consensus_round */ Arc::new(AtomicU64::new(0)),
+        /* gc_depth */ 50,
+        /* rx_primaries */ rx_primary_messages,
+        /* rx_header_waiter */ rx_headers_loopback,
+        rx_header_waiter_instances,
+        /* rx_certificate_waiter */ rx_certificates_loopback,
+        /* rx_proposer */ rx_headers,
+        tx_consensus,
+        tx_committer,
+        /* tx_proposer */ tx_parents,
+        /* special */ tx_sailfish,
+        rx_pushdown_cert,
+        rx_request_header_sync,
+        tx_info,
+        leader_elector,
+        timeout_delay,
+    );
+
+    let header_one = header();
+    let cert_one = certificate(&header_one);
+    let header_two: Header = Header { author: header_one.author, height: header_one.height + 1, payload: header_one.payload, 
+        parent_cert: cert_one, id: header_one.id, signature: header_one.signature, consensus_messages: HashMap::new(), 
+        special_parent: None };
+    let id = header_two.digest().clone();
+
+    // Send a header to the core.
+    tx_primary_messages
+        .send(PrimaryMessage::Header(header_two))
+        .await
+        .unwrap();
+
+    // Ensure the header is not stored.
+    assert!(store.read(id.to_vec()).await.unwrap().is_none());
+}
+
 
 #[tokio::test]
 #[serial]
@@ -266,8 +352,6 @@ async fn process_header_missing_payload() {
         .send(PrimaryMessage::Header(header))
         .await
         .unwrap();
-    // Sleep to ensure header is processed
-    sleep(Duration::from_millis(1000)).await;
 
     // Ensure the header is not stored.
     assert!(store.read(id.to_vec()).await.unwrap().is_none());
@@ -294,13 +378,16 @@ async fn process_votes() {
     let(tx_sailfish, _rx_special) = channel(1);
     let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
-    let (tx_info, _rx_info) = channel(1);
+    let (tx_info, rx_info) = channel(1);
     let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
+    let (tx_workers, rx_workers) = channel(1);
+    let (tx_core, rx_core) = channel(1);
+
 
     // Create a new test store.
     let path = ".db_test_process_vote";
     let _ = fs::remove_dir_all(path);
-    let store = Store::new(path).unwrap();
+    let mut store = Store::new(path).unwrap();
 
     // Make a synchronizer for the core.
     let synchronizer = Synchronizer::new(
@@ -320,7 +407,7 @@ async fn process_votes() {
         committee.clone(),
         store.clone(),
         synchronizer,
-        signature_service,
+        signature_service.clone(),
         /* consensus_round */ Arc::new(AtomicU64::new(0)),
         /* gc_depth */ 50,
         /* rx_primaries */ rx_primary_messages,
@@ -339,27 +426,27 @@ async fn process_votes() {
         timeout_delay,
     );
 
-    //TODO: instead of unit test hack: pass header() which includes edges
+    Proposer::spawn(
+        name, 
+        committee, 
+        signature_service, 
+        100, 
+        timeout_delay, 
+        rx_parents, 
+        rx_workers, 
+        rx_info, 
+        tx_core
+    );
 
-  
-    assert_eq!(Header::default(), Header::genesis(&committee)); //Why are these equal even though author is different? Because genesis still uses the default ID.
-    //Can currently use them interchangeably
-    //Note: core uses Header::genesis instead of Header::default now
-    tx_primary_messages
-        .send(PrimaryMessage::Header(header()))
-        .await
-        .unwrap();
-
-    // Make the certificate we expect to receive.
     let header = header();
+    // Make the certificate we expect to receive.
     let expected = certificate(&header);
 
-    // Spawn all listeners to receive our newly formed certificate.
-    let handles: Vec<_> = committee
-        .others_primaries(&name)
-        .iter()
-        .map(|(_, address)| listener(address.primary_to_primary))
-        .collect();
+    //Note: core uses Header::genesis instead of Header::default now
+    tx_primary_messages
+        .send(PrimaryMessage::Header(header.clone()))
+        .await
+        .unwrap();
 
     // Send a votes to the core.
     for vote in votes(&header) {
@@ -369,15 +456,16 @@ async fn process_votes() {
             .await
             .unwrap();
     }
-    //let cert_received = rx_parents.recv().await;
-    //assert_eq!(cert_received.unwrap(), expected);
-    // Ensure all listeners got the certificate.
-    for received in try_join_all(handles).await.unwrap() {
-        match bincode::deserialize(&received).unwrap() {
-            PrimaryMessage::Header(x) => assert_eq!(x.parent_cert, expected),
-            x => panic!("Unexpected message: {:?}", x),
-        }
-    }
+
+    println!("Expected cert is {:?}, {:?}", expected.header_digest, expected.height);
+
+    // Ensure the listener received the certificate and stored it.
+    let stored = store
+        .read(expected.digest().to_vec())
+        .await
+        .unwrap()
+        .map(|x| bincode::deserialize(&x).unwrap());
+    assert_eq!(stored, Some(expected));
 }
 
 #[tokio::test]
@@ -451,6 +539,14 @@ async fn process_certificates() {
         .map(|header| certificate(header))
         .collect();
 
+    // Send enough headers to the core.
+    let headers_from_certs: Vec<_> = certificates
+        .iter()
+        .map(|cert| header_from_cert(cert))
+        .collect();
+
+
+
         //Digest/Sig debug
     // for header in headers(){
     //     println!("header digest: {:?}", header.digest());
@@ -463,10 +559,16 @@ async fn process_certificates() {
     //     println!("             ");
     // }
    
-   
-    for x in certificates.clone() {
+    for x in headers() {
         tx_primary_messages
-            .send(PrimaryMessage::Certificate(x))
+            .send(PrimaryMessage::Header(x))
+            .await
+            .unwrap();
+    }
+   
+    for x in headers_from_certs {
+        tx_primary_messages
+            .send(PrimaryMessage::Header(x))
             .await
             .unwrap();
     }
@@ -486,10 +588,282 @@ async fn process_certificates() {
 
     // Ensure the certificates are stored.
     for x in &certificates {
+        println!("Cert digest is {:?}", x.digest());
         let stored = store.read(x.digest().to_vec()).await.unwrap();
         let serialized = bincode::serialize(x).unwrap();
         assert_eq!(stored, Some(serialized));
     }
+}
+
+#[tokio::test]
+#[serial]
+async fn process_prepare() {
+    let mut keys = keys();
+    let _ = keys.pop().unwrap(); // Skip the header' author.
+    let (name, secret) = keys.pop().unwrap();
+    let mut signature_service = SignatureService::new(secret);
+
+    let committee = committee_with_base_port(13_000);
+
+    let (tx_sync_headers, _rx_sync_headers) = channel(1);
+    let (tx_sync_certificates, _rx_sync_certificates) = channel(1);
+    let (tx_primary_messages, rx_primary_messages) = channel(1);
+    let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
+    let (_tx_certificates_loopback, rx_certificates_loopback) = channel(1);
+    let (_tx_headers, rx_headers) = channel(1);
+    let (tx_consensus, _rx_consensus) = channel(1);
+    let (tx_parents, _rx_parents) = channel(1);
+
+    let(tx_committer, _rx_committer) = channel(1);
+    let(tx_sailfish, _rx_special) = channel(1);
+    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
+    let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
+    let (tx_info, _rx_info) = channel(1);
+    let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
+
+    // Create a new test store.
+    let path = ".db_test_process_header";
+    let _ = fs::remove_dir_all(path);
+    let mut store = Store::new(path).unwrap();
+
+    // Spawn a listener to receive the vote.
+    let address = committee
+        .primary(&header().author)
+        .unwrap()
+        .primary_to_primary;
+    //let handle = listener(address);
+
+    // Make a synchronizer for the core.
+    let synchronizer = Synchronizer::new(
+        name,
+        &committee,
+        store.clone(),
+        /* tx_header_waiter */ tx_sync_headers,
+        /* tx_certificate_waiter */ tx_sync_certificates,
+    );
+
+    let leader_elector = LeaderElector::new(committee.clone());
+    let timeout_delay = 1000;
+
+    // Spawn the core.
+    Core::spawn(
+        name,
+        committee.clone(),
+        store.clone(),
+        synchronizer,
+        signature_service,
+        /* consensus_round */ Arc::new(AtomicU64::new(0)),
+        /* gc_depth */ 50,
+        /* rx_primaries */ rx_primary_messages,
+        /* rx_header_waiter */ rx_headers_loopback,
+        rx_header_waiter_instances,
+        /* rx_certificate_waiter */ rx_certificates_loopback,
+        /* rx_proposer */ rx_headers,
+        tx_consensus,
+        tx_committer,
+        /* tx_proposer */ tx_parents,
+        /* special */ tx_sailfish,
+        rx_pushdown_cert,
+        rx_request_header_sync,
+        tx_info,
+        leader_elector,
+        timeout_delay,
+    );
+
+    // Send headers to the core, so they won't request sync
+    let header_list = headers();
+    for x in header_list.clone() {
+        tx_primary_messages
+            .send(PrimaryMessage::Header(x))
+            .await
+            .unwrap();
+    }
+
+    let mut proposals: HashMap<PublicKey, Proposal> = HashMap::new();
+    for x in &header_list {
+        proposals.insert(x.author, Proposal { header_digest: x.digest(), height: x.height() });
+    }
+    let ticket: Ticket = Ticket::genesis(&committee);
+    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, ticket, proposals };
+
+    let mut consensus_messages: HashMap<Digest, ConsensusMessage> = HashMap::new();
+    consensus_messages.insert(prepare_message.digest(), prepare_message.clone());
+
+    let parent_cert = certificate(&header_list[0]);
+    let header = special_header(parent_cert, consensus_messages);
+
+    // Send a header to the core.
+    tx_primary_messages
+        .send(PrimaryMessage::Header(header.clone()))
+        .await
+        .unwrap();
+
+
+    listener(address).await.unwrap();
+
+    // Make the vote we expect to receive.
+    let handle = listener(address);
+    let received = handle.await.unwrap();
+    match bincode::deserialize(&received).unwrap() {
+        PrimaryMessage::Vote(x) => {
+            //assert_eq!(x, expected);
+            assert!(!x.consensus_sigs.is_empty());
+            assert_eq!(x.height, 2);
+            assert_eq!(prepare_message.digest(), x.consensus_sigs[0].0);
+        }
+        x => panic!("Unexpected message: {:?}", x),
+    }
+
+
+    // Ensure the header is correctly stored.
+    let stored = store
+        .read(header.id.to_vec())
+        .await
+        .unwrap()
+        .map(|x| bincode::deserialize(&x).unwrap());
+    assert_eq!(stored, Some(header));
+}
+
+#[tokio::test]
+#[serial]
+async fn generate_confirm() {
+    let mut keys = keys();
+    let _ = keys.pop().unwrap(); // Skip the header' author.
+    let (name, secret) = keys.pop().unwrap();
+    let mut signature_service = SignatureService::new(secret);
+
+    let committee = committee_with_base_port(13_000);
+
+    let (tx_sync_headers, _rx_sync_headers) = channel(1);
+    let (tx_sync_certificates, _rx_sync_certificates) = channel(1);
+    let (tx_primary_messages, rx_primary_messages) = channel(1);
+    let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
+    let (_tx_certificates_loopback, rx_certificates_loopback) = channel(1);
+    let (tx_headers, rx_headers) = channel(1);
+    let (tx_consensus, _rx_consensus) = channel(1);
+    let (tx_parents, rx_parents) = channel(1);
+
+    let(tx_committer, _rx_committer) = channel(1);
+    let(tx_sailfish, _rx_special) = channel(1);
+    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
+    let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
+    let (tx_info, mut rx_info) = channel(1);
+    let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
+
+    // Create a new test store.
+    let path = ".db_test_process_header";
+    let _ = fs::remove_dir_all(path);
+    let mut store = Store::new(path).unwrap();
+
+    // Spawn a listener to receive the vote.
+    let address = committee
+        .primary(&header().author)
+        .unwrap()
+        .primary_to_primary;
+    //let handle = listener(address);
+
+    // Make a synchronizer for the core.
+    let synchronizer = Synchronizer::new(
+        name,
+        &committee,
+        store.clone(),
+        /* tx_header_waiter */ tx_sync_headers,
+        /* tx_certificate_waiter */ tx_sync_certificates,
+    );
+
+    let leader_elector = LeaderElector::new(committee.clone());
+    let timeout_delay = 1000;
+
+    // Spawn the core.
+    Core::spawn(
+        name,
+        committee.clone(),
+        store.clone(),
+        synchronizer,
+        signature_service.clone(),
+        /* consensus_round */ Arc::new(AtomicU64::new(0)),
+        /* gc_depth */ 50,
+        /* rx_primaries */ rx_primary_messages,
+        /* rx_header_waiter */ rx_headers_loopback,
+        rx_header_waiter_instances,
+        /* rx_certificate_waiter */ rx_certificates_loopback,
+        /* rx_proposer */ rx_headers,
+        tx_consensus,
+        tx_committer,
+        /* tx_proposer */ tx_parents,
+        /* special */ tx_sailfish,
+        rx_pushdown_cert,
+        rx_request_header_sync,
+        tx_info,
+        leader_elector,
+        timeout_delay,
+    );
+
+
+    /*Proposer::spawn(
+        name, 
+        committee.clone(), 
+        signature_service, 
+        100, 
+        timeout_delay, 
+        rx_parents, 
+        rx_workers, 
+        rx_info, 
+        tx_headers,
+    );*/
+
+
+    // Send headers to the core, so they won't request sync
+    let header_list = headers();
+    for x in header_list.clone() {
+        tx_primary_messages
+            .send(PrimaryMessage::Header(x))
+            .await
+            .unwrap();
+    }
+
+    let mut proposals: HashMap<PublicKey, Proposal> = HashMap::new();
+    for x in &header_list {
+        proposals.insert(x.author, Proposal { header_digest: x.digest(), height: x.height() });
+    }
+    let ticket: Ticket = Ticket::genesis(&committee);
+    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, ticket, proposals: proposals.clone() };
+
+    let mut consensus_messages: HashMap<Digest, ConsensusMessage> = HashMap::new();
+    consensus_messages.insert(prepare_message.digest().clone(), prepare_message.clone());
+
+    let parent_cert = certificate(&header_list[0]);
+    let header = special_header(parent_cert, consensus_messages.clone());
+    let consensus_digests = vec![prepare_message.digest()];
+
+
+    // Send a header to the core.
+    tx_headers
+        .send(header.clone())
+        .await
+        .unwrap();
+
+
+    for vote in special_votes(&header, consensus_digests) {
+        println!("sending special votes");
+        let message = PrimaryMessage::Vote(vote);
+        tx_primary_messages
+            .send(message)
+            .await
+            .unwrap();
+    }
+
+
+    let confirm_message = rx_info.recv().await.unwrap();
+    match confirm_message {
+        ConsensusMessage::Confirm { slot, view, qc, proposals } => {
+            assert_eq!(slot, 1);
+            assert_eq!(view, 1);
+            assert_eq!(qc.id, prepare_message.digest().clone());
+            assert_eq!(qc.votes.len(), 3);
+        },
+        _ => panic!("Wrong message type"),
+    };
 }
 
 

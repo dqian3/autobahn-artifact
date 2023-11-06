@@ -1,13 +1,14 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::messages::{Certificate, Header, Vote, Ticket};
+use crate::messages::{Certificate, Header, Vote, Ticket, ConsensusMessage};
 use bytes::Bytes;
 use config::{Authority, Committee, ConsensusAddresses, PrimaryAddresses, WorkerAddresses};
-use crypto::Hash as _;
+use crypto::{Hash as _, Digest};
 use crypto::{generate_keypair, PublicKey, SecretKey, Signature};
 use futures::sink::SinkExt as _;
 use futures::stream::StreamExt as _;
 use rand::rngs::StdRng;
 use rand::SeedableRng as _;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::vec;
 use tokio::net::TcpListener;
@@ -108,13 +109,15 @@ pub fn header() -> Header {
 }
 
 // Fixture
-pub fn special_header() -> Header {
+pub fn special_header(parent_cert: Certificate, consensus_messages: HashMap<Digest, ConsensusMessage>) -> Header {
     let (author, secret) = keys().pop().unwrap();
     //let par = vec![header().id];
     //let par = vec![Header::default().id];
     let header = Header {
         author,
-        height: 1,
+        height: 2,
+        parent_cert,
+        consensus_messages,
         //parents: par.iter().cloned().collect(),
 
         //defaults: payload, parent, 
@@ -135,7 +138,7 @@ pub fn headers() -> Vec<Header> {
             let header = Header {
                 author,
                 height: 1,
-                parent_cert: Certificate::genesis(&committee()).get(0).unwrap().clone(),
+                parent_cert: Certificate::genesis_certs(&committee()).get(&author).unwrap().clone(),
                     /*.iter()
                     .map(|x| x.digest())
                     .collect(),*/
@@ -149,6 +152,16 @@ pub fn headers() -> Vec<Header> {
             }
         })
         .collect()
+}
+
+pub fn header_from_cert(certificate: &Certificate) -> Header {
+    let header = Header {
+        author: certificate.author,
+        height: certificate.height + 1,
+        parent_cert: certificate.clone(),
+        ..Header::default()
+    };
+    header
 }
 
 
@@ -174,7 +187,7 @@ pub fn votes(header: &Header) -> Vec<Vote> {
 }
 
 // Fixture
-pub fn special_votes(header: &Header) -> Vec<Vote> {
+pub fn special_votes(header: &Header, consensus_digests: Vec<Digest>) -> Vec<Vote> {
     keys()
         .into_iter()
         .map(|(author, secret)| {
@@ -184,7 +197,7 @@ pub fn special_votes(header: &Header) -> Vec<Vote> {
                 origin: header.author,
                 author,
                 signature: Signature::default(),
-                consensus_sigs: Vec::new(),
+                consensus_sigs: consensus_digests.iter().map(|x| (x.clone(), Signature::new(x, &secret))).collect(),
 
                 //qc: None,
                 //tc: None,
@@ -211,7 +224,7 @@ pub fn certificate(header: &Header) -> Certificate {
 }
 
 // Fixture
-pub fn special_certificate(header: &Header) -> Certificate {
+/*pub fn special_certificate(header: &Header) -> Certificate {
     Certificate {
         author: header.origin(),
         header_digest: header.digest(),
@@ -221,7 +234,7 @@ pub fn special_certificate(header: &Header) -> Certificate {
             .map(|x| (x.author, x.signature))
             .collect(),
     }
-}
+}*/
 
 // Fixture
 pub fn listener(address: SocketAddr) -> JoinHandle<Bytes> {

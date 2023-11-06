@@ -345,7 +345,7 @@ pub struct Header {
     pub signature: Signature,
 
     // Consensus metadata
-    pub consensus_instances: HashMap<Digest, ConsensusMessage>,
+    pub consensus_messages: HashMap<Digest, ConsensusMessage>,
     // special parent header
     pub special_parent: Option<Certificate>, //Digest of the header of the special parent.
 }
@@ -369,7 +369,7 @@ impl Header {
             parent_cert,
             id: Digest::default(),
             signature: Signature::default(),
-            consensus_instances,
+            consensus_messages: consensus_instances,
             special_parent,
         };
         let id = header.digest();

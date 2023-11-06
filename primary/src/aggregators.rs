@@ -10,6 +10,7 @@ pub struct VotesAggregator {
     dissemination_weight: Stake,
     pub votes: Vec<(PublicKey, Signature)>,
     used: HashSet<PublicKey>,
+    diss_cert: Option<Certificate>,
 }
 
 impl VotesAggregator {
@@ -18,6 +19,7 @@ impl VotesAggregator {
             dissemination_weight: 0,
             votes: Vec::new(),
             used: HashSet::new(),
+            diss_cert: None,
         }
     }
 
@@ -35,14 +37,19 @@ impl VotesAggregator {
         self.dissemination_weight += committee.stake(&author);
 
         if self.dissemination_weight >= committee.validity_threshold() {
-            self.dissemination_weight = 0;
-            let dissemination_cert: Certificate = Certificate {
-                author: header.origin(),
-                header_digest: header.digest(),
-                height: header.height(),
-                votes: self.votes.clone(),
-            };
-            return Ok(Some(dissemination_cert));
+            //self.dissemination_weight = 0;
+            if self.diss_cert.is_none() {
+                let dissemination_cert: Certificate = Certificate {
+                    author: vote.origin,
+                    header_digest: vote.id,
+                    height: vote.height,
+                    votes: self.votes.clone(),
+                };
+
+                self.diss_cert = Some(dissemination_cert);
+            }
+
+            return Ok(self.diss_cert.clone());
         }
 
         Ok(None)
@@ -72,10 +79,13 @@ impl QCMaker {
         vote: (Digest, Signature),
         committee: &Committee,
     ) -> DagResult<Option<QC>> {
+        println!("calling append");
         ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
+        println!("after ensure");
 
         self.votes.push((author, vote.1));
         self.weight += committee.stake(&author);
+        println!("QC weight is {:?}", self.weight);
         if self.weight >= committee.quorum_threshold() {
             // Ensure QC is only made once.
             self.weight = 0; 
