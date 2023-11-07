@@ -22,10 +22,8 @@ pub struct Synchronizer {
     tx_header_waiter: Sender<WaiterMessage>,
     /// Send commands to the `CertificateWaiter`.
     tx_certificate_waiter: Sender<Certificate>,
-    /// The genesis and its digests.
-    genesis: Vec<(Digest, Certificate)>,
     /// Genesis header
-    genesis_header: HashMap<PublicKey, Header>,
+    genesis_headers: HashMap<PublicKey, Header>,
 }
 
 impl Synchronizer {
@@ -41,11 +39,7 @@ impl Synchronizer {
             store,
             tx_header_waiter,
             tx_certificate_waiter,
-            genesis: Certificate::genesis(committee)
-                .into_iter()
-                .map(|x| (x.digest(), x))
-                .collect(),
-            genesis_header: Header::genesis_headers(committee),
+            genesis_headers: Header::genesis_headers(committee),
         }
     }
 
@@ -96,155 +90,56 @@ impl Synchronizer {
         Ok(())
     }
 
-    pub async fn get_special_parent(
-        &mut self,
-        header: &Header,
-        sync: bool,
-    ) -> DagResult<(Option<Header>, bool)> {
-        let digest = header.special_parent.as_ref().unwrap(); //header.parents.iter().next().unwrap().clone();
-                                                              /*if digest == &self.genesis_header.id {  //Note: In practice the genesis case should never be triggered (just used for unit testing). In normal processing the first special block would have genesis certs as parents.
-                                                                  //parents.push(self.genesis_header.clone());
-                                                                  return Ok((Some(self.genesis_header.clone()), true))
-                                                              }
-                                                              else{
-                                                                  match self.store.read(digest.to_vec()).await? {
-                                                                      Some(parent_header) => return Ok((Some(bincode::deserialize(&parent_header)?), false)),
-                                                                      None => {},
-                                                                  };
-                                                              }
-
-                                                              if !sync {
-                                                                  return Err(DagError::InvalidSpecialParent);
-                                                              }
-
-                                                              //if we dont have special parent: ignore request --> should be there when using FIFO channels ==> TCP is FIFO, and individual channels are FIFO (e.g. channel for receiving new header proposal)
-
-                                                              //TODO: Start a waiter for it. FIXME: currently SyncParents requests certs. But we just want to request a header.
-
-                                                              self.tx_header_waiter
-                                                                  .send(WaiterMessage::SyncSpecialParent(digest.clone(), header.clone()))  //sends message to header.author to request previous header digest.
-                                                                  .await
-                                                                  .expect("Failed to send sync special parent request");*/
-        Ok((None, false))
-    }
-
-    /// Returns the parents of a header if we have them all. If at least one parent is missing,
+    /// Returns the proposals of a consensus message if we have them all. If at least one parent is missing,
     /// we return an empty vector, synchronize with other nodes, and re-schedule processing
     /// of the header for when we will have all the parents.
-    /*pub async fn get_proposal_headers(&mut self, header_info: &Info) -> DagResult<Vec<Header>> {
-        let mut missing: Vec<Digest> = Vec::new();
-        let mut parents: Vec<Header> = Vec::new();
+    pub async fn get_proposals(&mut self, consensus_message: &ConsensusMessage, delivered_header: &Header) -> DagResult<Vec<Header>> {
+        let mut missing = Vec::new();
+        let mut proposals_vector = Vec::new();
+        println!("getting proposals");
 
-        let prepare_info = match header_info.prepare_info {
-            Some(prepare) => prepare,
-            None => return Ok(Vec::new()),
-        };
-
-        for (pk, cert) in &prepare_info.proposals {
-            let digest = &cert.header_digest;
-            if let Some(genesis) = self
-                .genesis_headers
-                .iter()
-                .find(|(x, _)| x == digest)
-                .map(|(_, x)| x)
-            {
-                parents.push(genesis.clone());
-                continue;
-            }
-
-            match self.store.read(digest.to_vec()).await? {
-                Some(certificate) => parents.push(bincode::deserialize(&certificate)?),
-                None => missing.push(digest.clone()),
-            };
+        match consensus_message {
+            ConsensusMessage::Prepare { slot: _, view: _, ticket: _, proposals } => {
+                for (_, proposal) in proposals {
+                    println!("proposal inside prepare");
+                    match self.store.read(proposal.header_digest.to_vec()).await? {
+                        Some(header) => {
+                            println!("in some case");
+                            proposals_vector.push(bincode::deserialize(&header)?);
+                            println!("after adding to proposal vector");
+                        },
+                        None => missing.push(proposal.clone()),
+                    }
+                }
+            },
+            ConsensusMessage::Confirm { slot: _, view: _, qc: _, proposals } => {
+                for (_, proposal) in proposals {
+                    match self.store.read(proposal.header_digest.to_vec()).await? {
+                        Some(header) => proposals_vector.push(bincode::deserialize(&header)?),
+                        None => missing.push(proposal.clone()),
+                    }
+                }
+            },
+            ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals } => {
+                for (_, proposal) in proposals {
+                    match self.store.read(proposal.header_digest.to_vec()).await? {
+                        Some(header) => proposals_vector.push(bincode::deserialize(&header)?),
+                        None => missing.push(proposal.clone()),
+                    }
+                }
+            },
         }
 
         if missing.is_empty() {
-            return Ok(parents);
+            println!("Have all proposals");
+            return Ok(proposals_vector);
         }
 
         self.tx_header_waiter
-            .send(WaiterMessage::SyncProposals(missing, header_info.clone()))
+            .send(WaiterMessage::SyncProposals(missing, consensus_message.clone(), delivered_header.clone()))
             .await
             .expect("Failed to send sync parents request");
         Ok(Vec::new())
-    }*/
-
-    /// Returns the parents of a header if we have them all. If at least one parent is missing,
-    /// we return an empty vector, synchronize with other nodes, and re-schedule processing
-    /// of the header for when we will have all the parents.
-    /*pub async fn get_info(&mut self, info_digest: &Digest) -> DagResult<Option<Info>> {
-        match self.store.read(info_digest.to_vec()).await? {
-            Some(info) => Ok(Some(bincode::deserialize(&info)?)),
-            None => {
-                self.tx_header_waiter
-                    .send(WaiterMessage::SyncInfo(info_digest.clone()))
-                    .await
-                    .expect("Failed to send sync info request");
-                Ok(None)
-            },
-        }
-    }*/
-
-    /// Check whether we have all the ancestors of the certificate. If we don't, send the certificate to
-    /// the `CertificateWaiter` which will trigger re-processing once we have all the missing data.
-    pub async fn deliver_certificate(&mut self, certificate: &Certificate) -> DagResult<bool> {
-        /*for digest in &certificate.header.parent_cert_digest {
-            if self.genesis.iter().any(|(x, _)| x == digest) {
-                continue;
-            }
-
-            if self.store.read(digest.to_vec()).await?.is_none() {
-                self.tx_certificate_waiter
-                    .send(certificate.clone())
-                    .await
-                    .expect("Failed to send sync certificate request");
-                return Ok(false);
-            };
-        }*/
-
-        if self
-            .genesis
-            .iter()
-            .any(|(x, _)| x == &certificate.header_digest)
-        {
-            return Ok(true);
-        }
-
-        if self
-            .store
-            .read(certificate.header_digest.to_vec())
-            .await?
-            .is_none()
-        {
-            self.tx_certificate_waiter
-                .send(certificate.clone())
-                .await
-                .expect("Failed to send sync certificate request");
-            return Ok(false);
-        };
-
-        Ok(true)
-    }
-
-    pub async fn is_proposal_ready(&mut self, proposal: &Proposal) -> DagResult<bool> {
-        Ok(self.store.read(proposal.header_digest.to_vec()).await?.is_some())
-    }
-
-    pub async fn start_proposal_sync(&mut self, proposal: Proposal, author: &PublicKey, consensus_message: ConsensusMessage) {
-        let is_ready = self.is_proposal_ready(&proposal).await.expect("should return true or false");
-        if !is_ready {
-            if let Err(e) = self
-                .tx_header_waiter
-                .send(WaiterMessage::SyncProposalHeaders(
-                    proposal,
-                    *author,
-                    consensus_message,
-                ))
-                .await
-            {
-                panic!("Failed to send request to header waiter: {}", e);
-            }
-        }
     }
 
     pub async fn get_all_headers_for_proposal(
@@ -257,7 +152,6 @@ impl Synchronizer {
 
         // NOTE: Before calling, must check if proposal is ready, assumes that proposal is ready
         // before calling
-        ensure!(self.is_proposal_ready(&proposal).await.unwrap(), DagError::InvalidHeaderId);
         let mut header: Header = self.get_header(proposal.header_digest).await.expect("already synced should have header").unwrap();
 
         // Otherwise we have the header and all of its ancestors
@@ -272,14 +166,18 @@ impl Synchronizer {
     }
 
     pub async fn get_parent_header(&mut self, header: &Header) -> DagResult<Option<Header>> {
-        if header.parent_cert.header_digest == self.genesis_header.get(&header.author).unwrap().digest() {
-            return Ok(Some(self.genesis_header.get(&header.author).unwrap().clone()));
+        if header.parent_cert.header_digest == self.genesis_headers.get(&header.author).unwrap().digest() {
+            return Ok(Some(self.genesis_headers.get(&header.author).unwrap().clone()));
         }
 
         let parent = header.parent_cert.header_digest.clone();
         match self.store.read(parent.to_vec()).await? {
             Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
             None => {
+                self.tx_header_waiter
+                    .send(WaiterMessage::SyncParent(parent, header.clone()))
+                    .await
+                    .expect("Failed to send sync parent request");
                 Ok(None)
             }
         }

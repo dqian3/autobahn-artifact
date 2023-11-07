@@ -9,7 +9,7 @@ use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
 use log::debug;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryInto;
 use std::fmt;
 
@@ -45,7 +45,7 @@ impl Ticket {
         };
         ticket
     }
-    pub fn genesis(committee: &Committee) -> Self {
+    pub fn genesis(_committee: &Committee) -> Self {
         Ticket {
             header: None,
             tc: None,
@@ -59,12 +59,12 @@ impl Hash for Ticket {
     fn digest(&self) -> Digest {
         let mut hasher = Sha512::new();
         match &self.header {
-            Some(header) => {}
+            Some(_) => {}
             None => {}
         }
 
         match &self.tc {
-            Some(tc) => {}
+            Some(_) => {}
             None => {}
         }
         hasher.update(&self.slot.to_le_bytes());
@@ -154,6 +154,29 @@ pub enum ConsensusMessage {
         qc: QC,
         proposals: HashMap<PublicKey, Proposal>,
     },
+}
+
+pub fn proposal_digest(consensus_message: &ConsensusMessage) -> Digest {
+    let mut hasher = Sha512::new();
+    match consensus_message {
+        ConsensusMessage::Prepare { slot: _, view: _, ticket: _, proposals } => {
+            for (_, proposal) in proposals {
+                hasher.update(proposal.header_digest.0);
+            }
+        },
+        ConsensusMessage::Confirm { slot: _, view: _, qc: _, proposals } => {
+            for (_, proposal) in proposals {
+                hasher.update(proposal.header_digest.0);
+            }
+
+        },
+        ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals } => {
+            for (_, proposal) in proposals {
+                hasher.update(proposal.header_digest.0);
+            }
+        }
+    }
+    Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
 }
 
 impl Hash for ConsensusMessage {
@@ -1057,9 +1080,9 @@ impl QC {
             ConsensusError::QCRequiresQuorum
         );
 
-        let verifiable_digest = self.digest();
+        //let verifiable_digest = self.digest();
         // Check the signatures.
-        Signature::verify_batch(&verifiable_digest, &self.votes).map_err(ConsensusError::from)
+        Signature::verify_batch(&self.id, &self.votes).map_err(ConsensusError::from)
     }
 }
 

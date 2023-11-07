@@ -200,6 +200,67 @@ async fn propose_special_ticket_first() {
     assert!(header.verify(&committee()).is_ok());
 }
 
+#[tokio::test]
+async fn propose_confirm_message() {
+    let (name, secret) = keys().pop().unwrap();
+    let signature_service = SignatureService::new(secret);
+
+    let (_tx_parents, rx_parents) = channel(1);
+    let (tx_our_digests, rx_our_digests) = channel(1);
+    let (tx_headers, mut rx_headers) = channel(1);
+    let(tx_ticket, rx_ticket) = channel(1);
+
+    // Spawn the proposer.
+    Proposer::spawn(
+        name,
+        committee(),
+        signature_service,
+        /* header_size */ 32,
+        /* max_header_delay */ 1_000_000, // Ensure it is not triggered.
+        /* rx_core */ rx_parents,
+        /* rx_workers */ rx_our_digests,
+        rx_ticket,
+        /* tx_core */ tx_headers,
+    );
+
+    //Send ticket to form a special header
+    let gen_header = Header::genesis(&committee());
+
+    let ticket: Ticket = Ticket::new(Some(gen_header), None, 1, HashMap::new()).await;
+    /*let consensus_info: InstanceInfo = InstanceInfo { slot: 2, view: 1 };
+    let prepare_info: PrepareInfo = PrepareInfo { consensus_info, ticket, proposals: HashMap::new() };*/
+
+    /*tx_ticket
+        .send(prepare_info)
+        .await
+        .unwrap();*/
+
+    sleep(Duration::from_secs(1)).await; //just to guarantee ticket arrives before digest (else normal block can be triggered.)
+
+    // Send enough digests for the header payload.
+    let digest = Digest(name.0);
+    let worker_id = 0;
+    tx_our_digests
+        .send((digest.clone(), worker_id))
+        .await
+        .unwrap();
+
+    // Ensure the proposer makes a correct special header from the provided payload.
+    let header = rx_headers.recv().await.unwrap();
+   
+    /*assert_eq!(header.prepare_info_list.is_empty(), false);
+    assert_eq!(header.prepare_info_list.get(0).unwrap().consensus_info.slot, 2);
+    assert_eq!(header.prepare_info_list.get(0).unwrap().consensus_info.view, 1);*/
+    
+    assert_eq!(header.special_parent.is_none(), true);    
+    assert_eq!(header.height, 1);
+    assert_eq!(header.payload.get(&digest), Some(&worker_id));
+    assert!(header.verify(&committee()).is_ok());
+}
+
+
+
+
 
 /*#[tokio::test]
 async fn propose_special_ticket_after_requiring_parents() {

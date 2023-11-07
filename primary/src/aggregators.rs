@@ -31,6 +31,7 @@ impl VotesAggregator {
     ) -> DagResult<Option<Certificate>> {
         let author = vote.author;
         // Ensure it is the first time this authority votes.
+        println!("author is {:?}", author);
         ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
         
         self.votes.push((author, vote.signature));

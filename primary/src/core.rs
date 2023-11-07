@@ -4,7 +4,7 @@ use crate::aggregators::{QCMaker, TCMaker, VotesAggregator};
 use crate::error::{DagError, DagResult};
 use crate::leader::LeaderElector;
 use crate::messages::{
-    Certificate, ConsensusMessage, Header, Proposal, Ticket, Timeout, Vote, QC, TC,
+    Certificate, ConsensusMessage, Header, Proposal, Ticket, Timeout, Vote, TC,
 };
 use crate::primary::{Height, PrimaryMessage, Slot, View};
 use crate::synchronizer::Synchronizer;
@@ -19,7 +19,7 @@ use futures::{Future, StreamExt};
 use log::{debug, error, warn};
 use network::{CancelHandler, ReliableSender};
 //use tokio::time::error::Elapsed;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -57,7 +57,7 @@ pub struct Core {
     /// Receives loopback headers from the `HeaderWaiter`.
     rx_header_waiter: Receiver<Header>,
     /// Receives loopback instances from the 'HeaderWaiter'
-    rx_header_waiter_instances: Receiver<(Proposal, ConsensusMessage)>,
+    rx_header_waiter_instances: Receiver<(ConsensusMessage, Header)>,
     /// Receives loopback certificates from the `CertificateWaiter`.
     rx_certificate_waiter: Receiver<Certificate>,
     /// Receives our newly created headers from the `Proposer`.
@@ -136,7 +136,7 @@ impl Core {
         gc_depth: Height,
         rx_primaries: Receiver<PrimaryMessage>,
         rx_header_waiter: Receiver<Header>,
-        rx_header_waiter_instances: Receiver<(Proposal, ConsensusMessage)>,
+        rx_header_waiter_instances: Receiver<(ConsensusMessage, Header)>,
         rx_certificate_waiter: Receiver<Certificate>,
         rx_proposer: Receiver<Header>,
         tx_consensus: Sender<Certificate>,
@@ -234,7 +234,7 @@ impl Core {
     #[async_recursion]
     async fn process_header(&mut self, header: Header) -> DagResult<()> {
         debug!("Processing {:?}", header);
-        println!("Processing the header");
+        println!("Processing the header with height {:?}", header.height);
 
         // Check the parent certificate. Ensure the certificate contains a quorum of votes and is
         // at the preivous height
@@ -244,14 +244,17 @@ impl Core {
             .iter()
             .map(|(pk, _)| self.committee.stake(pk))
             .sum();
+        println!("Before first ensure");
         ensure!(
             header.parent_cert.height() + 1 == header.height(),
             DagError::MalformedHeader(header.id.clone())
         );
+        println!("Before second ensure");
         ensure!(
             stake >= self.committee.validity_threshold() || header.parent_cert.height() == 0,
             DagError::HeaderRequiresQuorum(header.id.clone())
         );
+        println!("After second ensure");
 
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
         // reschedule processing of this header once we have it.
@@ -273,7 +276,7 @@ impl Core {
         }
 
         // Check whether we can seamlessly vote for all consensus messages, if not reschedule
-        if !self.is_consensus_ready(&header.consensus_messages).await {
+        if !self.is_consensus_ready(&header).await {
             println!("Need to sync on missing tips, reschedule");
             return Ok(());
         }
@@ -541,26 +544,24 @@ impl Core {
                 !self.last_voted_consensus.contains(&(*slot, *view)) && ticket.slot + 1 == *slot && self.views.get(slot).unwrap() == view
             },
             ConsensusMessage::Confirm { slot, view, qc, proposals: _ } => {
+                println!("return value for confirm is {:?}", qc.verify(&self.committee).is_ok());
                 qc.verify(&self.committee).is_ok() && self.views.get(slot).unwrap() == view
             },
             ConsensusMessage::Commit { slot, view, qc, proposals: _ } => {
+                println!("return value is {:?}", qc.verify(&self.committee).is_ok() && self.views.get(slot).unwrap() == view);
                 qc.verify(&self.committee).is_ok() && self.views.get(slot).unwrap() == view
             },
         }
     }
 
-    async fn is_consensus_ready(&mut self, consensus_messages: &HashMap<Digest, ConsensusMessage>) -> bool {
+    async fn is_consensus_ready(&mut self, header: &Header) -> bool {
         let mut is_ready = true;
-        for (_, consensus_message) in consensus_messages {
+        for (_, consensus_message) in &header.consensus_messages {
             match consensus_message {
-                ConsensusMessage::Prepare { slot: _, view: _, ticket: _, proposals } => {
-                    for (pk, proposal) in proposals {
-                        let proposal_ready = self.synchronizer.is_proposal_ready(proposal).await.unwrap();
-                        is_ready = is_ready && proposal_ready;
-                        if !proposal_ready {
-                            self.synchronizer.start_proposal_sync(proposal.clone(), &pk, consensus_message.clone()).await;
-                        }
-                    }
+                ConsensusMessage::Prepare { slot: _, view: _, ticket: _, proposals: _ } => {
+                    // Consensus is ready if all proposals for all prepare messages in a car aren't
+                    // missing
+                    is_ready = is_ready && !self.synchronizer.get_proposals(consensus_message, header).await.unwrap().is_empty();
                 },
                 _ => {},
             };
@@ -586,11 +587,9 @@ impl Core {
                         slot,
                         view,
                         ticket: _,
-                        proposals,
+                        proposals: _,
                     } => {
-                        for (pk, proposal) in proposals {
-                            self.synchronizer.start_proposal_sync(proposal.clone(), &pk, consensus_message.clone()).await;
-                        }
+
                         println!("processing prepare message");
                         self.process_prepare_message(consensus_message, header, consensus_sigs.as_mut()).await;
                         println!("insert into last voted");
@@ -600,25 +599,20 @@ impl Core {
                         slot: _,
                         view: _,
                         qc: _,
-                        proposals,
+                        proposals: _,
                     } => {
-                        for (pk, proposal) in proposals {
-                            self.synchronizer.start_proposal_sync(proposal.clone(), &pk, consensus_message.clone()).await;
-                        }
-
+                        println!("processing confirm message");
+                        self.synchronizer.get_proposals(consensus_message, header).await;
                         self.process_confirm_message(consensus_message, consensus_sigs.as_mut()).await;
                     },
                     ConsensusMessage::Commit {
                         slot: _,
                         view: _,
                         qc: _,
-                        proposals,
+                        proposals: _,
                     } => {
-                        for (pk, proposal) in proposals {
-                            self.synchronizer.start_proposal_sync(proposal.clone(), &pk, consensus_message.clone()).await;
-                        }
-
-                        self.process_commit_message(consensus_message.clone());
+                        println!("processing commit message");
+                        self.process_commit_message(consensus_message.clone(), header).await;
                     }
                 }
             }
@@ -739,30 +733,9 @@ impl Core {
         new_tips.len() as u32 >= self.committee.quorum_threshold()
     }
 
-    async fn is_commit_ready(&mut self, commit_message: &ConsensusMessage) -> bool {
-        match commit_message {
-            ConsensusMessage::Commit {
-                slot: _,
-                view: _,
-                qc: _,
-                proposals,
-            } => {
-                let mut is_ready: bool = true;
-
-                // Check if all proposals are in the store
-                for (_, proposal) in proposals.clone() {
-                    // Suspend processing if any proposal is not ready
-                    is_ready = is_ready && self.synchronizer.is_proposal_ready(&proposal).await.unwrap();
-                }
-
-                is_ready
-            }
-            _ => false,
-        }
-    }
-
     #[async_recursion]
-    async fn process_commit_message(&mut self, commit_message: ConsensusMessage) -> DagResult<()> {
+    async fn process_commit_message(&mut self, commit_message: ConsensusMessage, header: &Header) -> DagResult<()> {
+        println!("Called process commit");
         match &commit_message {
             ConsensusMessage::Commit {
                 slot: _,
@@ -770,16 +743,14 @@ impl Core {
                 qc: _,
                 proposals: _,
             } => {
-                // Only send to committer once proposals are ready
-                if self.is_commit_ready(&commit_message).await {
-                    // Send headers to the committer
+                // Only send to committer if proposals and all ancestors are stored locally
+                if !self.synchronizer.get_proposals(&commit_message, &header).await.unwrap().is_empty() {
+                    println!("Sent to committer");
                     self.tx_committer
                         .send(commit_message)
                         .await
                         .expect("Failed to send headers");
-                } else {
-                    // Otherwise add to pending commit messages
-                    self.commit_messages.push_back(commit_message);
+
                 }
             }
             _ => {}
@@ -789,23 +760,24 @@ impl Core {
     }
 
     #[async_recursion]
-    async fn process_loopback(&mut self) -> DagResult<()> {
-        if !self.commit_messages.is_empty() {
-            let commit_message = self.commit_messages.pop_front().unwrap();
-
-            if self.is_commit_ready(&commit_message).await {
-                // Send commit message to the committer
+    async fn process_loopback(&mut self, consensus_message: ConsensusMessage, header: Header) -> DagResult<()> {
+        match &consensus_message {
+            ConsensusMessage::Prepare { slot: _, view: _, ticket: _, proposals: _ } => {
+                // Now that proposals are ready can reprocess the header
+                self.process_header(header).await;
+            },
+            ConsensusMessage::Confirm { slot: _, view: _, qc: _, proposals: _ } => {
+                // Don't need to do anything for the confirm case, since proposals will be
+                // sent to the committer once a commit message is received
+            },
+            ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals: _ } => {
+                // Send the commit message to the committer to order everything
                 self.tx_committer
-                    .send(commit_message.clone())
+                    .send(consensus_message)
                     .await
-                    .expect("Failed to send headers");
-                // Remove the commit message from pending queue
-                self.commit_messages.pop_front();
-            } else {
-                // Reinsert the commit message to the front
-                self.commit_messages.push_front(commit_message);
-            }
-        }
+                    .expect("Failed to send to committer");
+            },
+        };
         Ok(())
     }
 
@@ -1203,7 +1175,7 @@ impl Core {
                 Some(header) = self.rx_header_waiter.recv() => self.process_header(header).await,
 
                 // Loopback for committed instance that hasn't had all of it ancestors yet
-                Some((_, _)) = self.rx_header_waiter_instances.recv() => self.process_loopback().await,
+                Some((consensus_message, header)) = self.rx_header_waiter_instances.recv() => self.process_loopback(consensus_message, header).await,
                 //Loopback for special headers that were validated by consensus layer.
                 //Some((header, consensus_sigs)) = self.rx_validation.recv() => self.create_vote(header, consensus_sigs).await,
                 //i.e. core requests validation from consensus (check if ticket valid; wait to receive ticket if we don't have it yet -- should arrive: using all to all or forwarding)

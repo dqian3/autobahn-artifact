@@ -1,6 +1,6 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::{DagError, DagResult};
-use crate::messages::{ConsensusMessage, Header, Proposal};
+use crate::messages::{ConsensusMessage, Header, Proposal, proposal_digest};
 use crate::primary::{Height, PrimaryMessage, PrimaryWorkerMessage};
 use bytes::Bytes;
 use config::{Committee, WorkerId};
@@ -26,12 +26,9 @@ const TIMER_RESOLUTION: u64 = 1_000;
 #[derive(Debug)]
 pub enum WaiterMessage {
     SyncBatches(HashMap<Digest, WorkerId>, Header),
-    SyncProposalHeaders(Proposal, PublicKey, ConsensusMessage),
-    SyncSpecialParent(Digest, Header),
+    SyncProposals(Vec<Proposal>, ConsensusMessage, Header),
+    SyncParent(Digest, Header),
     SyncHeader(Digest),
-    SyncAncestors(Header),
-    //SyncInfo(Digest),
-    //SyncProposals(Vec<Digest>, Info),
 }
 
 /// Waits for missing parent certificates and batches' digests.
@@ -56,7 +53,7 @@ pub struct HeaderWaiter {
     /// Loops back to the core headers for which we got all parents and batches.
     tx_core: Sender<Header>,
     /// Loops back commit messages to the committer for reprocessing
-    tx_consensus_loopback: Sender<(Proposal, ConsensusMessage)>,
+    tx_consensus_loopback: Sender<(ConsensusMessage, Header)>,
 
     /// Network driver allowing to send messages.
     network: SimpleSender,
@@ -86,7 +83,7 @@ impl HeaderWaiter {
         sync_retry_nodes: usize,
         rx_synchronizer: Receiver<WaiterMessage>,
         tx_core: Sender<Header>,
-        tx_core_instances: Sender<(Proposal, ConsensusMessage)>,
+        tx_consensus_loopback: Sender<(ConsensusMessage, Header)>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -99,7 +96,7 @@ impl HeaderWaiter {
                 sync_retry_nodes,
                 rx_synchronizer,
                 tx_core,
-                tx_consensus_loopback: tx_core_instances,
+                tx_consensus_loopback,
                 network: SimpleSender::new(),
                 parent_requests: HashMap::new(),
                 header_requests: HashMap::new(),
@@ -130,44 +127,20 @@ impl HeaderWaiter {
         }
     }
 
-    async fn ancestor_waiter(
-        mut store: Store,
-        wait_on: Digest,
-        deliver: Header,
+
+    async fn proposal_waiter(
+        mut missing: Vec<(Vec<u8>, Store)>,
+        deliver: (ConsensusMessage, Header),
         mut handler: Receiver<()>,
-    ) -> DagResult<Option<Header>> {
+    ) -> DagResult<Option<(ConsensusMessage, Header)>> {
+        let waiting: Vec<_> = missing
+            .iter_mut()
+            .map(|(x, y)| y.notify_read(x.to_vec()))
+            .collect();
         tokio::select! {
-            waiting = store.notify_read(wait_on.to_vec()) => {
-                match waiting {
-                    Ok(_) => Ok(Some(deliver)),
-                    Err(e) => Err(DagError::from(e)),
-                }
-            },
-            _ = handler.recv() => Ok(None),
-        }
-    }
-
-    /// Helper function. It waits for particular data to become available in the storage
-    /// and then delivers the specified header.
-    async fn parent_waiter(
-        missing: (Vec<u8>, Store),
-        deliver: (Proposal, ConsensusMessage),
-        mut handler: Receiver<()>,
-    ) -> DagResult<Option<(Proposal, ConsensusMessage)>> {
-        /*let waiting: Vec<_> = missing
-        .iter_mut()
-        .map(|(x, y)| y.notify_read(x.to_vec()))
-        .collect();*/
-
-        let (digest, mut store) = missing;
-
-        tokio::select! {
-            waiting = store.notify_read(digest.to_vec()) => {
-                match waiting {
-                    Ok(_) => Ok(Some(deliver)),
-                    Err(e) => Err(DagError::from(e)),
-                }
-            },
+            result = try_join_all(waiting) => {
+                result.map(|_| Some(deliver)).map_err(DagError::from)
+            }
             _ = handler.recv() => Ok(None),
         }
     }
@@ -175,8 +148,7 @@ impl HeaderWaiter {
     /// Main loop listening to the `Synchronizer` messages.
     async fn run(&mut self) {
         let mut waiting = FuturesUnordered::new();
-        let mut parent_waiting = FuturesUnordered::new();
-        let mut ancestor_waiting = FuturesUnordered::new();
+        let mut proposal_waiting = FuturesUnordered::new();
 
         let timer = sleep(Duration::from_millis(TIMER_RESOLUTION));
         tokio::pin!(timer);
@@ -257,13 +229,58 @@ impl HeaderWaiter {
                             }
                         }
 
-
-                        /*WaiterMessage::SyncProposals(missing, info) => {
-                            debug!("Synching the proposals of {}", info);
-                            let info_id = info.digest();
+                        WaiterMessage::SyncParent(missing, header) => {
+                            debug!("Synching the parents of {}", header);
+                            let header_id = header.id.clone();
+                            let height = header.height();
+                            let author = header.author;
 
                             // Ensure we sync only once per header.
-                            if self.pending.contains_key(&info_id) {
+                            if self.pending.contains_key(&header_id) {
+                                continue;
+                            }
+
+                            // Add the header to the waiter pool. The waiter will return it to us
+                            // when all its parents are in the store.
+                            let mut wait_for = Vec::new();
+                            wait_for.push((missing.to_vec(), self.store.clone()));
+                            let (tx_cancel, rx_cancel) = channel(1);
+                            self.pending.insert(header_id, (height, tx_cancel));
+                            let fut = Self::waiter(wait_for, header, rx_cancel);
+                            waiting.push(fut);
+
+                            // Ensure we didn't already sent a sync request for these parents.
+                            // Optimistically send the sync request to the node that created the certificate.
+                            // If this fails (after a timeout), we broadcast the sync request.
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .expect("Failed to measure time")
+                                .as_millis();
+                            let mut requires_sync = Vec::new();
+                            self.parent_requests.entry(missing.clone()).or_insert_with(|| {
+                                requires_sync.push(missing);
+                                (height, now)
+                            });
+                            if !requires_sync.is_empty() {
+                                let address = self.committee
+                                    .primary(&author)
+                                    .expect("Author of valid header not in the committee")
+                                    .primary_to_primary;
+                                let message = PrimaryMessage::HeadersRequest(requires_sync, self.name);
+                                let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
+                                self.network.send(address, Bytes::from(bytes)).await;
+                            }
+                        }
+
+
+                        WaiterMessage::SyncProposals(missing, consensus_message, header) => {
+                            //let header_id = header.id.clone();
+                            let height = header.height();
+                            let author = header.author;
+                            let id = proposal_digest(&consensus_message);
+
+                            // Ensure we sync only once per header.
+                            if self.pending.contains_key(&id) {
                                 continue;
                             }
 
@@ -272,12 +289,12 @@ impl HeaderWaiter {
                             let wait_for = missing
                                 .iter()
                                 .cloned()
-                                .map(|x| (x.to_vec(), self.store.clone()))
+                                .map(|x| (x.header_digest.to_vec(), self.store.clone()))
                                 .collect();
                             let (tx_cancel, rx_cancel) = channel(1);
-                            self.pending.insert(info_id, (info.instance_info.slot, tx_cancel));
-                            let fut = Self::waiter(wait_for, info, rx_cancel);
-                            waiting.push(fut);
+                            self.pending.insert(id, (height, tx_cancel));
+                            let fut = Self::proposal_waiter(wait_for, (consensus_message, header), rx_cancel);
+                            proposal_waiting.push(fut);
 
                             // Ensure we didn't already sent a sync request for these parents.
                             // Optimistically send the sync request to the node that created the certificate.
@@ -288,167 +305,11 @@ impl HeaderWaiter {
                                 .as_millis();
                             let mut requires_sync = Vec::new();
                             for missing in missing {
-                                self.parent_requests.entry(missing.clone()).or_insert_with(|| {
-                                    requires_sync.push(missing);
-                                    (info.instance_info.slot, now)
+                                self.parent_requests.entry(missing.header_digest.clone()).or_insert_with(|| {
+                                    requires_sync.push(missing.header_digest);
+                                    (missing.height, now)
                                 });
                             }
-                            if !requires_sync.is_empty() {
-                                let address = self.committee
-                                    .primary(&author)
-                                    .expect("Author of valid header not in the committee")
-                                    .primary_to_primary;
-                                let message = PrimaryMessage::CertificatesRequest(requires_sync, self.name);
-                                let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                                self.network.send(address, Bytes::from(bytes)).await;
-                            }
-                        }*/
-
-                        WaiterMessage::SyncAncestors(header) => {
-                            let header_id = header.id.clone();
-                            //let height = header_digest.height;
-                            //let author = header_digest.author;
-
-                            // Ensure we sync only once per header.
-                            if self.pending.contains_key(&header_id) {
-                                continue;
-                            }
-
-                            // Add the header to the waiter pool. The waiter will return it to us
-                            // when all its parents are in the store.
-                            /*let wait_for = missing
-                                .iter()
-                                .cloned()
-                                .map(|x| (x.to_vec(), self.store.clone()))
-                                .collect();*/
-
-                            let missing = header.parent_cert.header_digest.clone();
-                            let (tx_cancel, rx_cancel) = channel(1);
-                            self.pending.insert(header_id, (header.height, tx_cancel));
-                            let fut = Self::ancestor_waiter(self.store.clone(), missing.clone(), header.clone(), rx_cancel);
-                            ancestor_waiting.push(fut);
-
-                            // Ensure we didn't already sent a sync request for these parents.
-                            // Optimistically send the sync request to the node that created the certificate.
-                            // If this fails (after a timeout), we broadcast the sync request.
-                            let now = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .expect("Failed to measure time")
-                                .as_millis();
-                            let mut requires_sync = Vec::new();
-                            /*for missing in missing {
-                                self.parent_requests.entry(missing.clone()).or_insert_with(|| {
-                                    requires_sync.push(missing);
-                                    (round, now)
-                                });
-                            }*/
-                            self.parent_requests.entry(missing.clone()).or_insert_with(|| {
-                                requires_sync.push(missing);
-                                (header.parent_cert.height, now)
-                            });
-
-                            if !requires_sync.is_empty() {
-                                let address = self.committee
-                                    .primary(&header.parent_cert.origin())
-                                    .expect("Author of valid header not in the committee")
-                                    .primary_to_primary;
-                                let message = PrimaryMessage::HeadersRequest(requires_sync, self.name);
-                                let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                                self.network.send(address, Bytes::from(bytes)).await;
-                            }
-
-                        }
-
-                        WaiterMessage::SyncProposalHeaders(proposal, author, consensus_message) => {
-                            let missing = proposal.header_digest.clone();
-                            let height = proposal.height;
-                            debug!("Syncing the parents of {}", missing);
-                            //let header_id = consensus_instance.digest();
-
-                            // Ensure we sync only once per header.
-                            if self.pending.contains_key(&proposal.digest()) {
-                                continue;
-                            }
-
-                            // Add the header to the waiter pool. The waiter will return it to us
-                            // when all its parents are in the store.
-                            /*let wait_for = missing
-                                .iter()
-                                .cloned()
-                                .map(|x| (x.to_vec(), self.store.clone()))
-                                .collect();*/
-
-                            let wait_for = (missing.to_vec(), self.store.clone());
-                            let (tx_cancel, rx_cancel) = channel(1);
-                            self.pending.insert(proposal.digest(), (proposal.height, tx_cancel));
-                            let fut = Self::parent_waiter(wait_for, (proposal.clone(), consensus_message), rx_cancel);
-                            parent_waiting.push(fut);
-
-                            // Ensure we didn't already sent a sync request for these parents.
-                            // Optimistically send the sync request to the node that created the certificate.
-                            // If this fails (after a timeout), we broadcast the sync request.
-                            let now = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .expect("Failed to measure time")
-                                .as_millis();
-                            let mut requires_sync = Vec::new();
-                            /*for missing in missing {
-                                self.parent_requests.entry(missing.clone()).or_insert_with(|| {
-                                    requires_sync.push(missing);
-                                    (round, now)
-                                });
-                            }*/
-                            self.parent_requests.entry(missing.clone()).or_insert_with(|| {
-                                requires_sync.push(missing);
-                                (height, now)
-                            });
-
-                            if !requires_sync.is_empty() {
-                                let address = self.committee
-                                    .primary(&author)
-                                    .expect("Author of valid header not in the committee")
-                                    .primary_to_primary;
-                                let message = PrimaryMessage::HeadersRequest(requires_sync, self.name);
-                                let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                                self.network.send(address, Bytes::from(bytes)).await;
-                            }
-                        }
-
-                        WaiterMessage::SyncSpecialParent(missing_parent, header) => {
-                            debug!("Synching the parents of {}", header);
-                            let header_id = header.id.clone();
-                            let round = header.height;
-                            let author = header.author;
-
-                            // Ensure we sync only once per header.
-                            if self.pending.contains_key(&header_id) {  //TODO: Want to allow both normal parent sync and this sync in parallel?
-                                continue;
-                            }
-
-                            // Add the header to the waiter pool. The waiter will return it to us
-                            // when all its parents are in the store.
-
-                            let wait_for = vec![(missing_parent.to_vec(), self.store.clone())];
-
-                            let (tx_cancel, rx_cancel) = channel(1);
-                            self.pending.insert(header_id, (round, tx_cancel));
-                            let fut = Self::waiter(wait_for, header, rx_cancel);
-                            waiting.push(fut);
-
-                            // Ensure we didn't already sent a sync request for this special parent.
-                            // Optimistically send the sync request to the node that issued the header.
-                            // If this fails (after a timeout), we broadcast the sync request.
-                            let now = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .expect("Failed to measure time")
-                                .as_millis();
-
-                            let mut requires_sync = Vec::new();
-                            self.header_requests.entry(missing_parent.clone()).or_insert_with(|| {
-                                requires_sync.push(missing_parent);
-                                (round, now)
-                            });
-
                             if !requires_sync.is_empty() {
                                 let address = self.committee
                                     .primary(&author)
@@ -469,15 +330,8 @@ impl HeaderWaiter {
                         for x in header.payload.keys() {
                             let _ = self.batch_requests.remove(x);
                         }
-                        /*for x in &header.parent_cert_digest {
-                            let _ = self.parent_requests.remove(x);
-                        }*/
                         let _ = self.parent_requests.remove(&header.parent_cert.header_digest);
 
-                        if header.special_parent.is_some() {
-                            let head_ref = &header.special_parent.as_ref().unwrap();
-                            //let _ = self.header_requests.remove(head_ref);
-                        }
                         self.tx_core.send(header).await.expect("Failed to send header");
                     },
                     Ok(None) => {
@@ -489,23 +343,15 @@ impl HeaderWaiter {
                     }
                 },
 
-                Some(result) = parent_waiting.next() => match result {
-                    Ok(Some((proposal, consensus_message))) => {
-                        //debug!("Finished synching {:?}", header_digest);
-                        let _ = self.pending.remove(&proposal.digest());
-                        /*for x in header_digest.payload.keys() {
+                Some(result) = proposal_waiting.next() => match result {
+                    Ok(Some(deliver)) => {
+                        let id = proposal_digest(&deliver.0);
+                        let _ = self.pending.remove(&id);
+                        for x in deliver.1.payload.keys() {
                             let _ = self.batch_requests.remove(x);
-                        }*/
-                        /*for x in &header.parent_cert_digest {
-                            let _ = self.parent_requests.remove(x);
-                        }*/
-                        //let _ = self.parent_requests.remove(&header_digest.parent_cert.header_digest);
+                        }
 
-                        //if header_digest.special_parent.is_some() {
-                            //let head_ref = &header_digest.special_parent.as_ref().unwrap();
-                            //let _ = self.header_requests.remove(head_ref);
-                        //}
-                        self.tx_consensus_loopback.send((proposal, consensus_message)).await.expect("Failed to send header digest");
+                        self.tx_consensus_loopback.send(deliver).await.expect("Failed to send header");
                     },
                     Ok(None) => {
                         // This request has been canceled.
@@ -514,7 +360,6 @@ impl HeaderWaiter {
                         error!("{}", e);
                         panic!("Storage failure: killing node.");
                     }
-
                 },
 
                 () = &mut timer => {

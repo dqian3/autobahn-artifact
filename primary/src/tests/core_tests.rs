@@ -479,7 +479,7 @@ async fn process_certificates() {
     let (tx_primary_messages, rx_primary_messages) = channel(3);
     let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
     let (_tx_certificates_loopback, rx_certificates_loopback) = channel(1);
-    let (_tx_headers, rx_headers) = channel(1);
+    let (tx_headers, rx_headers) = channel(1);
     let (tx_consensus, mut _rx_consensus) = channel(3);
     let (tx_parents, mut rx_parents) = channel(1);
 
@@ -533,58 +533,35 @@ async fn process_certificates() {
     );
 
     // Send enough certificates to the core.
-    let certificates: Vec<_> = headers()
+    let certificates: Vec<Certificate> = headers()
         .iter()
-        .take(3)
         .map(|header| certificate(header))
         .collect();
 
     // Send enough headers to the core.
-    let headers_from_certs: Vec<_> = certificates
+    let headers_from_certs: Vec<Header> = certificates
         .iter()
         .map(|cert| header_from_cert(cert))
         .collect();
 
 
-
-        //Digest/Sig debug
-    // for header in headers(){
-    //     println!("header digest: {:?}", header.digest());
-    //     let votes = votes(&header); //Votes for the first header ==> these are the votes that were used for the first certificate
-    //     for vote in votes {
-    //         println!("vote digest: {:?}", vote.digest());
-    //         println!("vote signature: {:?}", vote.signature);
-    //         println!("vote author: {:?}", vote.author);
-    //     }
-    //     println!("             ");
-    // }
    
-    for x in headers() {
+    for x in headers().iter() {
+        println!("author is {:?}", x.author);
         tx_primary_messages
-            .send(PrimaryMessage::Header(x))
+            .send(PrimaryMessage::Header(x.clone()))
             .await
             .unwrap();
     }
+
    
     for x in headers_from_certs {
+        println!("Sending headers with author {:?}", x.author);
         tx_primary_messages
             .send(PrimaryMessage::Header(x))
             .await
             .unwrap();
     }
-
-    // // Ensure the core sends the parents of the certificates to the proposer.
-    //let received = rx_parents.recv().await.unwrap();
-    //let parents = certificates.iter().map(|x| x.digest()).collect();
-    //assert_eq!(received, (parents, 1));
-
-    // Ensure the core sends the certificates to the consensus committer.
-    /*for x in certificates.clone() {
-        let received = rx_committer.recv().await.unwrap();
-        assert_eq!(received, x);
-    }*/
-
-    sleep(Duration::from_millis(1000)).await;
 
     // Ensure the certificates are stored.
     for x in &certificates {
@@ -856,7 +833,7 @@ async fn generate_confirm() {
 
     let confirm_message = rx_info.recv().await.unwrap();
     match confirm_message {
-        ConsensusMessage::Confirm { slot, view, qc, proposals } => {
+        ConsensusMessage::Confirm { slot, view, qc, proposals: _ } => {
             assert_eq!(slot, 1);
             assert_eq!(view, 1);
             assert_eq!(qc.id, prepare_message.digest().clone());
@@ -865,6 +842,200 @@ async fn generate_confirm() {
         _ => panic!("Wrong message type"),
     };
 }
+
+#[tokio::test]
+#[serial]
+async fn generate_commit() {
+    let mut keys = keys();
+    let _ = keys.pop().unwrap(); // Skip the header' author.
+    let (name, secret) = keys.pop().unwrap();
+    let mut signature_service = SignatureService::new(secret);
+
+    let committee = committee_with_base_port(13_000);
+
+    let (tx_sync_headers, _rx_sync_headers) = channel(1);
+    let (tx_sync_certificates, _rx_sync_certificates) = channel(1);
+    let (tx_primary_messages, rx_primary_messages) = channel(1);
+    let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
+    let (_tx_certificates_loopback, rx_certificates_loopback) = channel(1);
+    let (tx_headers, rx_headers) = channel(1);
+    let (tx_consensus, _rx_consensus) = channel(1);
+    let (tx_parents, rx_parents) = channel(1);
+
+    let(tx_committer, mut rx_committer) = channel(1);
+    let(tx_sailfish, _rx_special) = channel(1);
+    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
+    let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
+    let (tx_info, mut rx_info) = channel(1);
+    let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
+
+    // Create a new test store.
+    let path = ".db_test_process_header";
+    let _ = fs::remove_dir_all(path);
+    let mut store = Store::new(path).unwrap();
+
+    // Spawn a listener to receive the vote.
+    let address = committee
+        .primary(&header().author)
+        .unwrap()
+        .primary_to_primary;
+    //let handle = listener(address);
+
+    // Make a synchronizer for the core.
+    let synchronizer = Synchronizer::new(
+        name,
+        &committee,
+        store.clone(),
+        /* tx_header_waiter */ tx_sync_headers,
+        /* tx_certificate_waiter */ tx_sync_certificates,
+    );
+
+    let leader_elector = LeaderElector::new(committee.clone());
+    let timeout_delay = 1000;
+
+    // Spawn the core.
+    Core::spawn(
+        name,
+        committee.clone(),
+        store.clone(),
+        synchronizer,
+        signature_service.clone(),
+        /* consensus_round */ Arc::new(AtomicU64::new(0)),
+        /* gc_depth */ 50,
+        /* rx_primaries */ rx_primary_messages,
+        /* rx_header_waiter */ rx_headers_loopback,
+        rx_header_waiter_instances,
+        /* rx_certificate_waiter */ rx_certificates_loopback,
+        /* rx_proposer */ rx_headers,
+        tx_consensus,
+        tx_committer,
+        /* tx_proposer */ tx_parents,
+        /* special */ tx_sailfish,
+        rx_pushdown_cert,
+        rx_request_header_sync,
+        tx_info,
+        leader_elector,
+        timeout_delay,
+    );
+
+
+    /*Proposer::spawn(
+        name, 
+        committee.clone(), 
+        signature_service, 
+        100, 
+        timeout_delay, 
+        rx_parents, 
+        rx_workers, 
+        rx_info, 
+        tx_headers,
+    );*/
+
+
+    // Send headers to the core, so they won't request sync
+    let header_list = headers();
+    for x in header_list.clone() {
+        tx_primary_messages
+            .send(PrimaryMessage::Header(x))
+            .await
+            .unwrap();
+    }
+
+    let mut proposals: HashMap<PublicKey, Proposal> = HashMap::new();
+    for x in &header_list {
+        proposals.insert(x.author, Proposal { header_digest: x.digest(), height: x.height() });
+    }
+    let ticket: Ticket = Ticket::genesis(&committee);
+    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, ticket, proposals: proposals.clone() };
+
+    let mut consensus_messages: HashMap<Digest, ConsensusMessage> = HashMap::new();
+    consensus_messages.insert(prepare_message.digest().clone(), prepare_message.clone());
+
+    let parent_cert = certificate(&header_list[0]);
+    let header = special_header(parent_cert, consensus_messages.clone());
+    let consensus_digests = vec![prepare_message.digest()];
+
+
+    // Send a header to the core.
+    tx_headers
+        .send(header.clone())
+        .await
+        .unwrap();
+
+
+    for vote in special_votes(&header, consensus_digests) {
+        println!("sending special votes");
+        let message = PrimaryMessage::Vote(vote);
+        tx_primary_messages
+            .send(message)
+            .await
+            .unwrap();
+    }
+
+
+    let confirm_message = rx_info.recv().await.unwrap();
+    match confirm_message.clone() {
+        ConsensusMessage::Confirm { slot, view, qc, proposals: _ } => {
+            consensus_messages.clear();
+            consensus_messages.insert(confirm_message.digest().clone(), confirm_message.clone());
+            
+            let confirm_parent_cert = certificate(&header);
+            let confirm_header = special_header(confirm_parent_cert, consensus_messages.clone());
+
+            tx_headers
+                .send(confirm_header.clone())
+                .await
+                .unwrap();
+
+            sleep(Duration::from_millis(500)).await;
+            let confirm_digests = vec![confirm_message.digest().clone()];
+
+            for vote in special_votes(&confirm_header, confirm_digests) {
+                println!("sending special votes confirm");
+                let message = PrimaryMessage::Vote(vote);
+                tx_primary_messages
+                    .send(message)
+                    .await
+                    .unwrap();
+            }
+
+            println!("after sending votes");
+
+            let commit_message = rx_info.recv().await.unwrap();
+
+            match commit_message.clone() {
+                ConsensusMessage::Commit { slot: slot1, view: view1, qc: qc1, proposals: proposals1 } => {
+                    consensus_messages.clear();
+                    consensus_messages.insert(commit_message.digest().clone(), commit_message.clone());
+                    
+                    let commit_parent_cert = certificate(&confirm_header);
+                    let commit_header = special_header(commit_parent_cert, consensus_messages.clone());
+
+                    println!("sending commit header");
+                    // Ensure that the confirm header is processed and received
+                    sleep(Duration::from_millis(500)).await;
+                    tx_headers
+                        .send(commit_header)
+                        .await
+                        .unwrap();
+
+                    let receive_commit_message = rx_committer.recv().await.unwrap();
+                    match receive_commit_message {
+                        ConsensusMessage::Commit { slot: slot2, view: view2, qc: qc2, proposals: proposals2 } => {
+                            assert_eq!(slot1, slot2);
+                            assert_eq!(view1, view2);
+                        },
+                        _ => {},
+                    };
+                },
+                _ => {},
+            };
+        },
+        _ => panic!("Wrong message type"),
+    };
+}
+
+
 
 
 /*#[tokio::test]

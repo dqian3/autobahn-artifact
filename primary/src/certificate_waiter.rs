@@ -1,6 +1,7 @@
+use crate::Header;
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::{DagError, DagResult};
-use crate::messages::Certificate;
+use crate::messages::{Certificate, ConsensusMessage};
 use futures::future::try_join_all;
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::stream::StreamExt as _;
@@ -10,6 +11,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 /// Waits to receive all the ancestors of a certificate before looping it back to the `Core`
 /// for further processing.
+// NOTE: THIS IS DEPRECATED, NOT USED
 pub struct CertificateWaiter {
     /// The persistent storage.
     store: Store,
@@ -107,33 +109,15 @@ impl CertificateWaiter {
                 Some(certificate) = self.rx_synchronizer.recv() => {
                     // Add the certificate to the waiter pool. The waiter will return it to us
                     // when all its parents are in the store.
-                    /*let mut wait_for: Vec<(Vec<u8>, Store)> = certificate
-                        .header
-                        .parent_cert_digest
-                        .iter()
-                        .cloned()
-                        .map(|x| (x.to_vec(), self.store.clone()))
-                        .collect();*/
 
-                    let wait_for = (certificate.header_digest.to_vec(), self.store.clone());
-
-                    //Add a waiter for the special parent header.
-                    /*if certificate.header.special_parent.is_some(){
-                        let special_wait_for = certificate
-                        .header
-                        .special_parent
-                        .clone();
-                        wait_for.push(  (special_wait_for.unwrap().to_vec(), self.store.clone())  );
-                     }*/
-                    
-
-                    //let fut = Self::waiter(wait_for, certificate);
-                    let fut = Self::parent_waiter(wait_for, certificate);
+                    let mut wait_for = Vec::new();
+                    wait_for.push((certificate.header_digest.to_vec(), self.store.clone()));
+                    let fut = Self::waiter(wait_for, certificate);
                     waiting.push(fut);
                 }
                 Some(result) = waiting.next() => match result {
-                    Ok(certificate) => {
-                        self.tx_core.send(certificate).await.expect("Failed to send certificate");
+                    Ok(deliver) => {
+                        self.tx_core.send(deliver).await.expect("Failed to send header/consensus message");
                     },
                     Err(e) => {
                         error!("{}", e);

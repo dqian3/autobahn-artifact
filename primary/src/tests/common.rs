@@ -115,7 +115,7 @@ pub fn special_header(parent_cert: Certificate, consensus_messages: HashMap<Dige
     //let par = vec![Header::default().id];
     let header = Header {
         author,
-        height: 2,
+        height: parent_cert.height + 1,
         parent_cert,
         consensus_messages,
         //parents: par.iter().cloned().collect(),
@@ -155,13 +155,22 @@ pub fn headers() -> Vec<Header> {
 }
 
 pub fn header_from_cert(certificate: &Certificate) -> Header {
+    let mut right_key: Vec<(PublicKey, SecretKey)> = keys().into_iter().filter(|(pk, sk)| *pk == certificate.author).collect();
+    let secret = right_key.pop().unwrap().1;
+
     let header = Header {
         author: certificate.author,
         height: certificate.height + 1,
         parent_cert: certificate.clone(),
         ..Header::default()
     };
-    header
+
+    Header {
+        id: header.digest(),
+        signature: Signature::new(&header.digest(), &secret),
+        ..header
+    }
+
 }
 
 
