@@ -53,6 +53,10 @@ impl Ticket {
             proposals: HashMap::new(),
         }
     }
+
+    pub fn get_proposals(&self) -> HashMap<PublicKey, Proposal> {
+        HashMap::new()
+    }
 }
 
 impl Hash for Ticket {
@@ -135,11 +139,10 @@ impl Hash for Proposal {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ConsensusMessage {
-    // TODO: Optimize proposals later for confirm and commit, replace proposals with digests
     Prepare {
         slot: Slot,
         view: View,
-        ticket: Ticket,
+        tc: Option<TC>,
         proposals: HashMap<PublicKey, Proposal>,
     },
     Confirm {
@@ -159,7 +162,7 @@ pub enum ConsensusMessage {
 pub fn proposal_digest(consensus_message: &ConsensusMessage) -> Digest {
     let mut hasher = Sha512::new();
     match consensus_message {
-        ConsensusMessage::Prepare { slot: _, view: _, ticket: _, proposals } => {
+        ConsensusMessage::Prepare { slot: _, view: _, tc: _, proposals } => {
             for (_, proposal) in proposals {
                 hasher.update(proposal.header_digest.0);
             }
@@ -186,12 +189,12 @@ impl Hash for ConsensusMessage {
             ConsensusMessage::Prepare {
                 slot,
                 view,
-                ticket,
+                tc,
                 proposals: _,
             } => {
                 hasher.update(slot.to_le_bytes());
                 hasher.update(view.to_le_bytes());
-                hasher.update(ticket.digest().0);
+                //hasher.update(tc.digest().0);
                 // NOTE: Indicates a prepare message
                 hasher.update((0 as u8).to_le_bytes());
             }
@@ -236,19 +239,19 @@ impl PartialEq for ConsensusMessage {
             ConsensusMessage::Prepare {
                 slot,
                 view,
-                ticket,
+                tc,
                 proposals,
             } => {
                 return match other {
                     ConsensusMessage::Prepare {
                         slot: other_slot,
                         view: other_view,
-                        ticket: other_ticket,
+                        tc: other_tc,
                         proposals: other_proposals,
                     } => {
                         slot == other_slot
                             && view == other_view
-                            && ticket == other_ticket
+                            && tc == other_tc
                             && proposals == other_proposals
                     }
                     _ => false,
@@ -298,7 +301,7 @@ impl fmt::Debug for ConsensusMessage {
             ConsensusMessage::Prepare {
                 slot,
                 view: _,
-                ticket: _,
+                tc: _,
                 proposals: _,
             } => {
                 write!(f, "T{})", slot,)
@@ -331,7 +334,7 @@ impl fmt::Display for ConsensusMessage {
             ConsensusMessage::Prepare {
                 slot,
                 view,
-                ticket,
+                tc,
                 proposals,
             } => {
                 write!(f, "T{})", slot,)
@@ -431,6 +434,27 @@ impl Header {
             })
             .collect()
     }
+
+
+    pub fn genesis_proposals(committee: &Committee) -> HashMap<PublicKey, Proposal> {
+        committee
+            .authorities
+            .iter()
+            .map(|(pk, _)| {
+                (
+                    *pk,
+                    Proposal {
+                        header_digest: Header {
+                            author: *pk,
+                            ..Self::default()
+                        }.digest(),
+                        height: 0,
+                    },
+                )
+            })
+            .collect()
+    }
+
 
     pub fn verify(&self, committee: &Committee) -> DagResult<()> {
         // Ensure the header id is well formed.
@@ -1243,6 +1267,49 @@ impl TC {
             //view_round: genesis_header.round,
             ..TC::default()
         }
+    }
+
+    pub fn get_winning_proposals(&self) -> HashMap<PublicKey, Proposal> {
+        let mut winning_proposals = HashMap::new();
+        let mut winning_view = 0;
+
+        // Find the timeout message containing the highest QC, and use that as the winning
+        // proposal for the view change
+        for timeout in &self.timeouts {
+            match &timeout.high_qc {
+                Some(qc) => {
+                    match qc {
+                        ConsensusMessage::Confirm {
+                            slot: _,
+                            view: other_view,
+                            qc: _,
+                            proposals,
+                        } => {
+                            // Update the highest QC view if we see a higher one
+                            if other_view > &winning_view {
+                                winning_view = timeout.view;
+                                winning_proposals = proposals.clone();
+                            }
+                        }
+
+                        ConsensusMessage::Commit {
+                            slot: _,
+                            view: _,
+                            qc: _,
+                            proposals,
+                        } => {
+                            // Adopt the proposals of a commit qc
+                            winning_proposals = proposals.clone();
+                            break;
+                        }
+
+                        _ => {}
+                    }
+                }
+                None => {}
+            };
+        }
+        winning_proposals
     }
 
     pub fn determine_winning_proposal(mut self, committee: &Committee) -> Self {

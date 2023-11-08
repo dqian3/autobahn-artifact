@@ -99,7 +99,7 @@ impl Synchronizer {
         println!("getting proposals");
 
         match consensus_message {
-            ConsensusMessage::Prepare { slot: _, view: _, ticket: _, proposals } => {
+            ConsensusMessage::Prepare { slot: _, view: _, tc: _, proposals } => {
                 for (_, proposal) in proposals {
                     println!("proposal inside prepare");
                     match self.store.read(proposal.header_digest.to_vec()).await? {

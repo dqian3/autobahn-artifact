@@ -661,7 +661,7 @@ async fn process_prepare() {
         proposals.insert(x.author, Proposal { header_digest: x.digest(), height: x.height() });
     }
     let ticket: Ticket = Ticket::genesis(&committee);
-    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, ticket, proposals };
+    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, tc: None, proposals };
 
     let mut consensus_messages: HashMap<Digest, ConsensusMessage> = HashMap::new();
     consensus_messages.insert(prepare_message.digest(), prepare_message.clone());
@@ -804,7 +804,7 @@ async fn generate_confirm() {
         proposals.insert(x.author, Proposal { header_digest: x.digest(), height: x.height() });
     }
     let ticket: Ticket = Ticket::genesis(&committee);
-    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, ticket, proposals: proposals.clone() };
+    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, tc: None, proposals: proposals.clone() };
 
     let mut consensus_messages: HashMap<Digest, ConsensusMessage> = HashMap::new();
     consensus_messages.insert(prepare_message.digest().clone(), prepare_message.clone());
@@ -945,8 +945,7 @@ async fn generate_commit() {
     for x in &header_list {
         proposals.insert(x.author, Proposal { header_digest: x.digest(), height: x.height() });
     }
-    let ticket: Ticket = Ticket::genesis(&committee);
-    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, ticket, proposals: proposals.clone() };
+    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, tc: None, proposals: proposals.clone() };
 
     let mut consensus_messages: HashMap<Digest, ConsensusMessage> = HashMap::new();
     consensus_messages.insert(prepare_message.digest().clone(), prepare_message.clone());
