@@ -1,4 +1,3 @@
-use crate::error::DagResult;
 use crate::messages::ConsensusMessage;
 use crate::primary::{Slot, CHANNEL_CAPACITY};
 use crate::synchronizer::Synchronizer;
@@ -7,16 +6,10 @@ use crate::{Certificate, Header, Height};
 use config::Committee;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
-use ed25519_dalek::Digest as _;
-use ed25519_dalek::Sha512;
-use futures::future::try_join_all;
-use futures::stream::StreamExt as _;
-use futures::stream::{FuturesOrdered, FuturesUnordered};
-use log::{debug, error, info, log_enabled};
+use log::{debug, info};
 use std::borrow::BorrowMut;
 use std::cmp::max;
-use std::collections::{BTreeSet, HashMap, HashSet};
-use std::convert::TryInto;
+use std::collections::{HashMap, HashSet};
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
@@ -37,8 +30,6 @@ struct State {
     log: HashMap<Slot, ConsensusMessage>,
     // The last executed slot
     last_executed_slot: Slot,
-    // Headers that were already committed
-    already_committed_headers: HashSet<Header>,
 }
 
 impl State {
@@ -54,7 +45,6 @@ impl State {
             dag: [(0, genesis)].iter().cloned().collect(),
             log: HashMap::new(),
             last_executed_slot: 0,
-            already_committed_headers: HashSet::new(),
         }
     }
 
@@ -104,11 +94,7 @@ impl Committer {
 
         //special blocks from round >1 can also have genesis as parent!!! ==> Solution: Write genesis to store
         //Alternatively, just store genesis digests and compare against
-        let genesis_digests = genesis.clone().iter().map(|x| x.digest()).collect();
-
-        tokio::spawn(async move {
-            CertificateWaiter::spawn(store, rx_commit, tx_deliver, genesis_digests);
-        });
+        //let genesis_digests = genesis.clone().iter().map(|x| x.digest()).collect();
 
         tokio::spawn(async move {
             Self {
@@ -184,7 +170,7 @@ impl Committer {
 
         loop {
             tokio::select! {
-                Some(certificate) = self.rx_mempool.recv() => {
+                Some(_) = self.rx_mempool.recv() => {
                     // Add the new certificate to the local storage.
                     /*state.dag.entry(certificate.height()).or_insert_with(HashMap::new).insert(
                         certificate.origin(),
@@ -192,10 +178,9 @@ impl Committer {
                     );*/
                 },
                 Some(commit_message) = self.rx_commit_message.recv() => {
-                    self.process_commit_message(state.borrow_mut(), commit_message);
+                    self.process_commit_message(state.borrow_mut(), commit_message).await;
                 },
-                Some(certificate) = self.rx_deliver.recv() => {
-                }
+                Some(_) = self.rx_deliver.recv() => {}
 
             }
         }
@@ -205,7 +190,7 @@ impl Committer {
     /// https://en.wikipedia.org/wiki/Tree_traversal#Pre-order
     fn order_dag(&self, tip: &Certificate, state: &State) -> Vec<Certificate> {
         debug!("Processing sub-dag of {:?}", tip);
-        let mut ordered = Vec::new();
+        let ordered = Vec::new();
         /*let mut already_ordered = HashSet::new();
 
         let dummy = (Digest::default(), Certificate::default());
@@ -308,149 +293,5 @@ impl Committer {
         // Ordering the output by round is not really necessary but it makes the commit sequence prettier.
         ordered.sort_by_key(|x| x.round());*/
         ordered
-    }
-}
-
-//TODO: Create a sync call to request sync at the dag layer
-
-/// Waits to receive all the ancestors of a certificate before sending it through the output
-/// channel. The outputs are in the same order as the input (FIFO).
-pub struct CertificateWaiter {
-    /// The persistent storage.
-    store: Store,
-    /// Receives input certificates.
-    rx_input: Receiver<Certificate>,
-    /// Outputs the certificates once we have all its parents.
-    tx_output: Sender<Certificate>,
-
-    genesis_digests: BTreeSet<Digest>,
-}
-
-impl CertificateWaiter {
-    pub fn spawn(
-        store: Store,
-        rx_input: Receiver<Certificate>,
-        tx_output: Sender<Certificate>,
-        genesis_digests: BTreeSet<Digest>,
-    ) {
-        tokio::spawn(async move {
-            Self {
-                store,
-                rx_input,
-                tx_output,
-                genesis_digests,
-            }
-            .run()
-            .await
-        });
-    }
-
-    /// Helper function. It waits for particular data to become available in the storage
-    /// and then delivers the specified header.
-    async fn waiter(
-        mut missing: Vec<(Vec<u8>, Store)>,
-        deliver: Certificate,
-    ) -> DagResult<Certificate> {
-        let waiting: Vec<_> = missing
-            .iter_mut()
-            .map(|(x, y)| y.notify_read(x.to_vec()))
-            .collect();
-
-        let deliver_result = try_join_all(waiting).await?;
-        // let deliver_result = deliver_result
-        //     .iter_mut()
-        //     .map(|_| deliver.clone());
-        // .map_err(ConsensusError::from);
-        debug!("Finished waiting, delivering {:?}", deliver);
-        //deliver_result;
-        Ok(deliver)
-    }
-
-    async fn confirm_committment(&mut self, certificate: &Certificate) {
-
-        //debug!("committing view: {}", certificate.header.view);
-        //let committment = Committment {commit_view : certificate.header.view };
-        //let bytes = bincode::serialize(&committment).expect("Failed to serialize header");
-        //self.store.write(committment.digest().to_vec(), bytes).await;
-    }
-
-    async fn run(&mut self) {
-        //let mut waiting =  FuturesOrdered::new(); //FuturesUnordered::new(); //
-        loop {
-            tokio::select! {
-                biased; // Try to commit waiting ones first.
-                /*Some(result) = waiting.next() => match result {
-                    // _ => { debug!{"Reaching branch"};},
-                    Ok(certificate) => {
-                        debug!("Got all the history of {:?}", certificate);
-
-                        //self.confirm_committment(&certificate).await;
-
-                        self.tx_output.send(certificate).await.expect("Failed to send certificate");
-                    },
-                    Err(e) => {
-                        error!("{}", e);
-                        panic!("Storage failure: killing node.");
-                    }
-
-                },*/
-                Some(certificate) = self.rx_input.recv() => {
-                    // Skip genesis' children.
-                    //Note: Ideally only want to allow genesis parents for block in round 1 -- however, only a byz special block will be able to use them anyways. At which point coverage doesn't really matter
-                    /*if certificate.header.parents == self.genesis_digests { //|| certificate.round() == 1 {
-                        debug!("Delivering cert with genesis parents. {:?}", certificate);
-
-                        //self.confirm_committment(&certificate).await;
-
-                        self.tx_output.send(certificate).await.expect("Failed to send certificate");
-                        continue;
-                    }
-
-                    debug!("Waiting for history of {:?}", certificate);
-
-                    // Add the certificate to the waiter pool. The waiter will return it to us
-                    // when all its parents are in the store.
-                    let mut wait_for: Vec<(Vec<u8>, Store)>= certificate
-                        .header
-                        .parents
-                        .iter()
-                        .cloned()
-                        .map(|x| (x.to_vec(), self.store.clone()))
-                        .collect();
-
-                    debug!("Waiting for {} normal DAG parents", wait_for.len());
-
-                     //Add a waiter for the special parent header.
-                     if certificate.header.special_parent.is_some(){
-                        let special_parent = certificate
-                        .header
-                        .special_parent
-                        .as_ref().unwrap();
-
-                        //create dummy digest
-                        let mut hasher = Sha512::new();
-                        hasher.update(special_parent); //== parent_header.id
-                        hasher.update(&certificate.header.special_parent_round.to_le_bytes());
-                        hasher.update(&certificate.header.origin()); //parent_header.origin = child_header_origin
-                        let special_wait_for = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
-                        wait_for.push(  (special_wait_for.to_vec(), self.store.clone())  );
-
-                        debug!("Waiting for special edge of {:?}. [header {}, cert {}]", certificate, special_parent, special_wait_for);
-                     }
-
-                     //Add waiter for consensus parent
-                    //  if certificate.header.is_special {
-                    //     let prev_committment = Committment {commit_view : certificate.header.view-1 };
-                    //     wait_for.push( (prev_committment.digest().to_vec()   , self.store.clone()));
-                    //     debug!("Waiting for view {} consensus parent", certificate.header.view-1);
-                    // }
-
-
-                    let fut = Self::waiter(wait_for, certificate);
-                    //waiting.push(fut);
-                    waiting.push_back(fut);*/
-                },
-            }
-        }
     }
 }

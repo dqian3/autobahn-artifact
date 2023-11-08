@@ -22,14 +22,10 @@ async fn process_header() {
     let (tx_sync_certificates, _rx_sync_certificates) = channel(1);
     let (tx_primary_messages, rx_primary_messages) = channel(1);
     let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
-    let (_tx_certificates_loopback, rx_certificates_loopback) = channel(1);
     let (_tx_headers, rx_headers) = channel(1);
-    let (tx_consensus, _rx_consensus) = channel(1);
     let (tx_parents, _rx_parents) = channel(1);
 
     let(tx_committer, _rx_committer) = channel(1);
-    let(tx_sailfish, _rx_special) = channel(1);
-    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
     let (tx_info, _rx_info) = channel(1);
     let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
@@ -73,13 +69,9 @@ async fn process_header() {
         /* rx_primaries */ rx_primary_messages,
         /* rx_header_waiter */ rx_headers_loopback,
         rx_header_waiter_instances,
-        /* rx_certificate_waiter */ rx_certificates_loopback,
         /* rx_proposer */ rx_headers,
-        tx_consensus,
         tx_committer,
         /* tx_proposer */ tx_parents,
-        /* special */ tx_sailfish,
-        rx_pushdown_cert,
         rx_request_header_sync,
         tx_info,
         leader_elector,
@@ -122,14 +114,10 @@ async fn process_header_missing_parent() {
     let (tx_sync_certificates, _rx_sync_certificates) = channel(1);
     let (tx_primary_messages, rx_primary_messages) = channel(1);
     let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
-    let (_tx_certificates_loopback, rx_certificates_loopback) = channel(1);
     let (_tx_headers, rx_headers) = channel(1);
-    let (tx_consensus, _rx_consensus) = channel(1);
     let (tx_parents, _rx_parents) = channel(1);
 
     let(tx_committer, _rx_committer) = channel(1);
-    let(tx_sailfish, _rx_special) = channel(1);
-    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
     let (tx_info, _rx_info) = channel(1);
     let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
@@ -163,13 +151,9 @@ async fn process_header_missing_parent() {
         /* rx_primaries */ rx_primary_messages,
         /* rx_header_waiter */ rx_headers_loopback,
         rx_header_waiter_instances,
-        /* rx_certificate_waiter */ rx_certificates_loopback,
         /* rx_proposer */ rx_headers,
-        tx_consensus,
         tx_committer,
         /* tx_proposer */ tx_parents,
-        /* special */ tx_sailfish,
-        rx_pushdown_cert,
         rx_request_header_sync,
         tx_info,
         leader_elector,
@@ -204,14 +188,10 @@ async fn process_header_invalid_height() {
     let (tx_sync_certificates, _rx_sync_certificates) = channel(1);
     let (tx_primary_messages, rx_primary_messages) = channel(1);
     let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
-    let (_tx_certificates_loopback, rx_certificates_loopback) = channel(1);
     let (_tx_headers, rx_headers) = channel(1);
-    let (tx_consensus, _rx_consensus) = channel(1);
     let (tx_parents, _rx_parents) = channel(1);
 
     let(tx_committer, _rx_committer) = channel(1);
-    let(tx_sailfish, _rx_special) = channel(1);
-    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
     let (tx_info, _rx_info) = channel(1);
     let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
@@ -245,13 +225,9 @@ async fn process_header_invalid_height() {
         /* rx_primaries */ rx_primary_messages,
         /* rx_header_waiter */ rx_headers_loopback,
         rx_header_waiter_instances,
-        /* rx_certificate_waiter */ rx_certificates_loopback,
         /* rx_proposer */ rx_headers,
-        tx_consensus,
         tx_committer,
         /* tx_proposer */ tx_parents,
-        tx_sailfish,
-        rx_pushdown_cert,
         rx_request_header_sync,
         tx_info,
         leader_elector,
@@ -287,14 +263,10 @@ async fn process_header_missing_payload() {
     let (tx_sync_certificates, _rx_sync_certificates) = channel(1);
     let (tx_primary_messages, rx_primary_messages) = channel(1);
     let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
-    let (_tx_certificates_loopback, rx_certificates_loopback) = channel(1);
     let (_tx_headers, rx_headers) = channel(1);
-    let (tx_consensus, _rx_consensus) = channel(1);
     let (tx_parents, _rx_parents) = channel(1);
 
     let(tx_committer, _rx_committer) = channel(1);
-    let(tx_sailfish, _rx_special) = channel(1);
-    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
     let (tx_info, _rx_info) = channel(1);
     let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
@@ -329,13 +301,9 @@ async fn process_header_missing_payload() {
         /* rx_primaries */ rx_primary_messages,
         /* rx_header_waiter */ rx_headers_loopback,
         rx_header_waiter_instances,
-        /* rx_certificate_waiter */ rx_certificates_loopback,
         /* rx_proposer */ rx_headers,
-        tx_consensus,
         tx_committer,
         /* tx_proposer */ tx_parents,
-        tx_sailfish,
-        rx_pushdown_cert,
         rx_request_header_sync,
         tx_info,
         leader_elector,
@@ -369,14 +337,10 @@ async fn process_votes() {
     let (tx_sync_certificates, _rx_sync_certificates) = channel(1);
     let (tx_primary_messages, rx_primary_messages) = channel(1);
     let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
-    let (_tx_certificates_loopback, rx_certificates_loopback) = channel(1);
     let (tx_headers, rx_headers) = channel(1);
-    let (tx_consensus, _rx_consensus) = channel(1);
     let (tx_parents, mut rx_parents) = channel(1);
 
     let(tx_committer, _rx_committer) = channel(1);
-    let(tx_sailfish, _rx_special) = channel(1);
-    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
     let (tx_info, rx_info) = channel(1);
     let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
@@ -413,13 +377,9 @@ async fn process_votes() {
         /* rx_primaries */ rx_primary_messages,
         /* rx_header_waiter */ rx_headers_loopback,
         rx_header_waiter_instances,
-        /* rx_certificate_waiter */ rx_certificates_loopback,
         /* rx_proposer */ rx_headers,
-        tx_consensus,
         tx_committer,
         /* tx_proposer */ tx_parents,
-        tx_sailfish,
-        rx_pushdown_cert,
         rx_request_header_sync,
         tx_info,
         leader_elector,
@@ -443,10 +403,14 @@ async fn process_votes() {
     let expected = certificate(&header);
 
     //Note: core uses Header::genesis instead of Header::default now
-    tx_primary_messages
-        .send(PrimaryMessage::Header(header.clone()))
+    tx_headers
+        .send(header.clone())
         .await
         .unwrap();
+    /*tx_primary_messages
+        .send(PrimaryMessage::Header(header.clone()))
+        .await
+        .unwrap();*/
 
     // Send a votes to the core.
     for vote in votes(&header) {
@@ -478,14 +442,10 @@ async fn process_certificates() {
     let (tx_sync_certificates, _rx_sync_certificates) = channel(1);
     let (tx_primary_messages, rx_primary_messages) = channel(3);
     let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
-    let (_tx_certificates_loopback, rx_certificates_loopback) = channel(1);
     let (tx_headers, rx_headers) = channel(1);
-    let (tx_consensus, mut _rx_consensus) = channel(3);
     let (tx_parents, mut rx_parents) = channel(1);
 
     let(tx_committer, mut rx_committer) = channel(3);
-    let(tx_sailfish, _rx_special) = channel(3);
-    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
     let (tx_info, _rx_info) = channel(1);
     let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
@@ -519,13 +479,9 @@ async fn process_certificates() {
         /* rx_primaries */ rx_primary_messages,
         /* rx_header_waiter */ rx_headers_loopback,
         rx_header_waiter_instances,
-        /* rx_certificate_waiter */ rx_certificates_loopback,
         /* rx_proposer */ rx_headers,
-        tx_consensus,
         tx_committer,
         /* tx_proposer */ tx_parents,
-        tx_sailfish,
-        rx_pushdown_cert,
         rx_request_header_sync,
         tx_info,
         leader_elector,
@@ -586,14 +542,10 @@ async fn process_prepare() {
     let (tx_sync_certificates, _rx_sync_certificates) = channel(1);
     let (tx_primary_messages, rx_primary_messages) = channel(1);
     let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
-    let (_tx_certificates_loopback, rx_certificates_loopback) = channel(1);
     let (_tx_headers, rx_headers) = channel(1);
-    let (tx_consensus, _rx_consensus) = channel(1);
     let (tx_parents, _rx_parents) = channel(1);
 
     let(tx_committer, _rx_committer) = channel(1);
-    let(tx_sailfish, _rx_special) = channel(1);
-    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
     let (tx_info, _rx_info) = channel(1);
     let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
@@ -634,13 +586,9 @@ async fn process_prepare() {
         /* rx_primaries */ rx_primary_messages,
         /* rx_header_waiter */ rx_headers_loopback,
         rx_header_waiter_instances,
-        /* rx_certificate_waiter */ rx_certificates_loopback,
         /* rx_proposer */ rx_headers,
-        tx_consensus,
         tx_committer,
         /* tx_proposer */ tx_parents,
-        /* special */ tx_sailfish,
-        rx_pushdown_cert,
         rx_request_header_sync,
         tx_info,
         leader_elector,
@@ -660,7 +608,6 @@ async fn process_prepare() {
     for x in &header_list {
         proposals.insert(x.author, Proposal { header_digest: x.digest(), height: x.height() });
     }
-    let ticket: Ticket = Ticket::genesis(&committee);
     let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, tc: None, proposals };
 
     let mut consensus_messages: HashMap<Digest, ConsensusMessage> = HashMap::new();
@@ -676,6 +623,7 @@ async fn process_prepare() {
         .unwrap();
 
 
+    listener(address).await.unwrap();
     listener(address).await.unwrap();
 
     // Make the vote we expect to receive.
@@ -715,14 +663,10 @@ async fn generate_confirm() {
     let (tx_sync_certificates, _rx_sync_certificates) = channel(1);
     let (tx_primary_messages, rx_primary_messages) = channel(1);
     let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
-    let (_tx_certificates_loopback, rx_certificates_loopback) = channel(1);
     let (tx_headers, rx_headers) = channel(1);
-    let (tx_consensus, _rx_consensus) = channel(1);
     let (tx_parents, rx_parents) = channel(1);
 
     let(tx_committer, _rx_committer) = channel(1);
-    let(tx_sailfish, _rx_special) = channel(1);
-    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
     let (tx_info, mut rx_info) = channel(1);
     let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
@@ -763,13 +707,9 @@ async fn generate_confirm() {
         /* rx_primaries */ rx_primary_messages,
         /* rx_header_waiter */ rx_headers_loopback,
         rx_header_waiter_instances,
-        /* rx_certificate_waiter */ rx_certificates_loopback,
         /* rx_proposer */ rx_headers,
-        tx_consensus,
         tx_committer,
         /* tx_proposer */ tx_parents,
-        /* special */ tx_sailfish,
-        rx_pushdown_cert,
         rx_request_header_sync,
         tx_info,
         leader_elector,
@@ -803,7 +743,6 @@ async fn generate_confirm() {
     for x in &header_list {
         proposals.insert(x.author, Proposal { header_digest: x.digest(), height: x.height() });
     }
-    let ticket: Ticket = Ticket::genesis(&committee);
     let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, tc: None, proposals: proposals.clone() };
 
     let mut consensus_messages: HashMap<Digest, ConsensusMessage> = HashMap::new();
@@ -857,14 +796,10 @@ async fn generate_commit() {
     let (tx_sync_certificates, _rx_sync_certificates) = channel(1);
     let (tx_primary_messages, rx_primary_messages) = channel(1);
     let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
-    let (_tx_certificates_loopback, rx_certificates_loopback) = channel(1);
     let (tx_headers, rx_headers) = channel(1);
-    let (tx_consensus, _rx_consensus) = channel(1);
     let (tx_parents, rx_parents) = channel(1);
 
     let(tx_committer, mut rx_committer) = channel(1);
-    let(tx_sailfish, _rx_special) = channel(1);
-    let(_tx_pushdown_cert, rx_pushdown_cert) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
     let (tx_info, mut rx_info) = channel(1);
     let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
@@ -905,13 +840,9 @@ async fn generate_commit() {
         /* rx_primaries */ rx_primary_messages,
         /* rx_header_waiter */ rx_headers_loopback,
         rx_header_waiter_instances,
-        /* rx_certificate_waiter */ rx_certificates_loopback,
         /* rx_proposer */ rx_headers,
-        tx_consensus,
         tx_committer,
         /* tx_proposer */ tx_parents,
-        /* special */ tx_sailfish,
-        rx_pushdown_cert,
         rx_request_header_sync,
         tx_info,
         leader_elector,

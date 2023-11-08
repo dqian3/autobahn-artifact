@@ -7,7 +7,7 @@ use crate::garbage_collector::GarbageCollector;
 use crate::header_waiter::HeaderWaiter;
 use crate::helper::Helper;
 use crate::leader::LeaderElector;
-use crate::messages::{Certificate, Header, Vote, Timeout, TC, Proposal};
+use crate::messages::{Certificate, Header, Vote, Timeout, TC, Proposal, ConsensusMessage};
 use crate::payload_receiver::PayloadReceiver;
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
@@ -43,6 +43,7 @@ pub enum PrimaryMessage {
     Certificate(Certificate),
     Timeout(Timeout),
     TC(TC),
+    ConsensusMessage(ConsensusMessage),
     CertificatesRequest(Vec<Digest>, /* requestor */ PublicKey),
     HeadersRequest(Vec<Digest>, /* requestor */ PublicKey),
     ProposalHeadersRequest(Proposal, Height, /* requestor */ PublicKey),
@@ -75,12 +76,12 @@ impl Primary {
         parameters: Parameters,
         signature_service: SignatureService,
         store: Store,
-        tx_consensus: Sender<Certificate>,
-        tx_committer: Sender<Certificate>,
+        _tx_consensus: Sender<Certificate>,
+        _tx_committer: Sender<Certificate>,
         rx_committer: Receiver<Certificate>,
         rx_consensus: Receiver<Certificate>,
-        tx_sailfish: Sender<Header>,
-        rx_pushdown_cert: Receiver<Certificate>,
+        _tx_sailfish: Sender<Header>,
+        _rx_pushdown_cert: Receiver<Certificate>,
         rx_request_header_sync: Receiver<Digest>,
         tx_output: Sender<Header>,
     ) {
@@ -91,14 +92,14 @@ impl Primary {
         let (tx_sync_headers, rx_sync_headers) = channel(CHANNEL_CAPACITY);
         let (tx_sync_certificates, rx_sync_certificates) = channel(CHANNEL_CAPACITY);
         let (tx_headers_loopback, rx_headers_loopback) = channel(CHANNEL_CAPACITY);
-        let (tx_certificates_loopback, rx_certificates_loopback) = channel(CHANNEL_CAPACITY);
+        let (tx_certificates_loopback, _rx_certificates_loopback) = channel(CHANNEL_CAPACITY);
         let (tx_primary_messages, rx_primary_messages) = channel(CHANNEL_CAPACITY);
         let (tx_cert_requests, rx_cert_requests) = channel(CHANNEL_CAPACITY);
         let (tx_header_requests, rx_header_requests) = channel(CHANNEL_CAPACITY);
         let (tx_instance, rx_instance) = channel(CHANNEL_CAPACITY);
         let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(CHANNEL_CAPACITY);
         let (tx_commit, rx_commit) = channel(CHANNEL_CAPACITY);
-        let (tx_mempool, rx_mempool) = channel(CHANNEL_CAPACITY);
+        let (_tx_mempool, rx_mempool) = channel(CHANNEL_CAPACITY);
 
 
         // Write the parameters to the logs.
@@ -171,13 +172,9 @@ impl Primary {
             /* rx_primaries */ rx_primary_messages,
             /* rx_header_waiter */ rx_headers_loopback,
             rx_header_waiter_instances,
-            /* rx_certificate_waiter */ rx_certificates_loopback,
             /* rx_proposer */ rx_headers,
-            tx_consensus,
             tx_commit,
             /* tx_proposer */ tx_parents,
-            /* tx_special */ tx_sailfish, 
-            rx_pushdown_cert,
             rx_request_header_sync,
             tx_instance,
             LeaderElector::new(committee.clone()),

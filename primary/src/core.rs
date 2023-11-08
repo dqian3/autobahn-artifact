@@ -4,7 +4,7 @@ use crate::aggregators::{QCMaker, TCMaker, VotesAggregator};
 use crate::error::{DagError, DagResult};
 use crate::leader::LeaderElector;
 use crate::messages::{
-    Certificate, ConsensusMessage, Header, Proposal, Ticket, Timeout, Vote, TC,
+    Certificate, ConsensusMessage, Header, Proposal, Timeout, Vote, TC,
 };
 use crate::primary::{Height, PrimaryMessage, Slot, View};
 use crate::synchronizer::Synchronizer;
@@ -56,20 +56,13 @@ pub struct Core {
     rx_header_waiter: Receiver<Header>,
     /// Receives loopback instances from the 'HeaderWaiter'
     rx_header_waiter_instances: Receiver<(ConsensusMessage, Header)>,
-    /// Receives loopback certificates from the `CertificateWaiter`.
-    rx_certificate_waiter: Receiver<Certificate>,
     /// Receives our newly created headers from the `Proposer`.
     rx_proposer: Receiver<Header>,
-    /// Output special certificates to the consensus layer.
-    tx_consensus: Sender<Certificate>,
     // Output all certificates to the consensus Dag view
     tx_committer: Sender<ConsensusMessage>,
 
-    /// Send valid a quorum of certificates' ids to the `Proposer` (along with their round).
+    /// Send a valid parent certificate to the `Proposer` 
     tx_proposer: Sender<Certificate>,
-    tx_special: Sender<Header>,
-
-    rx_pushdown_cert: Receiver<Certificate>,
     // Receive sync requests for headers required at the consensus layer
     rx_request_header_sync: Receiver<Digest>,
 
@@ -84,8 +77,6 @@ pub struct Core {
     // /// Aggregates votes into a certificate.
     votes_aggregator: VotesAggregator,
 
-    //votes_aggregators: HashMap<Round, VotesAggregator>, //TODO: To accomodate all to all, the map should be map<round, map<publickey, VotesAggreagtor>>
-    /// A network sender to send the batches to the other workers.
     network: ReliableSender,
     /// Keeps the cancel handlers of the messages we sent.
     cancel_handlers: HashMap<Height, Vec<CancelHandler>>,
@@ -122,13 +113,9 @@ impl Core {
         rx_primaries: Receiver<PrimaryMessage>,
         rx_header_waiter: Receiver<Header>,
         rx_header_waiter_instances: Receiver<(ConsensusMessage, Header)>,
-        rx_certificate_waiter: Receiver<Certificate>,
         rx_proposer: Receiver<Header>,
-        tx_consensus: Sender<Certificate>,
         tx_committer: Sender<ConsensusMessage>,
         tx_proposer: Sender<Certificate>,
-        tx_special: Sender<Header>,
-        rx_pushdown_cert: Receiver<Certificate>,
         rx_request_header_sync: Receiver<Digest>,
         tx_info: Sender<ConsensusMessage>,
         leader_elector: LeaderElector,
@@ -147,13 +134,9 @@ impl Core {
                 rx_primaries,
                 rx_header_waiter,
                 rx_header_waiter_instances,
-                rx_certificate_waiter,
                 rx_proposer,
-                tx_consensus,
                 tx_committer,
                 tx_proposer,
-                tx_special,
-                rx_pushdown_cert,
                 rx_request_header_sync,
                 tx_info,
                 leader_elector,
@@ -275,9 +258,11 @@ impl Core {
 
             // Since we received a new tip, check if any of our pending tickets are ready
             if !self.prepare_tickets.is_empty() {
+                // Get the first buffered prepare ticket
                 let prepare_msg = self.prepare_tickets.pop_front().unwrap();
                 let ticket_ready = self.is_prepare_ticket_ready(&prepare_msg).await.unwrap();
 
+                // If the ticket is not ready rebuffer it to the front
                 if !ticket_ready {
                     self.prepare_tickets.push_front(prepare_msg);
                 }
@@ -337,6 +322,12 @@ impl Core {
     #[async_recursion]
     async fn process_vote(&mut self, vote: Vote) -> DagResult<()> {
         debug!("Processing Vote {:?}", vote);
+
+        // Only process votes for the current header
+        if vote.id != self.current_header.id {
+            println!("Wrong header");
+            return Ok(())
+        }
 
         // Iterate through all votes for each consensus instance
         for (digest, sig) in vote.consensus_sigs.iter() {
@@ -487,6 +478,24 @@ impl Core {
             ConsensusMessage::Prepare { slot, view: _, tc: _, proposals } => {
                 let new_proposals = self.current_proposal_tips.clone();
 
+                // If not the next leader forward the prepare message to the appropriate 
+                // leader
+                if self.name != self.leader_elector.get_leader(slot + 1, 1) {
+                    let address = self
+                        .committee
+                        .primary(&self.leader_elector.get_leader(slot + 1, 1))
+                        .expect("Author of valid header is not in the committee")
+                        .primary_to_primary;
+                    let bytes = bincode::serialize(&PrimaryMessage::ConsensusMessage(prepare_message.clone()))
+                        .expect("Failed to serialize prepare message");
+                    let handler = self.network.send(address, Bytes::from(bytes)).await;
+                    self.cancel_handlers
+                        .entry(self.current_header.height())
+                        .or_insert_with(Vec::new)
+                        .push(handler);
+                    return Ok(true)
+                }
+
                 // If we are the leader of the next slot, view 1, and have already proposed in the next slot
                 // then don't process the prepare ticket, just return true
                 if !self.already_proposed_slots.contains(&(slot + 1)) && self.name == self.leader_elector.get_leader(slot + 1, 1) {
@@ -495,7 +504,7 @@ impl Core {
 
                 // If there is enough coverage and we haven't already proposed in the next slot then create a new
                 // prepare message if we are the leader of view 1 in the next slot
-                if self.enough_coverage(&proposals, &new_proposals) {
+                if self.enough_coverage(&proposals, &new_proposals) && self.name == self.leader_elector.get_leader(slot + 1, 1) {
                     let new_prepare_instance = ConsensusMessage::Prepare {
                         slot: slot + 1,
                         view: 1,
@@ -602,7 +611,7 @@ impl Core {
                         tc: _,
                         proposals: _,
                     } => {
-                        self.process_prepare_message(consensus_message, header, consensus_sigs.as_mut()).await;
+                        self.process_prepare_message(consensus_message, consensus_sigs.as_mut()).await;
                     },
                     ConsensusMessage::Confirm {
                         slot: _,
@@ -636,7 +645,6 @@ impl Core {
     async fn process_prepare_message(
         &mut self,
         prepare_message: &ConsensusMessage,
-        header: &Header,
         consensus_sigs: &mut Vec<(Digest, Signature)>,
     ) {
         match prepare_message {
@@ -644,7 +652,7 @@ impl Core {
                 slot,
                 view,
                 tc: _,
-                proposals,
+                proposals: _,
             } => {
                 // Check if this prepare message can be used for a ticket to propose in the next
                 // slot
@@ -655,8 +663,6 @@ impl Core {
 
                 // If we haven't already started the timer for the next slot, start it
                 if !self.timers.contains(&(slot + 1, 1)) {
-                    // TODO: also forward the ticket to the leader (to tolerate byzantine
-                    // proposers)
                     let timer = Timer::new(slot + 1, 1, self.timeout_delay);
                     self.timer_futures.push(Box::pin(timer));
                     self.timers.insert((slot + 1, 1));
@@ -764,6 +770,24 @@ impl Core {
                     .expect("Failed to send to committer");
             },
         };
+        Ok(())
+    }
+
+    async fn process_forwarded_message(&mut self, consensus_message: ConsensusMessage) -> DagResult<()> {
+        match &consensus_message {
+            ConsensusMessage::Prepare { slot: _, view: _, tc: _, proposals: _ } => {
+                // We have a ticket for instance (slot + 1, 1), so check if we have enough coverage
+                // to send a prepare message, otherwise buffer it
+                if !self.is_prepare_ticket_ready(&consensus_message).await.unwrap() {
+                    self.prepare_tickets.push_back(consensus_message);
+                }
+            },
+            ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals: _ } => {
+                // Process any forwarded commit messages
+                self.process_commit_message(consensus_message, &self.current_header.clone());
+            },
+            _ => {}
+        }
         Ok(())
     }
 
@@ -1046,6 +1070,9 @@ impl Core {
                         },
                         PrimaryMessage::Timeout(timeout) => self.handle_timeout(&timeout).await,
                         PrimaryMessage::TC(tc) => self.handle_tc(&tc).await,
+
+                        // We receive a forwarded prepare or commit message from another replica
+                        PrimaryMessage::ConsensusMessage(consensus_message) => self.process_forwarded_message(consensus_message).await,
                         _ => panic!("Unexpected core message")
                     }
                 },
