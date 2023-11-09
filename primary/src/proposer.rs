@@ -101,7 +101,6 @@ impl Proposer {
                 self.last_parent.clone().unwrap(),
                 &mut self.signature_service,
                 self.consensus_instances.clone(),
-                None,
             ).await;
 
         debug!("Created {:?}", header);

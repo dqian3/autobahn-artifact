@@ -237,9 +237,15 @@ impl Core {
 
         // Check whether we can seamlessly vote for all consensus messages, if not reschedule
         if !self.is_consensus_ready(&header).await {
+            // TODO: Keep track of stats of sync
+            // NOTE: This blocks if prepare tips are not available, the leader of the prepare takes
+            // on the responsibility of possible blocking i.e. its lane won't continue
+            // TODO: Use reputation
             println!("Need to sync on missing tips, reschedule");
             return Ok(());
         }
+
+        println!("storing the header");
 
         // Store the header since we have the parents (recursively).
         let bytes = bincode::serialize(&header).expect("Failed to serialize header");
@@ -255,9 +261,12 @@ impl Core {
                     height: header.height(),
                 },
             );
+            println!("updating tip");
 
+            // TODO: Move to a function try_prepare_next_slot()
             // Since we received a new tip, check if any of our pending tickets are ready
             if !self.prepare_tickets.is_empty() {
+                println!("checking prepare ticket");
                 // Get the first buffered prepare ticket
                 let prepare_msg = self.prepare_tickets.pop_front().unwrap();
                 let ticket_ready = self.is_prepare_ticket_ready(&prepare_msg).await.unwrap();
@@ -269,8 +278,10 @@ impl Core {
             }
         }
 
+        println!("after height check");
+
         // Process the parent certificate
-        self.process_certificate(header.clone().parent_cert).await?;
+        //self.process_certificate(header.clone().parent_cert).await?;
 
         // Check if we can vote for this header.
         if self
@@ -279,6 +290,7 @@ impl Core {
             .or_insert_with(HashSet::new)
             .insert(header.author)
         {
+            println!("voting for header");
             // Process the consensus instances contained in the header (if any)
             let consensus_sigs = self
                 .process_consensus_messages(&header)
@@ -322,6 +334,8 @@ impl Core {
     #[async_recursion]
     async fn process_vote(&mut self, vote: Vote) -> DagResult<()> {
         debug!("Processing Vote {:?}", vote);
+
+        // NOTE: If sending externally then need map of open consensus instances
 
         // Only process votes for the current header
         if vote.id != self.current_header.id {
@@ -459,6 +473,7 @@ impl Core {
 
         // If we receive a new certificate from ourself, then send to the proposer, so it can make
         // a new header
+        // TODO: For certified tips need to keep this check and add to list of certified tips
         let latest_tip = self.current_proposal_tips.get(&certificate.origin()).unwrap();
         if certificate.origin() == self.name && certificate.height() == latest_tip.height - 1 {
             println!("Sending to proposer");
@@ -480,6 +495,7 @@ impl Core {
 
                 // If not the next leader forward the prepare message to the appropriate 
                 // leader
+                // TODO: Turn off to maximize perf in gracious intervals
                 if self.name != self.leader_elector.get_leader(slot + 1, 1) {
                     let address = self
                         .committee
@@ -493,18 +509,20 @@ impl Core {
                         .entry(self.current_header.height())
                         .or_insert_with(Vec::new)
                         .push(handler);
+                    println!("forwarding to the leader");
                     return Ok(true)
                 }
 
                 // If we are the leader of the next slot, view 1, and have already proposed in the next slot
                 // then don't process the prepare ticket, just return true
-                if !self.already_proposed_slots.contains(&(slot + 1)) && self.name == self.leader_elector.get_leader(slot + 1, 1) {
+                if self.already_proposed_slots.contains(&(slot + 1)) && self.name == self.leader_elector.get_leader(slot + 1, 1) {
                     return Ok(true)
                 }
 
                 // If there is enough coverage and we haven't already proposed in the next slot then create a new
                 // prepare message if we are the leader of view 1 in the next slot
                 if self.enough_coverage(&proposals, &new_proposals) && self.name == self.leader_elector.get_leader(slot + 1, 1) {
+                    println!("have enough coverage");
                     let new_prepare_instance = ConsensusMessage::Prepare {
                         slot: slot + 1,
                         view: 1,
@@ -584,6 +602,12 @@ impl Core {
                 ConsensusMessage::Prepare { slot: _, view: _, tc: _, proposals: _ } => {
                     // Consensus is ready if all proposals for all prepare messages in a car aren't
                     // missing
+                    // NOTE: If view > 0 then don't have to call this, only the leader of first
+                    // view takes responsibility, only check for view > 0 so you don't need to
+                    // check whether winning proposals is correct
+                    // TODO: For testing with faults make the certificate of tip syncing happen
+                    // asynchronously, change synchronizer so that it write to the store without
+                    // the history
                     is_ready = is_ready && !self.synchronizer.get_proposals(consensus_message, header).await.unwrap().is_empty();
                 },
                 _ => {},
@@ -611,6 +635,7 @@ impl Core {
                         tc: _,
                         proposals: _,
                     } => {
+                        println!("processing prepare message");
                         self.process_prepare_message(consensus_message, consensus_sigs.as_mut()).await;
                     },
                     ConsensusMessage::Confirm {
@@ -656,12 +681,16 @@ impl Core {
             } => {
                 // Check if this prepare message can be used for a ticket to propose in the next
                 // slot
+                // TODO: Remove from process_header
                 if !self.is_prepare_ticket_ready(prepare_message).await.unwrap() {
+                    println!("prepare ticket not ready");
                     self.prepare_tickets.push_back(prepare_message.clone());
                 }
 
 
                 // If we haven't already started the timer for the next slot, start it
+                // TODO:Can implement different forwarding methods (can be random, can forward to
+                // f+1, current one is the most pessimisstic)
                 if !self.timers.contains(&(slot + 1, 1)) {
                     let timer = Timer::new(slot + 1, 1, self.timeout_delay);
                     self.timer_futures.push(Box::pin(timer));
@@ -735,6 +764,7 @@ impl Core {
                 qc: _,
                 proposals: _,
             } => {
+                // TODO: Stop all timers for this view
                 // Only send to committer if proposals and all ancestors are stored locally,
                 // otherwise sync will be triggered, and this commit message will be reprocessed
                 if !self.synchronizer.get_proposals(&commit_message, &header).await.unwrap().is_empty() {
@@ -784,6 +814,8 @@ impl Core {
             },
             ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals: _ } => {
                 // Process any forwarded commit messages
+                // NOTE: Used "dummy header" for second argument for now, header doesn't matter since proposal syncing
+                // does not block processing the header, only prepare messages do
                 self.process_commit_message(consensus_message, &self.current_header.clone());
             },
             _ => {}
@@ -836,6 +868,9 @@ impl Core {
 
     async fn handle_timeout(&mut self, timeout: &Timeout) -> DagResult<()> {
         debug!("Processing {:?}", timeout);
+
+        // TODO: If already committed then don't need to verify, just forward commit
+
         // Don't process timeout messages for old views
         match self.views.get(&timeout.slot) {
             Some(view) => {
@@ -874,6 +909,7 @@ impl Core {
             self.timers.insert((tc.slot, tc.view + 1));
 
             // Broadcast the TC.
+            // TODO: Low priority: If you see f+1 timeouts then join the mutiny
             debug!("Broadcasting {:?}", tc);
             let addresses = self
                 .committee
@@ -904,6 +940,7 @@ impl Core {
             }
 
             // Create a prepare message for the next view, containing the ticket and proposals
+            // TODO: Low priority can make winning proposals empty
             let prepare_message: ConsensusMessage = ConsensusMessage::Prepare {
                 slot: tc.slot,
                 view: tc.view + 1,

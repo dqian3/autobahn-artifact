@@ -19,83 +19,6 @@ pub mod messages_tests;
 
 ///////////
 #[derive(Clone, Serialize, Deserialize, Default)]
-pub struct Ticket {
-    // The special header from prior slot
-    pub header: Option<Header>,
-    // Or a TC from the prior slot/view
-    pub tc: Option<TC>,
-    // The slot the ticket is for
-    pub slot: Slot,
-    // Proposals from the previous slot
-    pub proposals: HashMap<PublicKey, Proposal>,
-}
-
-impl Ticket {
-    pub async fn new(
-        header: Option<Header>,
-        tc: Option<TC>,
-        slot: Slot,
-        proposals: HashMap<PublicKey, Proposal>,
-    ) -> Self {
-        let ticket = Self {
-            header,
-            tc,
-            slot,
-            proposals,
-        };
-        ticket
-    }
-    pub fn genesis(_committee: &Committee) -> Self {
-        Ticket {
-            header: None,
-            tc: None,
-            slot: 0,
-            proposals: HashMap::new(),
-        }
-    }
-
-    pub fn get_proposals(&self) -> HashMap<PublicKey, Proposal> {
-        HashMap::new()
-    }
-}
-
-impl Hash for Ticket {
-    fn digest(&self) -> Digest {
-        let mut hasher = Sha512::new();
-        match &self.header {
-            Some(_) => {}
-            None => {}
-        }
-
-        match &self.tc {
-            Some(_) => {}
-            None => {}
-        }
-        hasher.update(&self.slot.to_le_bytes());
-        //hasher.update(&self.proposals);
-        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
-    }
-}
-
-impl PartialEq for Ticket {
-    fn eq(&self, other: &Self) -> bool {
-        self.slot == other.slot
-    }
-}
-
-impl fmt::Debug for Ticket {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "T{})", self.slot,)
-    }
-}
-
-impl fmt::Display for Ticket {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "T{}", self.slot)
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Proposal {
     pub header_digest: Digest,
     pub height: Height,
@@ -118,13 +41,13 @@ impl PartialEq for Proposal {
 
 impl fmt::Debug for Proposal {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "T{})", self.height,)
+        write!(f, "P({}, {})", self.height, self.header_digest)
     }
 }
 
 impl fmt::Display for Proposal {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "T{}", self.height)
+        write!(f, "P({}, {})", self.height, self.header_digest)
     }
 }
 
@@ -261,15 +184,15 @@ impl PartialEq for ConsensusMessage {
                 slot,
                 view,
                 qc,
-                proposals: _,
+                proposals,
             } => {
                 return match other {
                     ConsensusMessage::Confirm {
                         slot: other_slot,
                         view: other_view,
                         qc: other_qc,
-                        proposals: _,
-                    } => slot == other_slot && view == other_view && qc == other_qc,
+                        proposals: other_proposals,
+                    } => slot == other_slot && view == other_view && qc == other_qc && proposals == other_proposals,
                     _ => false,
                 };
             }
@@ -277,15 +200,15 @@ impl PartialEq for ConsensusMessage {
                 slot,
                 view,
                 qc,
-                proposals: _,
+                proposals,
             } => {
                 return match other {
                     ConsensusMessage::Commit {
                         slot: other_slot,
                         view: other_view,
                         qc: other_qc,
-                        proposals: _,
-                    } => slot == other_slot && view == other_view && qc == other_qc,
+                        proposals: other_proposals,
+                    } => slot == other_slot && view == other_view && qc == other_qc && proposals == other_proposals,
                     _ => false,
                 };
             }
@@ -372,8 +295,6 @@ pub struct Header {
 
     // Consensus metadata
     pub consensus_messages: HashMap<Digest, ConsensusMessage>,
-    // special parent header
-    pub special_parent: Option<Certificate>, //Digest of the header of the special parent.
 }
 
 //NOTE: A header is special if "is_special = true". It contains a view, prev_view_round, and its parents may be just a single edge -- a Digest of its parent header (notably not of a Cert)
@@ -386,7 +307,6 @@ impl Header {
         parent_cert: Certificate,
         signature_service: &mut SignatureService,
         consensus_instances: HashMap<Digest, ConsensusMessage>,
-        special_parent: Option<Certificate>,
     ) -> Self {
         let header = Self {
             author,
@@ -396,7 +316,6 @@ impl Header {
             id: Digest::default(),
             signature: Signature::default(),
             consensus_messages: consensus_instances,
-            special_parent,
         };
         let id = header.digest();
         let signature = signature_service.request_signature(id.clone()).await;
@@ -1177,6 +1096,7 @@ impl Timeout {
 
         // Check the signature.
         self.signature.verify(&self.digest(), &self.author)?;
+        // TODO: If it would be winning QC then you need to verify
 
         //NOTE: When verifying TC, we have purged all vote contents besides the winner --> so this step is skipped. Verification is only necessary for the winning proposal
 

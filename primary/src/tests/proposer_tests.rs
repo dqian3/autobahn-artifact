@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 
 // Copyright(C) Facebook, Inc. and its affiliates.
 use super::*;
-use crate::{common::{committee, keys}, messages::{Vote, Ticket}};
+use crate::{common::{committee, keys}, messages::Vote};
 use tokio::sync::mpsc::channel;
 
 #[tokio::test]
@@ -168,7 +168,7 @@ async fn propose_special_ticket_first() {
     //Send ticket to form a special header
     let gen_header = Header::genesis(&committee());
 
-    let ticket: Ticket = Ticket::new(Some(gen_header), None, 1, HashMap::new()).await;
+    //let ticket: Ticket = Ticket::new(Some(gen_header), None, 1, HashMap::new()).await;
     /*let consensus_info: InstanceInfo = InstanceInfo { slot: 2, view: 1 };
     let prepare_info: PrepareInfo = PrepareInfo { consensus_info, ticket, proposals: HashMap::new() };*/
 
@@ -194,7 +194,6 @@ async fn propose_special_ticket_first() {
     assert_eq!(header.prepare_info_list.get(0).unwrap().consensus_info.slot, 2);
     assert_eq!(header.prepare_info_list.get(0).unwrap().consensus_info.view, 1);*/
     
-    assert_eq!(header.special_parent.is_none(), true);    
     assert_eq!(header.height, 1);
     assert_eq!(header.payload.get(&digest), Some(&worker_id));
     assert!(header.verify(&committee()).is_ok());
@@ -226,7 +225,7 @@ async fn propose_confirm_message() {
     //Send ticket to form a special header
     let gen_header = Header::genesis(&committee());
 
-    let ticket: Ticket = Ticket::new(Some(gen_header), None, 1, HashMap::new()).await;
+    //let ticket: Ticket = Ticket::new(Some(gen_header), None, 1, HashMap::new()).await;
     /*let consensus_info: InstanceInfo = InstanceInfo { slot: 2, view: 1 };
     let prepare_info: PrepareInfo = PrepareInfo { consensus_info, ticket, proposals: HashMap::new() };*/
 
@@ -252,7 +251,6 @@ async fn propose_confirm_message() {
     assert_eq!(header.prepare_info_list.get(0).unwrap().consensus_info.slot, 2);
     assert_eq!(header.prepare_info_list.get(0).unwrap().consensus_info.view, 1);*/
     
-    assert_eq!(header.special_parent.is_none(), true);    
     assert_eq!(header.height, 1);
     assert_eq!(header.payload.get(&digest), Some(&worker_id));
     assert!(header.verify(&committee()).is_ok());

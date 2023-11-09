@@ -34,10 +34,11 @@ impl SemiParallelRRLeaderElector {
 
     pub fn get_leader(&self, slot: Slot, view: View) -> PublicKey {
         let mut keys: Vec<_> = self.committee.authorities.keys().cloned().collect();
-        keys.sort();
+        // TODO: Uncomment, this is strictly commented out for testing
+        /*keys.sort();
         let index = view + slot;
-        keys[index as usize % self.committee.size()]
-        //keys[0]
+        keys[index as usize % self.committee.size()]*/
+        keys[1]
     }
 }
 

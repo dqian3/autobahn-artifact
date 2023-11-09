@@ -1,5 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::messages::{Certificate, Header, Vote, Ticket, ConsensusMessage};
+use crate::messages::{Certificate, Header, Vote, ConsensusMessage};
 use bytes::Bytes;
 use config::{Authority, Committee, ConsensusAddresses, PrimaryAddresses, WorkerAddresses};
 use crypto::{Hash as _, Digest};
