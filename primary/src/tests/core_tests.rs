@@ -341,10 +341,8 @@ async fn process_votes() {
 
     let(tx_committer, _rx_committer) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
-    let (tx_info, rx_info) = channel(1);
+    let (tx_info, mut rx_info) = channel(1);
     let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
-    let (tx_workers, rx_workers) = channel(1);
-    let (tx_core, rx_core) = channel(1);
 
 
     // Create a new test store.
@@ -385,18 +383,6 @@ async fn process_votes() {
         timeout_delay,
     );
 
-    Proposer::spawn(
-        name, 
-        committee, 
-        signature_service, 
-        100, 
-        timeout_delay, 
-        rx_parents, 
-        rx_workers, 
-        rx_info, 
-        tx_core
-    );
-
     let header = header();
     // Make the certificate we expect to receive.
     let expected = certificate(&header);
@@ -406,6 +392,7 @@ async fn process_votes() {
         .send(header.clone())
         .await
         .unwrap();
+    sleep(Duration::from_millis(500)).await;
     /*tx_primary_messages
         .send(PrimaryMessage::Header(header.clone()))
         .await
@@ -420,15 +407,19 @@ async fn process_votes() {
             .unwrap();
     }
 
+    let received_cert = rx_parents.recv().await.unwrap();
+    assert_eq!(received_cert.height, expected.height);
+    assert_eq!(received_cert.author, expected.author);
+    assert_eq!(received_cert.header_digest, expected.header_digest);
     println!("Expected cert is {:?}, {:?}", expected.header_digest, expected.height);
 
     // Ensure the listener received the certificate and stored it.
-    let stored = store
+    /*let stored = store
         .read(expected.digest().to_vec())
         .await
         .unwrap()
         .map(|x| bincode::deserialize(&x).unwrap());
-    assert_eq!(stored, Some(expected));
+    assert_eq!(stored, Some(expected));*/
 }
 
 #[tokio::test]
@@ -623,7 +614,6 @@ async fn process_prepare() {
 
 
     listener(address).await.unwrap();
-    listener(address).await.unwrap();
 
     // Make the vote we expect to receive.
     let handle = listener(address);
@@ -795,8 +785,8 @@ async fn generate_commit() {
     let (tx_sync_certificates, _rx_sync_certificates) = channel(1);
     let (tx_primary_messages, rx_primary_messages) = channel(1);
     let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
-    let (tx_headers, rx_headers) = channel(1);
-    let (tx_parents, rx_parents) = channel(1);
+    let (tx_headers, mut rx_headers) = channel(1);
+    let (tx_parents, mut rx_parents) = channel(1);
 
     let(tx_committer, mut rx_committer) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
@@ -911,6 +901,8 @@ async fn generate_commit() {
             let confirm_parent_cert = certificate(&header);
             let confirm_header = special_header(confirm_parent_cert, consensus_messages.clone());
 
+            println!("confirm header height {:?} author {:?}", confirm_header.height, confirm_header.author);
+
             tx_headers
                 .send(confirm_header.clone())
                 .await
@@ -931,6 +923,7 @@ async fn generate_commit() {
             println!("after sending votes");
 
             let commit_message = rx_info.recv().await.unwrap();
+            rx_parents.recv().await.unwrap();
 
             match commit_message.clone() {
                 ConsensusMessage::Commit { slot: slot1, view: view1, qc: qc1, proposals: proposals1 } => {
@@ -940,14 +933,17 @@ async fn generate_commit() {
                     let commit_parent_cert = certificate(&confirm_header);
                     let commit_header = special_header(commit_parent_cert, consensus_messages.clone());
 
-                    println!("sending commit header");
+                    println!("sending commit header: {:?}, {:?}", commit_header.height, commit_header.author);
+                    
                     // Ensure that the confirm header is processed and received
-                    sleep(Duration::from_millis(500)).await;
+                    //sleep(Duration::from_millis(500)).await;
                     tx_headers
                         .send(commit_header)
                         .await
                         .unwrap();
 
+
+                    println!("awaiting committer");
                     let receive_commit_message = rx_committer.recv().await.unwrap();
                     match receive_commit_message {
                         ConsensusMessage::Commit { slot: slot2, view: view2, qc: qc2, proposals: proposals2 } => {

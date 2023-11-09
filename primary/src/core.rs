@@ -73,6 +73,8 @@ pub struct Core {
     last_voted: HashMap<Height, HashSet<PublicKey>>,
     /// The last header we proposed (for which we are waiting votes).
     current_header: Header,
+    // Whether we have already sent certificate to proposer
+    sent_cert_to_proposer: bool,
 
     // /// Aggregates votes into a certificate.
     votes_aggregator: VotesAggregator,
@@ -142,6 +144,7 @@ impl Core {
                 leader_elector,
                 gc_round: 0,
                 current_qcs_formed: 0,
+                sent_cert_to_proposer: false,
                 last_voted: HashMap::with_capacity(2 * gc_depth as usize),
                 current_header: Header::default(),
                 votes_aggregator: VotesAggregator::new(),
@@ -166,8 +169,11 @@ impl Core {
     }
 
     async fn process_own_header(&mut self, header: Header) -> DagResult<()> {
+        println!("Received own header");
         // Update the current header we are collecting votes for
         self.current_header = header.clone();
+        // Indicate that we haven't sent a cert yet for this header
+        self.sent_cert_to_proposer = false;
 
         // Reset the votes aggregator.
         self.votes_aggregator = VotesAggregator::new();
@@ -281,7 +287,7 @@ impl Core {
         println!("after height check");
 
         // Process the parent certificate
-        //self.process_certificate(header.clone().parent_cert).await?;
+        self.process_certificate(header.clone().parent_cert).await?;
 
         // Check if we can vote for this header.
         if self
@@ -446,12 +452,17 @@ impl Core {
         // If there are some consensus instances in the header then wait for 2f+1 votes to form QCs
         let consensus_ready: bool = !self.current_header.consensus_messages.is_empty() && self.current_qcs_formed == self.current_header.consensus_messages.len();
 
-        if dissemination_ready || consensus_ready {
+        if !self.sent_cert_to_proposer && (dissemination_ready || consensus_ready) {
             //debug!("Assembled {:?}", dissemination_cert.unwrap());
             println!("diss ready {:?}, consensus ready {:?}", dissemination_ready, consensus_ready);
-            self.process_certificate(dissemination_cert.unwrap())
+
+            self.tx_proposer
+                .send(dissemination_cert.unwrap())
                 .await
-                .expect("Failed to process valid certificate");
+                .expect("Failed to send certificate");
+
+            self.sent_cert_to_proposer = true;
+            println!("after sending to proposer");
             self.current_qcs_formed = 0;
         }
 
@@ -474,7 +485,7 @@ impl Core {
         // If we receive a new certificate from ourself, then send to the proposer, so it can make
         // a new header
         // TODO: For certified tips need to keep this check and add to list of certified tips
-        let latest_tip = self.current_proposal_tips.get(&certificate.origin()).unwrap();
+        /*let latest_tip = self.current_proposal_tips.get(&certificate.origin()).unwrap();
         if certificate.origin() == self.name && certificate.height() == latest_tip.height - 1 {
             println!("Sending to proposer");
             // Send it to the `Proposer`.
@@ -482,7 +493,7 @@ impl Core {
                 .send(certificate.clone())
                 .await
                 .expect("Failed to send certificate");
-        }
+        }*/
 
         println!("Certificate is {:?}, {:?}", certificate.header_digest, certificate.height);
         Ok(())

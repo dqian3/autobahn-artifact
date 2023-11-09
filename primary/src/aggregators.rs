@@ -53,7 +53,7 @@ impl VotesAggregator {
             return Ok(self.diss_cert.clone());
         }
 
-        Ok(None)
+        Ok(self.diss_cert.clone())
     }
 }
 
