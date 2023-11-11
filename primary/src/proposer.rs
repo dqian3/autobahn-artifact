@@ -81,7 +81,7 @@ impl Proposer {
                 rx_workers,
                 rx_instance,
                 tx_core,
-                height: 1,
+                height: 0,
                 last_parent: Some(genesis),
                 consensus_instances: HashMap::new(),
                 digests: Vec::with_capacity(2 * header_size),
@@ -162,6 +162,7 @@ impl Proposer {
             tokio::select! {
                 // Received info from consensus
                 Some(info) = self.rx_instance.recv() => {
+                    debug!("received consensus info");
                     self.consensus_instances.insert(info.digest(), info);
                 }
 

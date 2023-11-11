@@ -41,7 +41,7 @@ impl State {
 
         Self {
             last_committed_round: 0,
-            last_executed_heights: genesis.iter().map(|(x, (_, y))| (*x, y.height())).collect(),
+            last_executed_heights: genesis.iter().map(|(x, (_, y))| (*x, 0)).collect(),
             dag: [(0, genesis)].iter().cloned().collect(),
             log: HashMap::new(),
             last_executed_slot: 0,
@@ -123,18 +123,25 @@ impl Committer {
                 state.log.insert(slot, commit_message);
 
                 while state.log.contains_key(&(state.last_executed_slot + 1)) {
-                    let current_commit_message = state.log.get(&slot).unwrap();
+                    let current_commit_message = state.log.get(&(state.last_executed_slot + 1)).unwrap();
+                    debug!("Currently executing slot {:?}", state.last_executed_slot + 1);
                     match current_commit_message {
                         ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals } => {
                             for (pk, proposal) in proposals {
                                 let stop_height = *state.last_executed_heights.get(pk).unwrap();
+                                // Don't execute proposals which are too old
+                                if proposal.height <= stop_height {
+                                    debug!("skipping this proposal because it's too old");
+                                    continue;
+                                }
+
                                 let headers = self.synchronizer.get_all_headers_for_proposal(proposal.clone(), stop_height)
                                     .await
                                     .expect("should have ancestors by now");
 
                                 // Update last executed height for the lane
                                 if proposal.height > stop_height {
-                                    state.last_executed_heights.insert(*pk, stop_height);
+                                    state.last_executed_heights.insert(*pk, proposal.height);
                                 }
 
                                 // Commit all of the headers

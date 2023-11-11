@@ -6,7 +6,6 @@ use config::Import as _;
 use config::{Committee, KeyPair, Parameters, WorkerId};
 use crypto::SignatureService;
 use env_logger::Env;
-use sailfish::Consensus;
 use primary::Header;
 use primary::Primary;
 use store::Store;
@@ -101,10 +100,10 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
     let (tx_sailfish, rx_sailfish) = channel(CHANNEL_CAPACITY);
 
     // Channel for sending loopback headerds that completed validation between DAG and Consensus
-    let (tx_validation, rx_validation) = channel(CHANNEL_CAPACITY);
+    //let (tx_validation, rx_validation) = channel(CHANNEL_CAPACITY);
 
     // Channel for indicating commit and that new header should be proposed
-    let (tx_ticket, rx_ticket) = channel(CHANNEL_CAPACITY);
+    //let (tx_ticket, rx_ticket) = channel(CHANNEL_CAPACITY);
 
     // Check whether to run a primary, a worker, or an entire authority.
     //Note: Each node has at most one worker. Workers that don't include a primary (e.g. are not an entire authority) use PrimaryConnector to connect to a designated primary.
@@ -125,14 +124,15 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 store.clone(),
                 /* tx_consensus */ tx_new_certificates,
                 tx_committer,
+                rx_committer,
                 /* rx_consensus */ rx_feedback,
                 tx_sailfish,
-                rx_ticket,
-                rx_validation,
+                //rx_ticket,
                 rx_pushdown_cert,
                 rx_request_header_sync,
+                tx_output,
             );
-            Consensus::spawn(
+            /*Consensus::spawn(
                 name,
                 committee,
                 parameters,
@@ -147,7 +147,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 rx_sailfish,
                 tx_pushdown_cert,
                 tx_request_header_sync,
-            );
+            );*/
         }
 
         // Spawn a single worker.

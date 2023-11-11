@@ -475,9 +475,10 @@ impl fmt::Debug for Header {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(
             f,
-            "{}: B{}({},, special:, view:, {:?})",
+            "Header id: {}: height: {}, # of consensus messages: {}, author: {:?}, payload: {:?})",
             self.id,
             self.height,
+            self.consensus_messages.len(),
             self.author,
             self.payload.keys().map(|x| x.size()).sum::<usize>(),
         )
@@ -604,6 +605,7 @@ impl Certificate {
                     ..Header::genesis(committee) //..Header::default()
                 }
                 .digest(),
+                author: *name,
                 ..Self::default()
             })
             .collect()

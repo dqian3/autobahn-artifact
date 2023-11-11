@@ -2,7 +2,7 @@
 use super::*;
 use crate::{common::{
     certificate, committee, committee_with_base_port, header, headers, keys, listener, votes, special_header, special_votes, header_from_cert,
-}, proposer::Proposer};
+}, proposer::Proposer, header_waiter::HeaderWaiter};
 use crypto::{Hash, Signature};
 use std::{fs, time::Duration};
 use tokio::{sync::mpsc::channel, time::sleep};
@@ -1100,6 +1100,221 @@ async fn generate_pipelined_prepare() {
         _ => {}
     };
 
+
+    // Ensure the header is correctly stored.
+    let stored = store
+        .read(header.id.to_vec())
+        .await
+        .unwrap()
+        .map(|x| bincode::deserialize(&x).unwrap());
+    assert_eq!(stored, Some(header));
+}
+
+#[tokio::test]
+#[serial]
+async fn local_timeout_view() {
+    let mut keys = keys();
+    let _ = keys.pop().unwrap(); // Skip the header' author.
+    let (name, secret) = keys.pop().unwrap();
+    let mut signature_service = SignatureService::new(secret);
+
+    let committee = committee_with_base_port(13_000);
+
+    let (tx_sync_headers, _rx_sync_headers) = channel(1);
+    let (tx_sync_certificates, _rx_sync_certificates) = channel(1);
+    let (tx_primary_messages, rx_primary_messages) = channel(1);
+    let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
+    let (_tx_headers, rx_headers) = channel(1);
+    let (tx_parents, _rx_parents) = channel(1);
+
+    let(tx_committer, _rx_committer) = channel(1);
+    let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
+    let (tx_info, mut rx_info) = channel(1);
+    let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
+
+    // Create a new test store.
+    let path = ".db_test_process_header";
+    let _ = fs::remove_dir_all(path);
+    let mut store = Store::new(path).unwrap();
+
+    // Spawn a listener to receive the vote.
+    let address = committee
+        .primary(&header().author)
+        .unwrap()
+        .primary_to_primary;
+    let handle = listener(address);
+
+    // Make a synchronizer for the core.
+    let synchronizer = Synchronizer::new(
+        name,
+        &committee,
+        store.clone(),
+        /* tx_header_waiter */ tx_sync_headers,
+        /* tx_certificate_waiter */ tx_sync_certificates,
+    );
+
+    let leader_elector = LeaderElector::new(committee.clone());
+    let timeout_delay = 1000;
+
+    // Spawn the core.
+    Core::spawn(
+        name,
+        committee.clone(),
+        store.clone(),
+        synchronizer,
+        signature_service,
+        /* consensus_round */ Arc::new(AtomicU64::new(0)),
+        /* gc_depth */ 50,
+        /* rx_primaries */ rx_primary_messages,
+        /* rx_header_waiter */ rx_headers_loopback,
+        rx_header_waiter_instances,
+        /* rx_proposer */ rx_headers,
+        tx_committer,
+        /* tx_proposer */ tx_parents,
+        rx_request_header_sync,
+        tx_info,
+        leader_elector,
+        timeout_delay,
+    );
+
+    /*let message = handle.await.unwrap();
+
+    match bincode::deserialize(&message).unwrap() {
+         PrimaryMessage::Timeout(timeout) => {
+             assert_eq!(timeout.slot, 1);
+             assert_eq!(timeout.view, 1);
+         }
+         x => panic!("Unexpected message: {:?}", x),
+     };*/
+}
+
+#[tokio::test]
+#[serial]
+async fn sync_missing_proposals() {
+    let mut keys = keys();
+    let _ = keys.pop().unwrap(); // Skip the header' author.
+    let (name, secret) = keys.pop().unwrap();
+    let mut signature_service = SignatureService::new(secret);
+
+    let committee = committee_with_base_port(13_000);
+
+    let (tx_sync_headers, rx_sync_headers) = channel(1);
+    let (tx_sync_certificates, _rx_sync_certificates) = channel(1);
+    let (tx_primary_messages, rx_primary_messages) = channel(1);
+    let (tx_headers_loopback, rx_headers_loopback) = channel(1);
+    let (_tx_headers, rx_headers) = channel(1);
+    let (tx_parents, _rx_parents) = channel(1);
+
+    let(tx_committer, _rx_committer) = channel(1);
+    let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
+    let (tx_info, mut rx_info) = channel(1);
+    let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(1);
+
+    // Create a new test store.
+    let path = ".db_test_process_header";
+    let _ = fs::remove_dir_all(path);
+    let mut store = Store::new(path).unwrap();
+
+    // Spawn a listener to receive the vote.
+    let address = committee
+        .primary(&header().author)
+        .unwrap()
+        .primary_to_primary;
+    //let handle = listener(address);
+
+    // Make a synchronizer for the core.
+    let synchronizer = Synchronizer::new(
+        name,
+        &committee,
+        store.clone(),
+        /* tx_header_waiter */ tx_sync_headers,
+        /* tx_certificate_waiter */ tx_sync_certificates,
+    );
+
+    let leader_elector = LeaderElector::new(committee.clone());
+    let timeout_delay = 100000;
+
+    // Spawn the core.
+    Core::spawn(
+        name,
+        committee.clone(),
+        store.clone(),
+        synchronizer,
+        signature_service,
+        /* consensus_round */ Arc::new(AtomicU64::new(0)),
+        /* gc_depth */ 50,
+        /* rx_primaries */ rx_primary_messages,
+        /* rx_header_waiter */ rx_headers_loopback,
+        rx_header_waiter_instances,
+        /* rx_proposer */ rx_headers,
+        tx_committer,
+        /* tx_proposer */ tx_parents,
+        rx_request_header_sync,
+        tx_info,
+        leader_elector,
+        timeout_delay,
+    );
+
+    HeaderWaiter::spawn(
+        name, 
+        committee, 
+        store.clone(), 
+        Arc::new(AtomicU64::new(0)), 
+        50, 
+        timeout_delay, 
+        1, 
+        rx_sync_headers, 
+        tx_headers_loopback, 
+        tx_header_waiter_instances,
+    );
+
+    // Send headers to the core, so they won't request sync
+    let header_list = headers();
+    /*for x in header_list.clone() {
+        tx_primary_messages
+            .send(PrimaryMessage::Header(x))
+            .await
+            .unwrap();
+    }*/
+
+    tx_primary_messages
+        .send(PrimaryMessage::Header(header_list[0].clone()))
+        .await
+        .unwrap();
+
+
+    let mut proposals: HashMap<PublicKey, Proposal> = HashMap::new();
+    for x in &header_list {
+        proposals.insert(x.author, Proposal { header_digest: x.digest(), height: x.height() });
+    }
+    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, tc: None, proposals };
+
+    let mut consensus_messages: HashMap<Digest, ConsensusMessage> = HashMap::new();
+    consensus_messages.insert(prepare_message.digest(), prepare_message.clone());
+
+    let parent_cert = certificate(&header_list[0]);
+    let header = special_header(parent_cert, consensus_messages);
+
+    // Send the special header to the core, should trigger sync
+    tx_primary_messages
+        .send(PrimaryMessage::Header(header.clone()))
+        .await
+        .unwrap();
+
+
+    sleep(Duration::from_millis(500)).await;
+    // Send the misssing proposals
+    for x in header_list.into_iter().skip(1) {
+        println!("header author is {:?}", x.author);
+        tx_primary_messages
+            .send(PrimaryMessage::Header(x))
+            .await
+            .unwrap();
+    }
+
+
+    // Wait for the proposals to appear in the store
+    sleep(Duration::from_millis(5000)).await;
 
     // Ensure the header is correctly stored.
     let stored = store

@@ -21,11 +21,11 @@ store = { path = "../store" }
 crypto = { path = "../crypto" }
 primary = { path = "../primary" }
 worker = { path = "../worker" }
-hotstuff = { path = "../hotstuff" }
-sailfish = { path = "../sailfish" }
+#hotstuff = { path = "../hotstuff" }
+#sailfish = { path = "../sailfish" }
 
 [features]
-benchmark = ["worker/benchmark", "primary/benchmark", "hotstuff/benchmark"]
+benchmark = ["worker/benchmark", "primary/benchmark"]
 
 [[bin]]         
 name = "benchmark_client"   

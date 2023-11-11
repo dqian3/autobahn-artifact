@@ -170,6 +170,7 @@ impl Core {
 
     async fn process_own_header(&mut self, header: Header) -> DagResult<()> {
         println!("Received own header");
+        debug!("Processing own header with {:?} consensus messages", header.consensus_messages.len());
         // Update the current header we are collecting votes for
         self.current_header = header.clone();
         // Indicate that we haven't sent a cert yet for this header
@@ -211,15 +212,19 @@ impl Core {
             .map(|(pk, _)| self.committee.stake(pk))
             .sum();
         println!("Before first ensure");
+        debug!("Past header parent cert stake check");
         ensure!(
             header.parent_cert.height() + 1 == header.height(),
             DagError::MalformedHeader(header.id.clone())
         );
+        debug!("Past header parent cert height check");
+
         println!("Before second ensure");
         ensure!(
             stake >= self.committee.validity_threshold() || header.parent_cert.height() == 0,
             DagError::HeaderRequiresQuorum(header.id.clone())
         );
+        debug!("Past header parent cert stake check");
         println!("After second ensure");
 
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
@@ -238,6 +243,7 @@ impl Core {
             .is_none()
         {
             println!("The parent is missing");
+            debug!("The parent is missing, suspending processing");
             return Ok(());
         }
 
@@ -248,10 +254,12 @@ impl Core {
             // on the responsibility of possible blocking i.e. its lane won't continue
             // TODO: Use reputation
             println!("Need to sync on missing tips, reschedule");
+            debug!("Can't vote for prepare, need to sync on missing tips, suspending processing");
             return Ok(());
         }
 
         println!("storing the header");
+        debug!("storing the header");
 
         // Store the header since we have the parents (recursively).
         let bytes = bincode::serialize(&header).expect("Failed to serialize header");
@@ -268,6 +276,7 @@ impl Core {
                 },
             );
             println!("updating tip");
+            debug!("updating tip");
 
             // TODO: Move to a function try_prepare_next_slot()
             // Since we received a new tip, check if any of our pending tickets are ready
@@ -285,6 +294,7 @@ impl Core {
         }
 
         println!("after height check");
+        debug!("after tip height check");
 
         // Process the parent certificate
         self.process_certificate(header.clone().parent_cert).await?;
@@ -303,6 +313,7 @@ impl Core {
                 .await?;
 
             println!("Consensus sigs length {:?}", consensus_sigs.len());
+            debug!("Consensus sigs length {:?}", consensus_sigs.len());
 
             // Create a vote for the header and any valid consensus instances
             let vote = Vote::new(
@@ -349,6 +360,19 @@ impl Core {
             return Ok(())
         }
 
+        let mut num_active_consensus_messages = 0;
+        for (_, message) in &self.current_header.consensus_messages {
+            match message {
+                ConsensusMessage::Prepare { slot, view, tc, proposals } => {
+                    num_active_consensus_messages += 1;
+                },
+                ConsensusMessage::Confirm { slot, view, qc, proposals } => {
+                    num_active_consensus_messages += 1;
+                },
+                _ => {},
+            };
+        }
+
         // Iterate through all votes for each consensus instance
         for (digest, sig) in vote.consensus_sigs.iter() {
             // If not already a qc maker for this consensus instance message, create one
@@ -389,6 +413,7 @@ impl Core {
                         tc: _,
                         proposals,
                     } => {
+                        debug!("Prepare QC formed in slot {:?}", slot);
                         // Create a tip proposal for the header which contains the prepare message,
                         // so that it can be committed as part of the proposals
                         let leader_tip_proposal: Proposal = Proposal {
@@ -418,6 +443,7 @@ impl Core {
                         qc: _,
                         proposals,
                     } => {
+                        debug!("Commit QC formed in slot {:?}", slot);
                         let new_consensus_message = ConsensusMessage::Commit {
                             slot: *slot,
                             view: *view,
@@ -450,7 +476,8 @@ impl Core {
         let dissemination_ready: bool =
             self.current_header.consensus_messages.is_empty() && dissemination_cert.is_some();
         // If there are some consensus instances in the header then wait for 2f+1 votes to form QCs
-        let consensus_ready: bool = !self.current_header.consensus_messages.is_empty() && self.current_qcs_formed == self.current_header.consensus_messages.len();
+        let consensus_ready: bool = !self.current_header.consensus_messages.is_empty() && self.current_qcs_formed == num_active_consensus_messages;
+        debug!("sentToProposer {:?}, diss_ready {:?}, consensus_ready {:?}", self.sent_cert_to_proposer, dissemination_ready, consensus_ready);
 
         if !self.sent_cert_to_proposer && (dissemination_ready || consensus_ready) {
             //debug!("Assembled {:?}", dissemination_cert.unwrap());
@@ -638,35 +665,39 @@ impl Core {
 
         for (_, consensus_message) in &header.consensus_messages {
             println!("processing instance");
+            debug!("processing instance");
             if self.is_valid(consensus_message) {
                 match consensus_message {
                     ConsensusMessage::Prepare {
-                        slot: _,
+                        slot,
                         view: _,
                         tc: _,
                         proposals: _,
                     } => {
                         println!("processing prepare message");
+                        debug!("processing prepare in slot {:?}", slot);
                         self.process_prepare_message(consensus_message, consensus_sigs.as_mut()).await;
                     },
                     ConsensusMessage::Confirm {
-                        slot: _,
+                        slot,
                         view: _,
                         qc: _,
                         proposals: _,
                     } => {
                         println!("processing confirm message");
+                        debug!("processing confirm in slot {:?}", slot);
                         // Start syncing on the proposals if we haven't already
                         self.synchronizer.get_proposals(consensus_message, header).await?;
                         self.process_confirm_message(consensus_message, consensus_sigs.as_mut()).await;
                     },
                     ConsensusMessage::Commit {
-                        slot: _,
+                        slot,
                         view: _,
                         qc: _,
                         proposals: _,
                     } => {
                         println!("processing commit message");
+                        debug!("processing commit in slot {:?}", slot);
                         self.process_commit_message(consensus_message.clone(), header).await?;
                     }
                 }
@@ -707,6 +738,8 @@ impl Core {
                     self.timer_futures.push(Box::pin(timer));
                     self.timers.insert((slot + 1, 1));
                 }
+
+                debug!("prepare vote in slot {:?}", slot);
 
 
                 // Indicate that we vote for this instance's prepare message
@@ -780,6 +813,7 @@ impl Core {
                 // otherwise sync will be triggered, and this commit message will be reprocessed
                 if !self.synchronizer.get_proposals(&commit_message, &header).await.unwrap().is_empty() {
                     println!("Sent to committer");
+                    debug!("sending to committer");
                     self.tx_committer
                         .send(commit_message)
                         .await
@@ -794,6 +828,8 @@ impl Core {
 
     #[async_recursion]
     async fn process_loopback(&mut self, consensus_message: ConsensusMessage, header: Header) -> DagResult<()> {
+        println!("reprocessing a header/commit message");
+        debug!("Can reprocess a header/commit message");
         match &consensus_message {
             ConsensusMessage::Prepare { slot: _, view: _, tc: _, proposals: _ } => {
                 // Now that proposals are ready we can reprocess the header
@@ -837,6 +873,7 @@ impl Core {
 
     async fn local_timeout_round(&mut self, slot: Slot, view: View) -> DagResult<()> {
         warn!("Timeout reached for slot {}, view {}", slot, view);
+        println!("timeout was triggered");
         // If timing out a smaller view than the current view, ignore
         match self.views.get(&slot) {
             Some(v) => {
@@ -844,6 +881,20 @@ impl Core {
                     return Ok(());
                 }
             },
+            None => {},
+        };
+
+        // If we have already committed then ignore the timeout
+        match self.qcs.get(&slot) {
+            Some(message) => {
+                match message {
+                    ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals: _ } => {
+                        return Ok(())
+                    },
+                    _ => {},
+
+                }
+            }
             None => {},
         };
 
@@ -873,6 +924,7 @@ impl Core {
             .broadcast(addresses, Bytes::from(message))
             .await;
 
+        println!("Processed our own timeout");
         // Process our message.
         self.handle_timeout(&timeout).await
     }
@@ -907,6 +959,8 @@ impl Core {
             .get_mut(&(timeout.slot, timeout.view))
             .unwrap();
 
+        println!("got tc maker");
+
         // Add the new vote to our aggregator and see if we have a quorum.
         if let Some(tc) = tc_maker.append(timeout.clone(), &self.committee)? {
             debug!("Assembled {:?}", tc);
@@ -937,6 +991,7 @@ impl Core {
             // Generate a new prepare if we are the next leader.
             self.generate_prepare_from_tc(&tc).await?;
         }
+        println!("return from handle timeout");
         Ok(())
     }
 
@@ -1084,7 +1139,37 @@ impl Core {
 
     // Main loop listening to incoming messages.
     pub async fn run(&mut self) {
+        // Initialize current proposals with the genesis tips
         self.current_proposal_tips = Header::genesis_proposals(&self.committee);
+
+        // Start the timeout for slot 1, view 1
+        let first_timer = Timer::new(1, 1, self.timeout_delay);
+        self.timer_futures.push(Box::pin(first_timer));
+        self.timers.insert((1, 1));
+        self.views.insert(1, 1);
+
+        // If we are the first leader then send a prepare
+        if self.name == self.leader_elector.get_leader(1, 1) {
+            let new_prepare_instance = ConsensusMessage::Prepare {
+                slot: 1,
+                view: 1,
+                tc: None,
+                proposals: self.current_proposal_tips.clone(),
+            };
+            self.already_proposed_slots.insert(1);
+            debug!("sending prepare instance to proposer");
+            self.tx_info
+                .send(new_prepare_instance)
+                .await
+                .expect("failed to send info to proposer");
+        }
+
+        // Initiate the proposer with a genesis parent
+        let genesis_cert = Certificate::genesis_certs(&self.committee).get(&self.name).unwrap().clone();
+        self.tx_proposer
+            .send(genesis_cert)
+            .await
+            .expect("failed to send cert to proposer");
 
         loop {
             let result = tokio::select! {

@@ -33,7 +33,7 @@ impl VotesAggregator {
         // Ensure it is the first time this authority votes.
         println!("author is {:?}", author);
         ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
-        
+       
         self.votes.push((author, vote.signature));
         self.dissemination_weight += committee.stake(&author);
 
@@ -49,8 +49,7 @@ impl VotesAggregator {
 
                 self.diss_cert = Some(dissemination_cert);
             }
-
-            return Ok(self.diss_cert.clone());
+            //return Ok(self.diss_cert.clone());
         }
 
         Ok(self.diss_cert.clone())

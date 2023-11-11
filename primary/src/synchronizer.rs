@@ -6,6 +6,7 @@ use crate::messages::{Certificate, ConsensusMessage, Header, Proposal};
 use config::Committee;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
+use log::debug;
 use std::collections::HashMap;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -100,8 +101,14 @@ impl Synchronizer {
 
         match consensus_message {
             ConsensusMessage::Prepare { slot: _, view: _, tc: _, proposals } => {
-                for (_, proposal) in proposals {
+                for (pk, proposal) in proposals {
                     println!("proposal inside prepare");
+
+                    if proposal.header_digest == self.genesis_headers.get(&pk).unwrap().digest() {
+                        proposals_vector.push(self.genesis_headers.get(&pk).unwrap().clone());
+                        continue;
+                    }
+
                     match self.store.read(proposal.header_digest.to_vec()).await? {
                         Some(header) => {
                             println!("in some case");
@@ -113,7 +120,14 @@ impl Synchronizer {
                 }
             },
             ConsensusMessage::Confirm { slot: _, view: _, qc: _, proposals } => {
-                for (_, proposal) in proposals {
+                for (pk, proposal) in proposals {
+
+                    if proposal.header_digest == self.genesis_headers.get(&pk).unwrap().digest() {
+                        proposals_vector.push(self.genesis_headers.get(&pk).unwrap().clone());
+                        continue;
+                    }
+
+
                     match self.store.read(proposal.header_digest.to_vec()).await? {
                         Some(header) => proposals_vector.push(bincode::deserialize(&header)?),
                         None => missing.push(proposal.clone()),
@@ -121,7 +135,14 @@ impl Synchronizer {
                 }
             },
             ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals } => {
-                for (_, proposal) in proposals {
+                for (pk, proposal) in proposals {
+
+                    if proposal.header_digest == self.genesis_headers.get(&pk).unwrap().digest() {
+                        proposals_vector.push(self.genesis_headers.get(&pk).unwrap().clone());
+                        continue;
+                    }
+
+
                     match self.store.read(proposal.header_digest.to_vec()).await? {
                         Some(header) => proposals_vector.push(bincode::deserialize(&header)?),
                         None => missing.push(proposal.clone()),
@@ -132,9 +153,11 @@ impl Synchronizer {
 
         if missing.is_empty() {
             println!("Have all proposals");
+            debug!("have all proposals and their ancestors");
             return Ok(proposals_vector);
         }
 
+        println!("sending to header waiter");
         self.tx_header_waiter
             .send(WaiterMessage::SyncProposals(missing, consensus_message.clone(), delivered_header.clone()))
             .await
@@ -152,11 +175,13 @@ impl Synchronizer {
 
         // NOTE: Before calling, must check if proposal is ready, assumes that proposal is ready
         // before calling
+        debug!("proposal height is {:?}", proposal.height);
         let mut header: Header = self.get_header(proposal.header_digest).await.expect("already synced should have header").unwrap();
 
         // Otherwise we have the header and all of its ancestors
         let mut current_height = proposal.height;
-        while current_height < stop_height {
+        while current_height > stop_height {
+            debug!("current height is {:?}, stop height is {:?}", current_height, stop_height);
             ancestors.push(header.clone());
             header = self.get_parent_header(&header).await?.expect("should have parent by now");
             current_height = header.height();
@@ -186,8 +211,12 @@ impl Synchronizer {
 
     pub async fn get_header(&mut self, header_digest: Digest) -> DagResult<Option<Header>> {
         match self.store.read(header_digest.to_vec()).await? {
-            Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
+            Some(bytes) => {
+                debug!("get_header: in the store");
+                Ok(Some(bincode::deserialize(&bytes)?))
+            },
             None => {
+                debug!("get_header not in the store");
                 Ok(None)
             }
         }
