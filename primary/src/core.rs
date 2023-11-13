@@ -567,6 +567,8 @@ impl Core {
                         tc: None,
                         proposals: new_proposals,
                     };
+
+                    println!("The new slot is {:?}", slot + 1);
                     self.already_proposed_slots.insert(slot + 1);
                     self.prepare_tickets.pop_front();
 
@@ -1150,6 +1152,7 @@ impl Core {
 
         // If we are the first leader then send a prepare
         if self.name == self.leader_elector.get_leader(1, 1) {
+            println!("We are the first leader creating a prepare msg");
             let new_prepare_instance = ConsensusMessage::Prepare {
                 slot: 1,
                 view: 1,

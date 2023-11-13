@@ -11,7 +11,7 @@ async fn propose_empty() {
     let (name, secret) = keys().pop().unwrap();
     let signature_service = SignatureService::new(secret);
 
-    let (_tx_parents, rx_parents) = channel(1);
+    let (tx_parents, rx_parents) = channel(1);
     let (_tx_our_digests, rx_our_digests) = channel(1);
     let (tx_headers, mut rx_headers) = channel(1);
     let(_tx_ticket, rx_ticket) = channel(1);
@@ -29,6 +29,13 @@ async fn propose_empty() {
         /* tx_core */ tx_headers,
     );
 
+
+    let genesis_cert = Certificate::genesis_certs(&committee()).get(&name).unwrap().clone();
+    tx_parents
+        .send(genesis_cert)
+        .await
+        .expect("failed to send cert to proposer");
+
     // Ensure the proposer makes a correct empty header.
     let header = rx_headers.recv().await.unwrap();
     //assert_eq!(header.prepare_info_list.is_empty(), true);
@@ -42,7 +49,7 @@ async fn propose_payload() {
     let (name, secret) = keys().pop().unwrap();
     let signature_service = SignatureService::new(secret);
 
-    let (_tx_parents, rx_parents) = channel(1);
+    let (tx_parents, rx_parents) = channel(1);
     let (tx_our_digests, rx_our_digests) = channel(1);
     let (tx_headers, mut rx_headers) = channel(1);
     let(_tx_ticket, rx_ticket) = channel(1);
@@ -59,6 +66,15 @@ async fn propose_payload() {
         rx_ticket,
         /* tx_core */ tx_headers,
     );
+
+
+    let genesis_cert = Certificate::genesis_certs(&committee()).get(&name).unwrap().clone();
+    tx_parents
+        .send(genesis_cert)
+        .await
+        .expect("failed to send cert to proposer");
+
+    sleep(Duration::from_millis(500)).await;
 
     // Send enough digests for the header payload.
     let digest = Digest(name.0);
@@ -98,6 +114,13 @@ async fn propose_normal() {
         rx_ticket,
         /* tx_core */ tx_headers,
     );
+
+
+    let genesis_cert = Certificate::genesis_certs(&committee()).get(&name).unwrap().clone();
+    tx_parents
+        .send(genesis_cert)
+        .await
+        .expect("failed to send cert to proposer");
 
     // Send enough digests for the header payload.
     let digest = Digest(name.0);
@@ -147,7 +170,7 @@ async fn propose_special_ticket_first() {
     let (name, secret) = keys().pop().unwrap();
     let signature_service = SignatureService::new(secret);
 
-    let (_tx_parents, rx_parents) = channel(1);
+    let (tx_parents, rx_parents) = channel(1);
     let (tx_our_digests, rx_our_digests) = channel(1);
     let (tx_headers, mut rx_headers) = channel(1);
     let(tx_ticket, rx_ticket) = channel(1);
@@ -164,6 +187,13 @@ async fn propose_special_ticket_first() {
         rx_ticket,
         /* tx_core */ tx_headers,
     );
+
+
+    let genesis_cert = Certificate::genesis_certs(&committee()).get(&name).unwrap().clone();
+    tx_parents
+        .send(genesis_cert)
+        .await
+        .expect("failed to send cert to proposer");
 
     //Send ticket to form a special header
     let gen_header = Header::genesis(&committee());
@@ -204,7 +234,7 @@ async fn propose_confirm_message() {
     let (name, secret) = keys().pop().unwrap();
     let signature_service = SignatureService::new(secret);
 
-    let (_tx_parents, rx_parents) = channel(1);
+    let (tx_parents, rx_parents) = channel(1);
     let (tx_our_digests, rx_our_digests) = channel(1);
     let (tx_headers, mut rx_headers) = channel(1);
     let(tx_ticket, rx_ticket) = channel(1);
@@ -221,6 +251,14 @@ async fn propose_confirm_message() {
         rx_ticket,
         /* tx_core */ tx_headers,
     );
+
+
+    let genesis_cert = Certificate::genesis_certs(&committee()).get(&name).unwrap().clone();
+    tx_parents
+        .send(genesis_cert)
+        .await
+        .expect("failed to send cert to proposer");
+
 
     //Send ticket to form a special header
     let gen_header = Header::genesis(&committee());

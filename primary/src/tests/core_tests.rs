@@ -383,6 +383,10 @@ async fn process_votes() {
         timeout_delay,
     );
 
+
+    // Receive geneis parent cert from the proposer
+    rx_parents.recv().await.unwrap();
+
     let header = header();
     // Make the certificate we expect to receive.
     let expected = certificate(&header);
@@ -653,7 +657,7 @@ async fn generate_confirm() {
     let (tx_primary_messages, rx_primary_messages) = channel(1);
     let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
     let (tx_headers, rx_headers) = channel(1);
-    let (tx_parents, rx_parents) = channel(1);
+    let (tx_parents, mut rx_parents) = channel(1);
 
     let(tx_committer, _rx_committer) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
@@ -705,6 +709,9 @@ async fn generate_confirm() {
         timeout_delay,
     );
 
+    // Receive the first prepare message from proposer
+    rx_info.recv().await.unwrap();
+    rx_parents.recv().await.unwrap();
 
     /*Proposer::spawn(
         name, 
@@ -838,6 +845,9 @@ async fn generate_commit() {
         timeout_delay,
     );
 
+    // Receive the first prepare message from proposer
+    rx_info.recv().await.unwrap();
+    rx_parents.recv().await.unwrap();
 
     /*Proposer::spawn(
         name, 
@@ -975,7 +985,7 @@ async fn generate_pipelined_prepare() {
     let (tx_primary_messages, rx_primary_messages) = channel(1);
     let (_tx_headers_loopback, rx_headers_loopback) = channel(1);
     let (_tx_headers, rx_headers) = channel(1);
-    let (tx_parents, _rx_parents) = channel(1);
+    let (tx_parents, mut rx_parents) = channel(1);
 
     let(tx_committer, _rx_committer) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
@@ -1027,6 +1037,11 @@ async fn generate_pipelined_prepare() {
         timeout_delay,
     );
 
+
+    // Receive the first prepare message from proposer
+    rx_info.recv().await.unwrap();
+    rx_parents.recv().await.unwrap();
+
     // Send headers to the core, so they won't request sync
     let header_list = headers();
     for x in header_list.clone() {
@@ -1035,6 +1050,7 @@ async fn generate_pipelined_prepare() {
             .await
             .unwrap();
     }
+
 
     let mut proposals: HashMap<PublicKey, Proposal> = HashMap::new();
     for x in &header_list {
@@ -1049,10 +1065,10 @@ async fn generate_pipelined_prepare() {
     let header = special_header(parent_cert, consensus_messages);
 
     // Send a header to the core.
-    /*tx_primary_messages
+    tx_primary_messages
         .send(PrimaryMessage::Header(header.clone()))
         .await
-        .unwrap();*/
+        .unwrap();
 
 
     // Send enough certificates to the core.
@@ -1203,7 +1219,7 @@ async fn sync_missing_proposals() {
     let (tx_primary_messages, rx_primary_messages) = channel(1);
     let (tx_headers_loopback, rx_headers_loopback) = channel(1);
     let (_tx_headers, rx_headers) = channel(1);
-    let (tx_parents, _rx_parents) = channel(1);
+    let (tx_parents, mut rx_parents) = channel(1);
 
     let(tx_committer, _rx_committer) = channel(1);
     let(_tx_request_header_sync, rx_request_header_sync) = channel(1);
@@ -1254,6 +1270,13 @@ async fn sync_missing_proposals() {
         leader_elector,
         timeout_delay,
     );
+
+
+    // Receive the first prepare message from proposer
+    rx_info.recv().await.unwrap();
+    rx_parents.recv().await.unwrap();
+
+
 
     HeaderWaiter::spawn(
         name, 
@@ -1314,7 +1337,7 @@ async fn sync_missing_proposals() {
 
 
     // Wait for the proposals to appear in the store
-    sleep(Duration::from_millis(5000)).await;
+    sleep(Duration::from_millis(500)).await;
 
     // Ensure the header is correctly stored.
     let stored = store

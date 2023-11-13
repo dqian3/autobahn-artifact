@@ -158,6 +158,7 @@ impl Synchronizer {
         }
 
         println!("sending to header waiter");
+        debug!("Triggering sync for proposals");
         self.tx_header_waiter
             .send(WaiterMessage::SyncProposals(missing, consensus_message.clone(), delivered_header.clone()))
             .await
