@@ -11,6 +11,7 @@ from aws.remote import Bench, BenchError
 @task
 def local(ctx):
     ''' Run benchmarks on localhost '''
+
     bench_params = {
         'nodes': 4,
         'rate': 50_000,
@@ -22,7 +23,7 @@ def local(ctx):
         'consensus': {
             'timeout_delay': 1_000,
             'sync_retry_delay': 10_000,
-            'max_payload_size': 500,
+            'max_payload_size': 5000,
             'min_block_delay': 0
         },
         'mempool': {
