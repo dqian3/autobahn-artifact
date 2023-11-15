@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::collections::HashMap;
 
 // Copyright(C) Facebook, Inc. and its affiliates.

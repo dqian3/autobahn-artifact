@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_imports)]
 use crate::{DagError, Height};
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::DagResult;

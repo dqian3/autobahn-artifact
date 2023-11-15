@@ -1,3 +1,5 @@
+#![allow(unused_variables)]
+#![allow(unused_imports)]
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::quorum_waiter::QuorumWaiterMessage;
 use crate::worker::WorkerMessage;

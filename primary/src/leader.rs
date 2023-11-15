@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_imports)]
 use crate::primary::{View, Slot};
 use config::Committee;
 use crypto::PublicKey;
@@ -33,7 +36,7 @@ impl SemiParallelRRLeaderElector {
     }
 
     pub fn get_leader(&self, slot: Slot, view: View) -> PublicKey {
-        let mut keys: Vec<_> = self.committee.authorities.keys().cloned().collect();
+        let keys: Vec<_> = self.committee.authorities.keys().cloned().collect();
         // TODO: Uncomment, this is strictly commented out for testing
         /*keys.sort();
         let index = view + slot;

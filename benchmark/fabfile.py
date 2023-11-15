@@ -28,7 +28,7 @@ def local(ctx, debug=True):
         'sync_retry_delay': 5_000,  # ms
         'sync_retry_nodes': 3,  # number of nodes
         'batch_size': 500_000,  # bytes
-        'max_batch_delay': 200  # ms
+        'max_batch_delay': 10  # ms
     }
     try:
         ret = LocalBench(bench_params, node_params).run(debug)

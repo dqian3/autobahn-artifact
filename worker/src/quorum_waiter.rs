@@ -1,4 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
+#![allow(unused_features)]
 use crate::processor::SerializedBatchMessage;
 use config::{Committee, Stake};
 use crypto::PublicKey;

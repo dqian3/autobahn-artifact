@@ -1,3 +1,5 @@
+#![allow(unused_variables)]
+#![allow(unused_imports)]
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::batch_maker::{Batch, BatchMaker, Transaction};
 use crate::helper::Helper;
@@ -162,7 +164,7 @@ impl Worker {
             self.parameters.batch_size,
             self.parameters.max_batch_delay,
             /* rx_transaction */ rx_batch_maker,  //receiver channel to connect to TxReceiverHandler 
-            ///* tx_message */ tx_quorum_waiter,   //sender channel to connect to quorum waiter
+            // tx_message tx_quorum_waiter,   //sender channel to connect to quorum waiter
            /* tx_batch */ tx_processor,  //sender channel to connect to processor
             /* workers_addresses */
             self.committee

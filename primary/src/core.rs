@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+#![allow(unused_variables)]
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::aggregators::{QCMaker, TCMaker, VotesAggregator};
 //use crate::common::special_header;
@@ -29,7 +31,6 @@ use tokio::sync::mpsc::{Receiver, Sender};
 //use tokio::time::{sleep, Duration, Instant};
 
 //use crate::messages_consensus::{QC, TC};
-
 #[cfg(test)]
 #[path = "tests/core_tests.rs"]
 pub mod core_tests;

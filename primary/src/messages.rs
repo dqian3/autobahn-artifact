@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_imports)]
 //use crate::common::committee;
 // Copyright(C) Facebook, Inc. and its affiliates.
 
@@ -1033,7 +1036,7 @@ impl QC {
 
 impl Hash for QC {
     fn digest(&self) -> Digest {
-        let mut hasher = Sha512::new();
+        let hasher = Sha512::new();
         //hasher.update(&self.hash);
         //hasher.update(self.view.to_le_bytes());
         //hasher.update(self.view_round.to_le_bytes());

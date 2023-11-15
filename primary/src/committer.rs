@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_imports)]
 use crate::messages::ConsensusMessage;
 use crate::primary::{Slot, CHANNEL_CAPACITY};
 use crate::synchronizer::Synchronizer;

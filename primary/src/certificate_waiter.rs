@@ -1,7 +1,9 @@
-use crate::Header;
+#![allow(dead_code)]
+#![allow(unused_variables)]
+//use crate::Header;
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::error::{DagError, DagResult};
-use crate::messages::{Certificate, ConsensusMessage};
+use crate::messages::Certificate; // {Certificate, ConsensusMessage};
 use futures::future::try_join_all;
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::stream::StreamExt as _;
@@ -74,29 +76,29 @@ impl CertificateWaiter {
 
     /// Helper function. It waits for particular data to become available in the storage
     /// and then delivers the specified header.
-    async fn parent_waiter(
-        missing: (Vec<u8>, Store),
-        deliver: Certificate,
-    ) -> DagResult<Certificate> {
-        /*let waiting: Vec<_> = missing
-            .iter_mut()
-            .map(|(x, y)| y.notify_read(x.to_vec()))
-            .collect();*/
+    // async fn parent_waiter(
+    //     missing: (Vec<u8>, Store),
+    //     deliver: Certificate,
+    // ) -> DagResult<Certificate> {
+    //     /*let waiting: Vec<_> = missing
+    //         .iter_mut()
+    //         .map(|(x, y)| y.notify_read(x.to_vec()))
+    //         .collect();*/
 
-        let (digest, mut store) = missing;
-        tokio::select! {
-            result = store.notify_read(digest.to_vec()) => {
-                match result {
-                    Ok(_) => Ok(deliver),
-                    Err(e) => Err(DagError::from(e)),
-                }
-            },
-            /*result = try_join_all(waiting) => {
-                result.map(|_| Some(deliver)).map_err(DagError::from)
-            }*/
-            //_ = handler.recv() => Ok(None),
-        }
-    }
+    //     let (digest, mut store) = missing;
+    //     tokio::select! {
+    //         result = store.notify_read(digest.to_vec()) => {
+    //             match result {
+    //                 Ok(_) => Ok(deliver),
+    //                 Err(e) => Err(DagError::from(e)),
+    //             }
+    //         },
+    //         /*result = try_join_all(waiting) => {
+    //             result.map(|_| Some(deliver)).map_err(DagError::from)
+    //         }*/
+    //         //_ = handler.recv() => Ok(None),
+    //     }
+    // }
 
 
 
