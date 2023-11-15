@@ -1,6 +1,7 @@
 use crate::config::Committee;
 use crate::core::RoundNumber;
 use crate::error::{ConsensusError, ConsensusResult};
+use crate::mempool::messages::Payload;
 use crypto::{Digest, Hash, PublicKey, Signature, SignatureService};
 use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
@@ -13,14 +14,66 @@ use std::fmt;
 #[path = "tests/messages_tests.rs"]
 pub mod messages_tests;
 
+pub type Transaction = Vec<u8>;
+
+// #[derive(Deserialize, Serialize, Default, Clone)]
+// pub struct digest {
+//     pub transactions: Vec<Transaction>,
+//     pub author: PublicKey,
+//     pub signature: Signature,
+// }
+
+// impl digest {
+//     pub async fn new(
+//         transactions: Vec<Transaction>,
+//         author: PublicKey,
+//         mut signature_service: SignatureService,
+//     ) -> Self {
+//         let digest = Self {
+//             transactions,
+//             author,
+//             signature: Signature::default(),
+//         };
+//         let signature = signature_service.request_signature(digest.digest()).await;
+//         Self {
+//             signature,
+//             ..digest
+//         }
+//     }
+
+//     pub fn size(&self) -> usize {
+//         self.transactions.iter().map(|x| x.len()).sum()
+//     }
+// }
+
+// impl Hash for digest {
+//     fn digest(&self) -> Digest {
+//         let mut hasher = Sha512::new();
+//         hasher.update(self.author.0);
+//         for transaction in &self.transactions {
+//             hasher.update(transaction);
+//         }
+//         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+//     }
+// }
+
+// impl fmt::Debug for digest {
+//     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+//         write!(f, "digest({}, {})", self.digest(), self.size())
+//     }
+// }
+
+
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct Block {
     pub qc: QC,
     pub tc: Option<TC>,
     pub author: PublicKey,
     pub round: RoundNumber,
-    pub payload: Vec<Digest>,
+    pub digest: Digest,
+    pub payload: Payload, 
     pub signature: Signature,
+   
 }
 
 impl Block {
@@ -29,7 +82,8 @@ impl Block {
         tc: Option<TC>,
         author: PublicKey,
         round: RoundNumber,
-        payload: Vec<Digest>,
+        digest: Digest, //only contains one hash
+        payload: Payload, 
         mut signature_service: SignatureService,
     ) -> Self {
         let block = Self {
@@ -37,8 +91,9 @@ impl Block {
             tc,
             author,
             round,
-            payload,
+            digest,
             signature: Signature::default(),
+            payload,
         };
         let signature = signature_service.request_signature(block.digest()).await;
         Self { signature, ..block }
@@ -59,6 +114,16 @@ impl Block {
             voting_rights > 0,
             ConsensusError::UnknownAuthority(self.author)
         );
+
+        //Check digest hashes match payload:
+        ensure!(
+            self.digest == self.payload.digest(),
+            ConsensusError::InvalidDigest()
+        );
+        // for (i, x) in self.digest.iter().enumerate() {
+        //     let mut hasher = Sha512::new();
+        //     hasher.update(self.payload[i].transactions);
+        // }
 
         // Check the signature.
         self.signature.verify(&self.digest(), &self.author)?;
@@ -81,7 +146,7 @@ impl Hash for Block {
         let mut hasher = Sha512::new();
         hasher.update(self.author.0);
         hasher.update(self.round.to_le_bytes());
-        for x in &self.payload {
+        for x in &self.digest {
             hasher.update(x);
         }
         hasher.update(&self.qc.hash);
@@ -98,7 +163,7 @@ impl fmt::Debug for Block {
             self.author,
             self.round,
             self.qc,
-            self.payload.iter().map(|x| x.size()).sum::<usize>(),
+            self.digest.iter().map(|x| x.size()).sum::<usize>(),
         )
     }
 }

@@ -1,6 +1,6 @@
 use crate::config::{Committee, Parameters};
 use crate::error::{MempoolError, MempoolResult};
-use crate::messages::Payload;
+use crate::messages::{Payload, Transaction};
 use crate::payload::PayloadMaker;
 use crate::synchronizer::Synchronizer;
 use consensus::{Block, ConsensusMempoolMessage, PayloadStatus, RoundNumber};
@@ -38,7 +38,7 @@ pub struct Core {
     core_channel: Receiver<MempoolMessage>,
     consensus_channel: Receiver<ConsensusMempoolMessage>,
     network_channel: Sender<NetMessage>,
-    queue: HashSet<Digest>,
+    queue: HashSet<(Digest, Payload)>,
 }
 
 impl Core {
@@ -92,7 +92,7 @@ impl Core {
     async fn process_own_payload(
         &mut self,
         digest: &Digest,
-        payload: Payload,
+        payload: &Payload,
     ) -> MempoolResult<()> {
         // Drop the transaction if our mempool is full.
         ensure!(
@@ -120,12 +120,14 @@ impl Core {
             }
         }
 
-        // Store the payload.
-        self.store_payload(digest.to_vec(), &payload).await;
+        // // Store the payload. ==> Now payload is stored as part of block.
+        // self.store_payload(digest.to_vec(), &payload).await;
+        Ok(())
 
-        // Share the payload with all other nodes.
-        let message = MempoolMessage::Payload(payload);
-        self.transmit(&message, None).await
+        //NEW: Only share it with own proposal
+        // // Share the payload with all other nodes.
+        // let message = MempoolMessage::Payload(payload);
+        // self.transmit(&message, None).await
     }
 
     async fn handle_own_payload(&mut self, payload: Payload) -> MempoolResult<()> {
@@ -138,36 +140,38 @@ impl Core {
         // Otherwise, try to add the transaction to the next payload
         // we will add to the queue.
         let digest = payload.digest();
-        self.process_own_payload(&digest, payload).await?;
-        self.queue.insert(digest);
+        self.process_own_payload(&digest, &payload).await?;
+        self.queue.insert(digest, payload);
         Ok(())
     }
 
     async fn handle_others_payload(&mut self, payload: Payload) -> MempoolResult<()> {
-        // Ensure the author of the payload is in the committee.
-        let author = payload.author;
-        ensure!(
-            self.committee.exists(&author),
-            MempoolError::UnknownAuthority(author)
-        );
+        //NEW: Only propose own payloads
+        
+        // // Ensure the author of the payload is in the committee.
+        // let author = payload.author;
+        // ensure!(
+        //     self.committee.exists(&author),
+        //     MempoolError::UnknownAuthority(author)
+        // );
 
-        // Verify that the payload does not exceed the maximum size.
-        ensure!(
-            payload.size() <= self.parameters.max_payload_size,
-            MempoolError::PayloadTooBig
-        );
+        // // Verify that the payload does not exceed the maximum size.
+        // ensure!(
+        //     payload.size() <= self.parameters.max_payload_size,
+        //     MempoolError::PayloadTooBig
+        // );
 
-        // Verify that the payload is correctly signed.
-        let digest = payload.digest();
-        payload.signature.verify(&digest, &author)?;
+        // // Verify that the payload is correctly signed.
+        // let digest = payload.digest();
+        // payload.signature.verify(&digest, &author)?;
 
-        // Store payload.
-        // TODO [issue #18]: A bad node may make us store a lot of junk. There is no
-        // limit to how many payloads they can send us, and we will store them all.
-        self.store_payload(digest.to_vec(), &payload).await;
+        // // Store payload.
+        // // TODO [issue #18]: A bad node may make us store a lot of junk. There is no
+        // // limit to how many payloads they can send us, and we will store them all.
+        // self.store_payload(digest.to_vec(), &payload).await;
 
-        // Add the payload to the queue.
-        self.queue.insert(digest);
+        // // Add the payload to the queue.
+        // self.queue.insert(digest);
         Ok(())
     }
 
@@ -186,22 +190,20 @@ impl Core {
         Ok(())
     }
 
-    async fn get_payload(&mut self, max: usize) -> MempoolResult<Vec<Digest>> {
+    async fn get_payload(&mut self, max: usize) -> MempoolResult<(Digest, Payload)> {
         if self.queue.is_empty() {
             if let Some(payload) = self.payload_maker.make().await {
                 let digest = payload.digest();
-                self.process_own_payload(&digest, payload).await?;
-                Ok(vec![digest])
+                self.process_own_payload(&digest, &payload).await?;
+                Ok((digest, payload))
             } else {
-                Ok(Vec::new())
+                Ok((Digest::default(), Payload::default()))
             }
-        } else {
-            let digest_len = Digest::default().size();
-            let digests = self.queue.iter().take(max / digest_len).cloned().collect();
-            for x in &digests {
-                self.queue.remove(x);
-            }
-            Ok(digests)
+        } else {  //Take one.
+            let batch = self.queue.iter().take(1).cloned().collect();
+            self.queue.remove(batch);
+            Ok(batch)
+          
         }
     }
 
@@ -237,10 +239,10 @@ impl Core {
                     match message {
                         ConsensusMempoolMessage::Get(max, sender) => {
                             let result = self.get_payload(max).await;
-                            log(result.as_ref().map(|_| &()));
+                            //log(result.as_ref().map(|_| &()));
                             let _ = sender.send(result.unwrap_or_default());
                         },
-                        ConsensusMempoolMessage::Verify(block, sender) => {
+                        ConsensusMempoolMessage::Verify(block, sender) => { //Should never be triggered.
                             let result = self.verify_payload(block).await;
                             log(result.as_ref().map(|_| &()));
                             let status = match result {

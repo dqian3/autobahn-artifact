@@ -1,6 +1,7 @@
 use crate::core::RoundNumber;
 use crate::error::{ConsensusError, ConsensusResult};
 use crate::messages::Block;
+use crate::mempool::messages::Payload;
 use crypto::Digest;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
@@ -28,10 +29,10 @@ impl MempoolDriver {
         Self { mempool_channel }
     }
 
-    pub async fn get(&mut self, max: usize) -> Vec<Digest> {
+    pub async fn get(&mut self, max: usize) -> (Digest, Payload) {
         let (sender, receiver) = oneshot::channel();
         let message = ConsensusMempoolMessage::Get(max, sender);
-        self.mempool_channel
+        self.mempool_channel  //Send to mempool
             .send(message)
             .await
             .expect("Failed to send message to mempool");

@@ -15,6 +15,20 @@ pub struct Payload {
 }
 
 impl Payload {
+    // pub async fn new(
+    // ) -> Self {
+    //     let payload = Self {
+    //         transactions: Vec::new(),
+    //         author: PublicKey::default,
+    //         signature: Signature::default(),
+    //     };
+    //     let signature = signature_service.request_signature(payload.digest()).await;
+    //     Self {
+    //         signature,
+    //         ..payload
+    //     }
+    // }
+
     pub async fn new(
         transactions: Vec<Transaction>,
         author: PublicKey,

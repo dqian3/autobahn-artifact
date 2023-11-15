@@ -150,14 +150,13 @@ impl Core {
 
         // Send all the newly committed blocks to the node's application layer.
         while let Some(block) = to_commit.pop_back() {
-            if !block.payload.is_empty() {
+            if block.digest != Digest::default() {
                 info!("Committed {}", block);
 
                 #[cfg(feature = "benchmark")]
-                for x in &block.payload {
-                    // NOTE: This log entry is used to compute performance.
-                    info!("Committed B{}({})", block.round, base64::encode(x));
-                }
+                // NOTE: This log entry is used to compute performance.
+                info!("Committed B{}({})", block.round, base64::encode(block.digest));
+                
             }
             debug!("Committed {:?}", block);
             if let Err(e) = self.commit_channel.send(block).await {
@@ -280,7 +279,7 @@ impl Core {
     #[async_recursion]
     async fn generate_proposal(&mut self, tc: Option<TC>) -> ConsensusResult<()> {
         // Make a new block.
-        let payload = self
+        let (digest, data) = self   //NOTE: It will have exactly 1 digest and 1 data payload
             .mempool_driver
             .get(self.parameters.max_payload_size)
             .await;
@@ -289,18 +288,19 @@ impl Core {
             tc,
             self.name,
             self.round,
-            payload,
+            digest,
+            data,
             self.signature_service.clone(),
         )
         .await;
-        if !block.payload.is_empty() {
+        if block.digest != Digest::default() {
             info!("Created {}", block);
 
             #[cfg(feature = "benchmark")]
-            for x in &block.payload {
+            
                 // NOTE: This log entry is used to compute performance.
-                info!("Created B{}({})", block.round, base64::encode(x));
-            }
+                info!("Created B{}({})", block.round, base64::encode(block.digest));
+            
         }
         debug!("Created {:?}", block);
 
