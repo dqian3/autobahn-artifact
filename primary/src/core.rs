@@ -544,6 +544,55 @@ impl Core {
         Ok(())
     }
 
+    //TODO: Fix this, does not work currently
+    async fn begin_slot_from_commit(&mut self, commit_message: &ConsensusMessage) -> DagResult<bool> {
+        match commit_message {
+            ConsensusMessage::Commit { slot, view, qc, proposals } => {
+                let new_proposals = self.current_proposal_tips.clone();
+
+                let next_leader = self.leader_elector.get_leader(slot + 1, 1);
+                
+               
+                if self.name != next_leader {
+                    return Ok(true)
+                }
+                
+                // If we are the leader of the next slot, view 1, and have already proposed in the next slot
+                // then don't process the prepare ticket, just return true
+                if self.already_proposed_slots.contains(&(slot + 1)) {
+                    return Ok(true)
+                }
+
+                // If there is enough coverage and we haven't already proposed in the next slot then create a new
+                // prepare message if we are the leader of view 1 in the next slot
+                
+               
+                if self.enough_coverage(&proposals, &new_proposals) {
+                    let new_prepare_instance = ConsensusMessage::Prepare {
+                        slot: slot + 1,
+                        view: 1,
+                        tc: None,
+                        proposals: new_proposals,
+                    };
+
+                    println!("The new slot is {:?}", slot + 1);
+                    self.already_proposed_slots.insert(slot + 1);
+                    self.prepare_tickets.pop_front();
+
+                    self.tx_info
+                        .send(new_prepare_instance)
+                        .await
+                        .expect("failed to send info to proposer");
+                }
+                return Ok(true)
+              
+            },
+            _ => Ok(true),
+        }
+    }
+
+
+
     async fn is_prepare_ticket_ready(&mut self, prepare_message: &ConsensusMessage) -> DagResult<bool> {
         match prepare_message {
             ConsensusMessage::Prepare { slot, view: _, tc: _, proposals } => {
@@ -586,7 +635,7 @@ impl Core {
                     println!("too many instances open");
                     return Ok(true)
                 }
-                //TODO: if local_committed 
+            
 
                 // If there is enough coverage and we haven't already proposed in the next slot then create a new
                 // prepare message if we are the leader of view 1 in the next slot
@@ -761,7 +810,7 @@ impl Core {
                     println!("prepare ticket not ready");
                     self.prepare_tickets.push_back(prepare_message.clone());
                 }
-
+                    //TODO: WE could start timers only locally after checking our local coverage as well.
 
                 // If we haven't already started the timer for the next slot, start it
                 // TODO:Can implement different forwarding methods (can be random, can forward to
@@ -838,13 +887,17 @@ impl Core {
         match &commit_message {
             ConsensusMessage::Commit {
                 slot,
-                view: _,
+                view,
                 qc: _,
                 proposals: _,
             } => {
-                // TODO: Stop all timers for this view
+                //Stop timer for this slot/view //Note: Ideally stop all timers for this slot, but timers for older views are obsolete anyways.
+                self.timers.remove(&(*slot, *view));
 
+                //update bounding heuristic
                 self.last_committed_slot = max(slot.clone(), self.last_committed_slot);
+
+                //self.begin_slot_from_commit(&commit_message).await.expect("Failed to start next consensus");
 
                 // Only send to committer if proposals and all ancestors are stored locally,
                 // otherwise sync will be triggered, and this commit message will be reprocessed
@@ -911,6 +964,11 @@ impl Core {
     async fn local_timeout_round(&mut self, slot: Slot, view: View) -> DagResult<()> {
         warn!("Timeout reached for slot {}, view {}", slot, view);
         println!("timeout was triggered");
+
+        if self.timers.contains(&(slot, view)) {
+            return Ok(())
+        }
+
         // If timing out a smaller view than the current view, ignore
         match self.views.get(&slot) {
             Some(v) => {
