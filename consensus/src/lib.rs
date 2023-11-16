@@ -6,7 +6,7 @@ mod consensus;
 mod core;
 mod leader;
 mod mempool;
-mod messages;
+pub mod messages;
 mod synchronizer;
 mod timer;
 

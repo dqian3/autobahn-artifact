@@ -1,8 +1,9 @@
 use crate::config::{Committee, Parameters};
 use crate::error::{MempoolError, MempoolResult};
-use crate::messages::{Payload, Transaction};
+//use crate::messages::{Payload, Transaction};
 use crate::payload::PayloadMaker;
 use crate::synchronizer::Synchronizer;
+use consensus::messages::{Payload, Transaction};
 use consensus::{Block, ConsensusMempoolMessage, PayloadStatus, RoundNumber};
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
@@ -11,7 +12,7 @@ use log::info;
 use log::{error, warn};
 use network::NetMessage;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 #[cfg(feature = "benchmark")]
 use std::convert::TryInto as _;
 use store::Store;
@@ -38,7 +39,7 @@ pub struct Core {
     core_channel: Receiver<MempoolMessage>,
     consensus_channel: Receiver<ConsensusMempoolMessage>,
     network_channel: Sender<NetMessage>,
-    queue: HashSet<(Digest, Payload)>,
+    queue: HashMap<Digest, Payload>,
 }
 
 impl Core {
@@ -54,7 +55,7 @@ impl Core {
         consensus_channel: Receiver<ConsensusMempoolMessage>,
         network_channel: Sender<NetMessage>,
     ) -> Self {
-        let queue = HashSet::with_capacity(parameters.queue_capacity);
+        let queue = HashMap::with_capacity(parameters.queue_capacity);
         Self {
             name,
             committee,
@@ -180,13 +181,13 @@ impl Core {
         digests: Vec<Digest>,
         requestor: PublicKey,
     ) -> MempoolResult<()> {
-        for digest in &digests {
-            if let Some(bytes) = self.store.read(digest.to_vec()).await? {
-                let payload = bincode::deserialize(&bytes)?;
-                let message = MempoolMessage::Payload(payload);
-                self.transmit(&message, Some(&requestor)).await?;
-            }
-        }
+        // for digest in &digests {
+        //     if let Some(bytes) = self.store.read(digest.to_vec()).await? {
+        //         let payload = bincode::deserialize(&bytes)?;
+        //         let message = MempoolMessage::Payload(payload);
+        //         self.transmit(&message, Some(&requestor)).await?;
+        //     }
+        // }
         Ok(())
     }
 
@@ -200,9 +201,10 @@ impl Core {
                 Ok((Digest::default(), Payload::default()))
             }
         } else {  //Take one.
-            let batch = self.queue.iter().take(1).cloned().collect();
-            self.queue.remove(batch);
-            Ok(batch)
+            let dig = self.queue.keys().next().unwrap().clone();
+            let payload = self.queue.get_mut(&dig).unwrap().clone();  //Can one somehow avoid this copy...
+            self.queue.remove(&dig);
+            Ok((dig, payload))
           
         }
     }
@@ -240,7 +242,8 @@ impl Core {
                         ConsensusMempoolMessage::Get(max, sender) => {
                             let result = self.get_payload(max).await;
                             //log(result.as_ref().map(|_| &()));
-                            let _ = sender.send(result.unwrap_or_default());
+                            let p = result.unwrap_or_default();
+                            let _ = sender.send(p);
                         },
                         ConsensusMempoolMessage::Verify(block, sender) => { //Should never be triggered.
                             let result = self.verify_payload(block).await;

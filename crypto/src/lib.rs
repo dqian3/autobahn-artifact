@@ -16,7 +16,7 @@ pub mod crypto_tests;
 
 pub type CryptoError = ed25519::Error;
 
-#[derive(Hash, PartialEq, Default, Eq, Clone, Deserialize, Serialize)]
+#[derive(Hash, PartialEq, Default, Eq, Clone, Deserialize, Serialize, Copy)]
 pub struct Digest(pub [u8; 32]);
 
 impl Digest {

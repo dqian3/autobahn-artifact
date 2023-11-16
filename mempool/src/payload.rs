@@ -1,5 +1,5 @@
 use crate::core::MempoolMessage;
-use crate::messages::{Payload, Transaction};
+use consensus::messages::{Payload, Transaction};
 use crypto::{PublicKey, SignatureService};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::oneshot;
@@ -58,7 +58,7 @@ impl Runner {
         self.size = 0;
 
         // Make a payload.
-        Payload::new(transactions, self.name, self.signature_service.clone()).await
+        Payload::new(transactions).await
     }
 
     async fn run(&mut self) {

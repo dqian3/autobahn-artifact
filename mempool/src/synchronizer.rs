@@ -108,9 +108,9 @@ impl Synchronizer {
                         match result {
                             Ok(Some(block)) => {
                                 let _ = pending.remove(&block.digest());
-                                for x in &block.payload {
-                                    let _ = requests.remove(x);
-                                }
+                               
+                                let _ = requests.remove(&block.digest);
+                                
                                 let message = ConsensusMessage::LoopBack(block);
                                 if let Err(e) = consensus_channel.send(message).await {
                                     panic!("Failed to send message to consensus: {}", e);
@@ -196,13 +196,12 @@ impl Synchronizer {
 
     pub async fn verify_payload(&mut self, block: Block) -> MempoolResult<bool> {
         let mut missing = HashSet::new();
-        for digest in &block.payload {
-            if self.store.read(digest.to_vec()).await?.is_none() {
-                debug!("Requesting sync for payload {}", digest);
-                missing.insert(digest.clone());
-            }
+        let digest = &block.digest;
+        if self.store.read(digest.to_vec()).await?.is_none() {
+            debug!("Requesting sync for payload {}", digest);
+            missing.insert(digest.clone());
         }
-
+        
         if missing.is_empty() {
             return Ok(true);
         }

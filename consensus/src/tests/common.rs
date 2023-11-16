@@ -188,21 +188,21 @@ pub struct MockMempool;
 
 impl MockMempool {
     pub fn run(mut consensus_mempool_channel: Receiver<ConsensusMempoolMessage>) {
-        tokio::spawn(async move {
-            while let Some(message) = consensus_mempool_channel.recv().await {
-                match message {
-                    ConsensusMempoolMessage::Get(_max, sender) => {
-                        let mut rng = StdRng::from_seed([0; 32]);
-                        let mut payload = [0u8; 32];
-                        rng.fill_bytes(&mut payload);
-                        sender.send(vec![Digest(payload)]).unwrap();
-                    }
-                    ConsensusMempoolMessage::Verify(_block, sender) => {
-                        sender.send(PayloadStatus::Accept).unwrap()
-                    }
-                    ConsensusMempoolMessage::Cleanup(_digests, _round) => (),
-                }
-            }
-        });
+        // tokio::spawn(async move {
+        //     while let Some(message) = consensus_mempool_channel.recv().await {
+        //         match message {
+        //             ConsensusMempoolMessage::Get(_max, sender) => {
+        //                 let mut rng = StdRng::from_seed([0; 32]);
+        //                 let mut payload = [0u8; 32];
+        //                 rng.fill_bytes(&mut payload);
+        //                 sender.send(vec![Digest(payload)]).unwrap();
+        //             }
+        //             ConsensusMempoolMessage::Verify(_block, sender) => {
+        //                 sender.send(PayloadStatus::Accept).unwrap()
+        //             }
+        //             ConsensusMempoolMessage::Cleanup(_digests, _round) => (),
+        //         }
+        //     }
+        // });
     }
 }

@@ -15,4 +15,4 @@ mod common;
 pub use crate::config::{Committee, Parameters};
 pub use crate::error::MempoolError;
 pub use crate::mempool::Mempool;
-pub use crate::messages::Payload;
+pub use consensus::messages::Payload;

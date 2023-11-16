@@ -1,4 +1,4 @@
-use crate::messages::Transaction;
+use consensus::messages::Transaction;
 use futures::stream::StreamExt as _;
 use log::{debug, warn};
 use std::net::SocketAddr;
