@@ -46,6 +46,7 @@ impl Runner {
             true => Some(self.make().await),
             false => None,
         };
+        //New TX is not included in batch.
         self.transactions.push(tx);
         self.size += length;
         ret
