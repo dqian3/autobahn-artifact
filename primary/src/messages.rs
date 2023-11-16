@@ -64,23 +64,24 @@ impl Hash for Proposal {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub enum ConsensusMessage {
+pub enum ConsensusMessage {  //TODO: Easier to re-factor into a single message type, and just add an enum for "type"?
     Prepare {
         slot: Slot,
         view: View,
-        tc: Option<TC>,
+        tc: Option<TC>, //TC for previous view; if None => must have ticket for previous slot 
+        //TODO: ADD qc ticket from slot s-k to bound instances. (For now: only issue this Prepare if have s-k Committed) => byz can open f more instances without tickets, but honest won't.
         proposals: HashMap<PublicKey, Proposal>,
     },
     Confirm {
         slot: Slot,
         view: View,
-        qc: QC,
+        qc: QC, //PrepareQC
         proposals: HashMap<PublicKey, Proposal>,
     },
     Commit {
         slot: Slot,
         view: View,
-        qc: QC,
+        qc: QC, //ConfirmQC
         proposals: HashMap<PublicKey, Proposal>,
     },
 }
@@ -298,6 +299,8 @@ pub struct Header {
 
     // Consensus metadata
     pub consensus_messages: HashMap<Digest, ConsensusMessage>,
+    pub num_active_instances: usize, //Number of Prepare/Confirm messages
+    pub special: bool, //Trying out special car
 }
 
 //NOTE: A header is special if "is_special = true". It contains a view, prev_view_round, and its parents may be just a single edge -- a Digest of its parent header (notably not of a Cert)
@@ -310,6 +313,7 @@ impl Header {
         parent_cert: Certificate,
         signature_service: &mut SignatureService,
         consensus_instances: HashMap<Digest, ConsensusMessage>,
+        num_active_instances: usize,
     ) -> Self {
         let header = Self {
             author,
@@ -319,6 +323,8 @@ impl Header {
             id: Digest::default(),
             signature: Signature::default(),
             consensus_messages: consensus_instances,
+            num_active_instances,
+            special: false,
         };
         let id = header.digest();
         let signature = signature_service.request_signature(id.clone()).await;
@@ -444,6 +450,11 @@ impl Header {
             hasher.update(&info.consensus_info.view.to_le_bytes());
         }*/
 
+        //TODO: Sign Consensus Messages too.
+        // for (dig, _) in &self.consensus_messages {
+        //     hasher.update(dig);
+        // }
+
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
@@ -457,6 +468,7 @@ impl Hash for Header {
             hasher.update(x);
             hasher.update(y.to_le_bytes());
         }
+        hasher.update(&self.parent_cert.header_digest); //Need to hash the chain parent(?)
         //hasher.update(&self.parent_cert);
 
         /*for info in &self.prepare_info_list {
@@ -1008,6 +1020,7 @@ impl QC {
     }
 
     pub fn verify(&self, committee: &Committee) -> ConsensusResult<()> {
+    
         //genesis QC always valid
         if Self::genesis(committee) == *self {
             return Ok(());

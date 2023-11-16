@@ -28,6 +28,7 @@ use std::sync::Arc;
 //use std::task::Poll;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
+use std::cmp::max;
 //use tokio::time::{sleep, Duration, Instant};
 
 //use crate::messages_consensus::{QC, TC};
@@ -101,6 +102,12 @@ pub struct Core {
     timeout_delay: u64,
     // GC the vote aggregators and current headers
     // gc_map: HashMap<Round, Digest>,
+    max_open_consensus_instances: u64, //limit k on number of open honest instances (k+f instances can be open) => if require QC, then hard limit to k.
+    last_committed_slot: u64, 
+    //TODO: if we are not enforcing a ticket, then only start when we committed all instances < s-k.
+    // If we just check that s-k is committed, but all it's predecessors are not, then we may still open an arbitrary number of instances in the absolute worst case
+                                                                                // E.g. s-1 has not committed, but s has, so we can open s+k 
+
 }
 
 impl Core {
@@ -123,6 +130,7 @@ impl Core {
         tx_info: Sender<ConsensusMessage>,
         leader_elector: LeaderElector,
         timeout_delay: u64,
+        max_open_consensus_instances: u64,
     ) {
         tokio::spawn(async move {
             Self {
@@ -163,6 +171,8 @@ impl Core {
                 timeout_delay,
                 timer_futures: FuturesUnordered::new(),
                 //gc_map: HashMap::with_capacity(2 * gc_depth as usize),
+                max_open_consensus_instances,
+                last_committed_slot: 0,
             }
             .run()
             .await;
@@ -361,18 +371,28 @@ impl Core {
             return Ok(())
         }
 
-        let mut num_active_consensus_messages = 0;
-        for (_, message) in &self.current_header.consensus_messages {
-            match message {
-                ConsensusMessage::Prepare { slot, view, tc, proposals } => {
-                    num_active_consensus_messages += 1;
-                },
-                ConsensusMessage::Confirm { slot, view, qc, proposals } => {
-                    num_active_consensus_messages += 1;
-                },
-                _ => {},
-            };
-        }
+        //Invariant: All votes contain the same content (i.e. it's not the case that some of them carry things like timeouts etc)
+        //Wait to form num_active instance many QCs
+       
+        //TODO: continue earlier if timeouts expire!! Currently all our lanes will stop if consensus stops voting 
+                //Car should still vote even if consensus says No.
+        
+        let num_active_consensus_messages = self.current_header.num_active_instances;
+        debug!("num active instances {:?}", num_active_consensus_messages);
+
+        // let mut num_active_consensus_messages_e = 0;
+        // for (_, message) in &self.current_header.consensus_messages {
+        //     match message {
+        //         ConsensusMessage::Prepare { slot, view, tc, proposals } => {
+        //             num_active_consensus_messages_e += 1;
+        //         },
+        //         ConsensusMessage::Confirm { slot, view, qc, proposals } => {
+        //             num_active_consensus_messages_e += 1;
+        //         },
+        //         _ => {},
+        //     };
+        // }
+        // debug!("num active expected instances {:?}", num_active_consensus_messages_e);
 
         // Iterate through all votes for each consensus instance
         for (digest, sig) in vote.consensus_sigs.iter() {
@@ -469,13 +489,10 @@ impl Core {
         }
 
         // Add the vote to the votes aggregator for the actual header
-        let dissemination_cert =
-            self.votes_aggregator
-                .append(vote, &self.committee, &self.current_header)?;
-        // If there are no consensus instances in the header then only wait for the dissemination
-        // cert (f+1) votes
-        let dissemination_ready: bool =
-            self.current_header.consensus_messages.is_empty() && dissemination_cert.is_some();
+        let dissemination_cert = self.votes_aggregator.append(vote, &self.committee, &self.current_header)?;
+
+        // If there are no consensus instances in the header then only wait for the dissemination cert (f+1) votes
+        let dissemination_ready: bool = self.current_header.consensus_messages.is_empty() && dissemination_cert.is_some();
         // If there are some consensus instances in the header then wait for 2f+1 votes to form QCs
         let consensus_ready: bool = !self.current_header.consensus_messages.is_empty() && self.current_qcs_formed == num_active_consensus_messages;
         debug!("sentToProposer {:?}, diss_ready {:?}, consensus_ready {:?}", self.sent_cert_to_proposer, dissemination_ready, consensus_ready);
@@ -532,35 +549,48 @@ impl Core {
             ConsensusMessage::Prepare { slot, view: _, tc: _, proposals } => {
                 let new_proposals = self.current_proposal_tips.clone();
 
-                // If not the next leader forward the prepare message to the appropriate 
-                // leader
-                // TODO: Turn off to maximize perf in gracious intervals
-                if self.name != self.leader_elector.get_leader(slot + 1, 1) {
-                    let address = self
-                        .committee
-                        .primary(&self.leader_elector.get_leader(slot + 1, 1))
-                        .expect("Author of valid header is not in the committee")
-                        .primary_to_primary;
-                    let bytes = bincode::serialize(&PrimaryMessage::ConsensusMessage(prepare_message.clone()))
-                        .expect("Failed to serialize prepare message");
-                    let handler = self.network.send(address, Bytes::from(bytes)).await;
-                    self.cancel_handlers
-                        .entry(self.current_header.height())
-                        .or_insert_with(Vec::new)
-                        .push(handler);
-                    println!("forwarding to the leader");
+                let next_leader = self.leader_elector.get_leader(slot + 1, 1);
+                
+                // If not the next leader 
+                if self.name != next_leader {
+                    if false {
+                        //forward the prepare message to the appropriate leader to ensure timeouts that respect honest leader  // TODO: Turn off to maximize perf in gracious intervals 
+                        let address = self
+                            .committee
+                            .primary(&next_leader)
+                            .expect("Author of valid header is not in the committee")
+                            .primary_to_primary;
+                        let bytes = bincode::serialize(&PrimaryMessage::ConsensusMessage(prepare_message.clone()))
+                            .expect("Failed to serialize prepare message");
+                        let handler = self.network.send(address, Bytes::from(bytes)).await;
+                        self.cancel_handlers
+                            .entry(self.current_header.height())
+                            .or_insert_with(Vec::new)
+                            .push(handler);
+                        println!("forwarding to the leader");
+                    
+                    }
                     return Ok(true)
                 }
+                
+                
 
                 // If we are the leader of the next slot, view 1, and have already proposed in the next slot
                 // then don't process the prepare ticket, just return true
-                if self.already_proposed_slots.contains(&(slot + 1)) && self.name == self.leader_elector.get_leader(slot + 1, 1) {
+                if self.already_proposed_slots.contains(&(slot + 1)) {
                     return Ok(true)
                 }
 
+                //Check that we have bounded instances.
+                if slot + 1 > self.last_committed_slot + self.max_open_consensus_instances {
+                    println!("too many instances open");
+                    return Ok(true)
+                }
+                //TODO: if local_committed 
+
                 // If there is enough coverage and we haven't already proposed in the next slot then create a new
                 // prepare message if we are the leader of view 1 in the next slot
-                if self.enough_coverage(&proposals, &new_proposals) && self.name == self.leader_elector.get_leader(slot + 1, 1) {
+                if self.enough_coverage(&proposals, &new_proposals) {
                     println!("have enough coverage");
                     let new_prepare_instance = ConsensusMessage::Prepare {
                         slot: slot + 1,
@@ -744,16 +774,16 @@ impl Core {
 
                 debug!("prepare vote in slot {:?}", slot);
 
+                // Ensure that we don't vote for another prepare in this slot, view
+                self.last_voted_consensus.insert((*slot, *view));
 
                 // Indicate that we vote for this instance's prepare message
+                //let sig = Signature::default();
                 let sig = self
                     .signature_service
                     .request_signature(prepare_message.digest())
                     .await;
                 consensus_sigs.push((prepare_message.digest(), sig));
-
-                // Ensure that we don't vote for another prepare in this slot, view
-                self.last_voted_consensus.insert((*slot, *view));
             }
             _ => {}
         }
@@ -777,6 +807,7 @@ impl Core {
                 self.qcs.insert(*slot, confirm_message.clone());
 
                 // Indicate that we vote for this instance's confirm message
+                //let sig = Signature::default();
                 let sig = self
                     .signature_service
                     .request_signature(confirm_message.digest())
@@ -806,12 +837,15 @@ impl Core {
         println!("Called process commit");
         match &commit_message {
             ConsensusMessage::Commit {
-                slot: _,
+                slot,
                 view: _,
                 qc: _,
                 proposals: _,
             } => {
                 // TODO: Stop all timers for this view
+
+                self.last_committed_slot = max(slot.clone(), self.last_committed_slot);
+
                 // Only send to committer if proposals and all ancestors are stored locally,
                 // otherwise sync will be triggered, and this commit message will be reprocessed
                 if !self.synchronizer.get_proposals(&commit_message, &header).await.unwrap().is_empty() {

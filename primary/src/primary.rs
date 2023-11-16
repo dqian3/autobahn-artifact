@@ -163,6 +163,8 @@ impl Primary {
 
         let timeout_delay = 1000;
 
+        let k = 4; //Max open instances.
+
         // The `Core` receives and handles headers, votes, and certificates from the other primaries.
         Core::spawn(
             name,
@@ -179,9 +181,10 @@ impl Primary {
             tx_commit,
             /* tx_proposer */ tx_parents,
             rx_request_header_sync,
-            tx_instance,
+            /*tx info */ tx_instance,
             LeaderElector::new(committee.clone()),
             timeout_delay,
+            k,
         );
 
         Committer::spawn(committee.clone(), store.clone(), parameters.gc_depth, rx_mempool, rx_committer, rx_commit, tx_output, synchronizer);
