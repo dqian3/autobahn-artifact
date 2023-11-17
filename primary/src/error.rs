@@ -75,6 +75,10 @@ pub enum DagError {
 
     #[error("Invalid special parent")]
     InvalidSpecialParent,
+
+    #[error("Slow QC not ready")]
+    InvalidSlowQCRequest, //TODO: move to ConsensusError
+
 }
 
 
@@ -152,5 +156,6 @@ pub enum ConsensusError {
 
     #[error("Header of parent ticket not committed")]
     MissingParentTicketHeader,
+
         
 }

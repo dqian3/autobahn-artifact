@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::error::{DagError, DagResult};
+use crate::error::{DagError, DagResult, ConsensusError};
 use crate::messages::{Certificate, Header, Vote, QC, Timeout, TC};
 use config::{Committee, Stake};
 use crypto::{PublicKey, Signature, Digest};
@@ -65,7 +65,8 @@ pub struct QCMaker {
     pub votes: Vec<(PublicKey, Signature)>,
     used: HashSet<PublicKey>,
 
-    //TODO: Configure it for Fast path (if it's a Quorummaker for Prepare)
+    try_fast: bool,  //TODO: Configure it for Fast path (if it's a Quorummaker for Prepare)
+    qc_dig: Digest, 
 }
 
 impl QCMaker {
@@ -74,6 +75,8 @@ impl QCMaker {
             weight: 0,
             votes: Vec::new(),
             used: HashSet::new(),
+            try_fast: false, //TODO: explicitly set it. (NOT done via constructor) 
+            qc_dig: Digest::default(),
         }
     }
 
@@ -82,7 +85,7 @@ impl QCMaker {
         author: PublicKey,
         vote: (Digest, Signature),
         committee: &Committee,
-    ) -> DagResult<Option<QC>> {
+    ) -> DagResult<(bool, Option<QC>)> {   //bool = QC is available. Option = Some only if QC ready to be used.
         println!("calling append");
         ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
         println!("after ensure");
@@ -90,13 +93,41 @@ impl QCMaker {
         self.votes.push((author, vote.1));
         self.weight += committee.stake(&author);
         println!("QC weight is {:?}", self.weight);
+
+        if self.try_fast {
+            return self.check_fast_qc(vote.0, committee);
+        }
+        //else Slow path:
         if self.weight >= committee.quorum_threshold() {
             // Ensure QC is only made once.
             self.weight = 0; 
-            return Ok(Some(QC { id: vote.0, votes: self.votes.clone() }))
+            return Ok((true, Some(QC { id: vote.0, votes: self.votes.clone() })))
         }
         
-        Ok(None)
+        Ok((false, None))
+    }
+
+    pub fn check_fast_qc(&mut self, vote_dig: Digest, committee: &Committee) -> DagResult<(bool, Option<QC>)> {
+        if self.weight >= committee.fast_threshold() {
+            // Ensure QC is only made once.
+            self.weight = 0; 
+            return Ok((true, Some(QC { id: vote_dig, votes: self.votes.clone() })))
+        }
+        else if self.weight >= committee.quorum_threshold() {
+            self.qc_dig = vote_dig;
+            return Ok((true, None))
+        }
+
+        Ok((false, None))
+    }
+
+    //Call this function to fetch slowQC after fastQC timer expires
+    pub fn get_qc(&mut self) -> DagResult<Option<QC>> {
+        ensure!(
+            self.qc_dig != Digest::default(),
+            DagError::InvalidSlowQCRequest
+        );
+        return Ok(Some(QC { id: self.qc_dig.clone(), votes: self.votes.clone() }));
     }
 }
 

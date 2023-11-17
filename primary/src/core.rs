@@ -102,11 +102,17 @@ pub struct Core {
     timeout_delay: u64,
     // GC the vote aggregators and current headers
     // gc_map: HashMap<Round, Digest>,
-    max_open_consensus_instances: u64, //limit k on number of open honest instances (k+f instances can be open) => if require QC, then hard limit to k.
+  
     last_committed_slot: u64, 
     //TODO: if we are not enforcing a ticket, then only start when we committed all instances < s-k.
     // If we just check that s-k is committed, but all it's predecessors are not, then we may still open an arbitrary number of instances in the absolute worst case
                                                                                 // E.g. s-1 has not committed, but s has, so we can open s+k 
+
+    //Configuration options: //TODO: Move to Primary level -> make configurable from main.rs
+    use_fast_path: bool,           //default = false
+    use_optimistic_tips: bool,     //default = true (TODO: implement non optimistic tip option)
+    use_parallel_proposals: bool,  //default = true (TODO: implement sequential slot option)
+    max_open_consensus_instances: u64, //limit k on number of open honest instances (k+f instances can be open) => if require QC, then hard limit to k.
 
 }
 
@@ -171,8 +177,12 @@ impl Core {
                 timeout_delay,
                 timer_futures: FuturesUnordered::new(),
                 //gc_map: HashMap::with_capacity(2 * gc_depth as usize),
-                max_open_consensus_instances,
+    
                 last_committed_slot: 0,
+                use_fast_path: false,           //default = false
+                use_optimistic_tips: true,     //default = true (TODO: implement non optimistic tip option)
+                use_parallel_proposals: true,    //default = true (TODO: implement sequential slot option)
+                max_open_consensus_instances,
             }
             .run()
             .await;
@@ -182,6 +192,10 @@ impl Core {
     async fn process_own_header(&mut self, header: Header) -> DagResult<()> {
         println!("Received own header");
         debug!("Processing own header with {:?} consensus messages", header.consensus_messages.len());
+
+        //GC all obsolete qc_makers //WARNING: Can only do this here if Votes are piggybacked on cars (i.e. not external.)
+        self.qc_makers.clear();
+
         // Update the current header we are collecting votes for
         self.current_header = header.clone();
         // Indicate that we haven't sent a cert yet for this header
@@ -416,75 +430,84 @@ impl Core {
             // Add vote to qc maker, if a QC forms then create a new consensus instance
             // TODO: Put fast path logic in qc maker (decide whether to wait timeout etc.), add
             // external messages
-            if let Some(qc) =
-                qc_maker.append(vote.author, (digest.clone(), sig.clone()), &self.committee)?
-            {
-                println!("QC formed");
-                self.current_qcs_formed += 1;
+            let (qc_ready, qc_opt) = qc_maker.append(vote.author, (digest.clone(), sig.clone()), &self.committee)?;
 
-                let current_instance = self
-                    .current_header
-                    .consensus_messages
-                    .get(&digest)
-                    .unwrap();
-                match current_instance {
-                    ConsensusMessage::Prepare {
-                        slot,
-                        view,
-                        tc: _,
-                        proposals,
-                    } => {
-                        debug!("Prepare QC formed in slot {:?}", slot);
-                        // Create a tip proposal for the header which contains the prepare message,
-                        // so that it can be committed as part of the proposals
-                        let leader_tip_proposal: Proposal = Proposal {
-                            header_digest: self.current_header.digest(),
-                            height: self.current_header.height(),
-                        };
-                        // Add this cert to the proposals for this instance
-                        let mut new_proposals = proposals.clone();
-                        new_proposals.insert(self.name, leader_tip_proposal);
+            if qc_ready {
+            // if let Some(qc) = qc_maker.append(vote.author, (digest.clone(), sig.clone()), &self.committee)?
+            // {
+                if qc_opt.is_none() {
+                    // Slow QC is available but we should wait for Fast
+                    //TODO: Start timers.
+                }
 
-                        let new_consensus_message = ConsensusMessage::Confirm {
-                            slot: *slot,
-                            view: *view,
-                            qc,
-                            proposals: new_proposals,
-                        };
+                else if let Some(qc) = qc_opt { //If QC = some (i.e. FastPathQC succeed, or SlowPathQC suceed if running without FP)
+                    println!("QC formed");
+                    self.current_qcs_formed += 1;
 
-                        // Send this new instance to the proposer
-                        self.tx_info
-                            .send(new_consensus_message)
-                            .await
-                            .expect("Failed to send info");
-                    }
-                    ConsensusMessage::Confirm {
-                        slot,
-                        view,
-                        qc: _,
-                        proposals,
-                    } => {
-                        debug!("Commit QC formed in slot {:?}", slot);
-                        let new_consensus_message = ConsensusMessage::Commit {
-                            slot: *slot,
-                            view: *view,
-                            qc,
-                            proposals: proposals.clone(),
-                        };
+                    let current_instance = self
+                        .current_header
+                        .consensus_messages
+                        .get(&digest)
+                        .unwrap();
+                    match current_instance {
+                        ConsensusMessage::Prepare {
+                            slot,
+                            view,
+                            tc: _,
+                            proposals,
+                        } => {
+                            debug!("Prepare QC formed in slot {:?}", slot);
+                            // Create a tip proposal for the header which contains the prepare message,
+                            // so that it can be committed as part of the proposals
+                            let leader_tip_proposal: Proposal = Proposal {
+                                header_digest: self.current_header.digest(),
+                                height: self.current_header.height(),
+                            };
+                            // Add this cert to the proposals for this instance
+                            let mut new_proposals = proposals.clone();
+                            new_proposals.insert(self.name, leader_tip_proposal);
 
-                        // Send this new instance to the proposer
-                        self.tx_info
-                            .send(new_consensus_message)
-                            .await
-                            .expect("Failed to send info");
-                    }
-                    ConsensusMessage::Commit {
-                        slot: _,
-                        view: _,
-                        qc: _,
-                        proposals: _,
-                    } => {}
-                };
+                            let new_consensus_message = ConsensusMessage::Confirm {
+                                slot: *slot,
+                                view: *view,
+                                qc,
+                                proposals: new_proposals,
+                            };
+
+                            // Send this new instance to the proposer
+                            self.tx_info
+                                .send(new_consensus_message)
+                                .await
+                                .expect("Failed to send info");
+                        }
+                        ConsensusMessage::Confirm {
+                            slot,
+                            view,
+                            qc: _,
+                            proposals,
+                        } => {
+                            debug!("Commit QC formed in slot {:?}", slot);
+                            let new_consensus_message = ConsensusMessage::Commit {
+                                slot: *slot,
+                                view: *view,
+                                qc,
+                                proposals: proposals.clone(),
+                            };
+
+                            // Send this new instance to the proposer
+                            self.tx_info
+                                .send(new_consensus_message)
+                                .await
+                                .expect("Failed to send info");
+                        }
+                        ConsensusMessage::Commit {
+                            slot: _,
+                            view: _,
+                            qc: _,
+                            proposals: _,
+                        } => {}
+                    };
+                }
             }
         }
 
@@ -960,34 +983,34 @@ impl Core {
         Ok(())
     }
 
-    // async fn qc_timeout() {
+    async fn qc_timeout() {
 
-    //        //2 tier timeout:
-    //        // wait up to timeout for normal QC to form. (Start this timer after receiving f+1 votes, e.g. enough to advance car)
-    //        // when normal QC is ready, wait for timer (only for prepare) to see if fast QC is ready. 
+           //2 tier timeout:
+           // wait up to timeout for normal QC to form. (Start this timer after receiving f+1 votes, e.g. enough to advance car)
+           // when normal QC is ready, wait for timer (only for prepare) to see if fast QC is ready. 
 
-    //     //This function is the callback for timer experiation: 
+        //This function is the callback for timer experiation: 
 
-    //     //QCMaker should return two values, ReadyFast, and QC
-    //     //If !ReadyFast, start a timer to continue here.
-    //     //This timer calls QCMaker.get() which returns the ready QC with 2f+1
+        //QCMaker should return two values, ReadyFast, and QC
+        //If !ReadyFast, start a timer to continue here.
+        //This timer calls QCMaker.get() which returns the ready QC with 2f+1
 
-    //     let timer = Timer::new(tc.slot, tc.view + 1, self.timeout_delay);
-    //     self.timer_futures.push(Box::pin(timer));
-    //     self.timers.insert((tc.slot, tc.view + 1));
-
-
-    // // -----------------------
+        // let timer = Timer::new(tc.slot, tc.view + 1, self.timeout_delay);
+        // self.timer_futures.push(Box::pin(timer));
+        // self.timers.insert((tc.slot, tc.view + 1));
 
 
-    //     //If we fail to assemble QC within time => continue with car => ask 
-    //     //
+    // -----------------------
 
-    //     //If we fail to assemble FastQC within time => continue with normal QC => just ask QC_maker again. : On second ask, qc maker returns QC if it has.
+
+        //If we fail to assemble QC within time => continue with car => ask 
+        //
+
+        //If we fail to assemble FastQC within time => continue with normal QC => just ask QC_maker again. : On second ask, qc maker returns QC if it has.
         
-    //     //start waiting for timer only after forming normal QC
-    //     //Note FastQC is only for Prepare.
-    // }
+        //start waiting for timer only after forming normal QC
+        //Note FastQC is only for Prepare.
+    }
 
 
     async fn local_timeout_round(&mut self, slot: Slot, view: View) -> DagResult<()> {
