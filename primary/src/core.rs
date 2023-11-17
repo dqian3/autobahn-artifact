@@ -179,7 +179,7 @@ impl Core {
                 //gc_map: HashMap::with_capacity(2 * gc_depth as usize),
     
                 last_committed_slot: 0,
-                use_fast_path: false,           //default = false
+                use_fast_path: true,           //default = false
                 use_optimistic_tips: true,     //default = true (TODO: implement non optimistic tip option)
                 use_parallel_proposals: true,    //default = true (TODO: implement sequential slot option)
                 max_open_consensus_instances,
@@ -464,13 +464,12 @@ impl Core {
                             // Add this cert to the proposals for this instance
                             let mut new_proposals = proposals.clone(); 
                             new_proposals.insert(self.name, leader_tip_proposal);
-
-                            if qc_maker.try_fast {
-                                panic!("should not be running in fast mode currently");
-                            }
                             
                             let new_consensus_message = match qc_maker.try_fast {
-                                true => ConsensusMessage::Commit {slot: *slot, view: *view,  qc, proposals: new_proposals,}, // Create Commit if we have FastPrepareQC
+                                true => {
+                                    debug!("taking fast path!");
+                                    ConsensusMessage::Commit {slot: *slot, view: *view,  qc, proposals: new_proposals,}
+                                    }, // Create Commit if we have FastPrepareQC
                                 false => ConsensusMessage::Confirm {slot: *slot, view: *view,  qc, proposals: new_proposals,},
                             };
                             //let new_consensus_message = ConsensusMessage::Confirm {slot: *slot, view: *view,  qc, proposals: new_proposals,};
