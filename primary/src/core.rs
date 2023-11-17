@@ -354,7 +354,7 @@ impl Core {
             debug!("Created Vote {:?}", vote);
 
             if vote.origin == self.name {
-                self.process_vote(vote)
+                self.process_vote(vote, false)
                     .await
                     .expect("Failed to process our own vote");
             } else {
@@ -376,7 +376,7 @@ impl Core {
     }
 
     #[async_recursion]
-    async fn process_vote(&mut self, vote: Vote) -> DagResult<()> {
+    async fn process_vote(&mut self, vote: Vote, is_loopback: bool) -> DagResult<()> {
         debug!("Processing Vote {:?}", vote);
 
         // NOTE: If sending externally then need map of open consensus instances
@@ -435,7 +435,14 @@ impl Core {
             // Add vote to qc maker, if a QC forms then create a new consensus instance
             // TODO: Put fast path logic in qc maker (decide whether to wait timeout etc.), add
             // external messages
-            let (qc_ready, qc_opt) = qc_maker.append(vote.author, (digest.clone(), sig.clone()), &self.committee)?;
+
+            let (qc_ready, qc_opt) = match is_loopback {
+                false => qc_maker.append(vote.author, (digest.clone(), sig.clone()), &self.committee)?,
+                true => {
+                    qc_maker.try_fast = false; //turn back to normal path handling
+                    qc_maker.get_qc()?
+                }
+            };
 
             if qc_ready {
             // if let Some(qc) = qc_maker.append(vote.author, (digest.clone(), sig.clone()), &self.committee)?
@@ -443,6 +450,14 @@ impl Core {
                 if qc_opt.is_none() {
                     // Slow QC is available but we should wait for Fast
                     //TODO: Start timers.
+
+                    //Timer should be able to ask qc_maker (needs to find whether qc.maker still exists -- i.e. needs digest)
+                    //Timer needs to find out whether current_instance is still ongoing ()
+                    //Timer needs to check if all QCs attached are ready. (current_qcs == all active) => if so, check if car is ready.
+                      // => elegant: just call with Vote again. But this time mark it special such that it tries to use qc_maker.get instead of append.
+                     let timer = Timer::new(tc.slot, tc.view + 1, self.timeout_delay);
+                    self.timer_futures.push(Box::pin(timer));
+                    self.timers.insert((tc.slot, tc.view + 1));
                 }
 
                 else if let Some(qc) = qc_opt { //If QC = some (i.e. FastPathQC succeed, or SlowPathQC suceed if running without FP)
@@ -1336,7 +1351,7 @@ impl Core {
                         PrimaryMessage::Vote(vote) => {
                             match self.sanitize_vote(&vote) {
                                 Ok(()) => {
-                                    self.process_vote(vote).await
+                                    self.process_vote(vote, false).await
                                 },
                                 error => {
                                     error

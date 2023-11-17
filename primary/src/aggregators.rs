@@ -122,12 +122,12 @@ impl QCMaker {
     }
 
     //Call this function to fetch slowQC after fastQC timer expires
-    pub fn get_qc(&mut self) -> DagResult<Option<QC>> {
+    pub fn get_qc(&mut self) -> DagResult<(bool, Option<QC>)> {
         ensure!(
-            self.qc_dig != Digest::default(),
+            self.qc_dig != Digest::default(),  //I.e. SlowQC is ready!
             DagError::InvalidSlowQCRequest
         );
-        return Ok(Some(QC { id: self.qc_dig.clone(), votes: self.votes.clone() }));
+        return Ok((true, Some(QC { id: self.qc_dig.clone(), votes: self.votes.clone() })));
     }
 }
 
