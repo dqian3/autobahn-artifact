@@ -64,6 +64,8 @@ pub struct QCMaker {
     weight: Stake,
     pub votes: Vec<(PublicKey, Signature)>,
     used: HashSet<PublicKey>,
+
+    //TODO: Configure it for Fast path (if it's a Quorummaker for Prepare)
 }
 
 impl QCMaker {

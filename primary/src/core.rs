@@ -960,11 +960,41 @@ impl Core {
         Ok(())
     }
 
+    // async fn qc_timeout() {
+
+    //        //2 tier timeout:
+    //        // wait up to timeout for normal QC to form. (Start this timer after receiving f+1 votes, e.g. enough to advance car)
+    //        // when normal QC is ready, wait for timer (only for prepare) to see if fast QC is ready. 
+
+    //     //This function is the callback for timer experiation: 
+
+    //     //QCMaker should return two values, ReadyFast, and QC
+    //     //If !ReadyFast, start a timer to continue here.
+    //     //This timer calls QCMaker.get() which returns the ready QC with 2f+1
+
+    //     let timer = Timer::new(tc.slot, tc.view + 1, self.timeout_delay);
+    //     self.timer_futures.push(Box::pin(timer));
+    //     self.timers.insert((tc.slot, tc.view + 1));
+
+
+    // // -----------------------
+
+
+    //     //If we fail to assemble QC within time => continue with car => ask 
+    //     //
+
+    //     //If we fail to assemble FastQC within time => continue with normal QC => just ask QC_maker again. : On second ask, qc maker returns QC if it has.
+        
+    //     //start waiting for timer only after forming normal QC
+    //     //Note FastQC is only for Prepare.
+    // }
+
 
     async fn local_timeout_round(&mut self, slot: Slot, view: View) -> DagResult<()> {
         warn!("Timeout reached for slot {}, view {}", slot, view);
         println!("timeout was triggered");
 
+        //If timer was cancelled, ignore  -- Note: technically redundant with commit check below, but currently we do not insert CommitQC's... TODO: Need to insert these so we can avoid joining view change and just reply.
         if self.timers.contains(&(slot, view)) {
             return Ok(())
         }
