@@ -1178,7 +1178,8 @@ pub struct Timeout {
     pub slot: Slot,
     pub view: View,
     // The highest qc the replica has for its state
-    pub high_qc: Option<ConsensusMessage>,
+    pub high_qc: Option<ConsensusMessage>,  //Confirm message
+    pub high_prop: Option<ConsensusMessage>, //Prepare message
 
     pub author: PublicKey,
     pub signature: Signature,
@@ -1189,6 +1190,7 @@ impl Timeout {
         slot: Slot,
         view: View,
         high_qc: Option<ConsensusMessage>,
+        high_prop: Option<ConsensusMessage>,
         author: PublicKey,
         mut signature_service: SignatureService,
     ) -> Self {
@@ -1196,6 +1198,7 @@ impl Timeout {
             slot,
             view,
             high_qc,
+            high_prop,
             author,
             signature: Signature::default(),
         };
@@ -1244,6 +1247,7 @@ impl fmt::Debug for Timeout {
 
 impl Timeout {
     pub fn new_from_key(
+        high_prop: Option<ConsensusMessage>,
         high_qc: Option<ConsensusMessage>,
         slot: Slot,
         view: View,
@@ -1251,6 +1255,7 @@ impl Timeout {
         secret: &SecretKey,
     ) -> Self {
         let timeout = Timeout {
+            high_prop,
             high_qc,
             slot,
             view,
@@ -1309,9 +1314,10 @@ impl TC {
         }
     }
 
-    pub fn get_winning_proposals(&self) -> HashMap<PublicKey, Proposal> {
+    pub fn get_winning_proposals(&self, committee: &Committee) -> HashMap<PublicKey, Proposal> {
         let mut winning_proposals = HashMap::new();
         let mut winning_view = 0;
+        let mut prepared_feq: HashMap<Digest, u32> = HashMap::new();
 
         // Find the timeout message containing the highest QC, and use that as the winning
         // proposal for the view change
@@ -1348,6 +1354,26 @@ impl TC {
                 }
                 None => {}
             };
+            match &timeout.high_prop {
+                Some(prepare) => {
+                    match prepare {
+                        ConsensusMessage::Prepare { slot, view, tc: _, proposals } => {
+                            if view > &winning_view{
+                                let weight = prepared_feq.entry(prepare.digest()).or_default();
+                                *weight += committee.stake(&timeout.author);
+                
+                                if *weight >= committee.validity_threshold(){
+                                    winning_view = *view;
+                                    winning_proposals = proposals.clone();
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                None => {}
+
+            }
         }
         winning_proposals
     }

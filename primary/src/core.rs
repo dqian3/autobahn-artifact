@@ -91,7 +91,8 @@ pub struct Core {
     last_voted_consensus: HashSet<(Slot, View)>,
     timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>,
     // TODO: Add garbage collection, related to how deep pipeline (parameter k)
-    qcs: HashMap<Slot, ConsensusMessage>, // NOTE: Store the latest QC for each slot
+    high_proposals: HashMap<Slot, ConsensusMessage>,
+    high_qcs: HashMap<Slot, ConsensusMessage>, // NOTE: Store the latest QC for each slot
     qc_makers: HashMap<Digest, QCMaker>,
     current_qcs_formed: usize,
     tc_makers: HashMap<(Slot, View), TCMaker>,
@@ -170,7 +171,8 @@ impl Core {
                 views: HashMap::with_capacity(2 * gc_depth as usize),
                 timers: HashSet::with_capacity(2 * gc_depth as usize),
                 last_voted_consensus: HashSet::with_capacity(2 * gc_depth as usize),
-                qcs: HashMap::with_capacity(2 * gc_depth as usize),
+                high_qcs: HashMap::with_capacity(2 * gc_depth as usize),
+                high_proposals: HashMap::with_capacity(2 * gc_depth as usize),
                 qc_makers: HashMap::with_capacity(2 * gc_depth as usize),
                 tc_makers: HashMap::with_capacity(2 * gc_depth as usize),
                 prepare_tickets: VecDeque::with_capacity(2 * gc_depth as usize),
@@ -696,7 +698,7 @@ impl Core {
                         // Ensure tc is valid
                         ticket_valid = tc.verify(&self.committee).is_ok();
                         
-                        let winning_proposals = tc.get_winning_proposals();
+                        let winning_proposals = tc.get_winning_proposals(&self.committee);
                         if !winning_proposals.is_empty() {
                             for (pk, proposal) in proposals {
                                 ticket_valid = ticket_valid && proposal.eq(winning_proposals.get(&pk).unwrap());
@@ -815,7 +817,7 @@ impl Core {
                 slot,
                 view,
                 tc: _,
-                proposals: _,
+                proposals,
             } => {
                 // Check if this prepare message can be used for a ticket to propose in the next
                 // slot
@@ -827,8 +829,7 @@ impl Core {
                     //TODO: WE could start timers only locally after checking our local coverage as well.
 
                 // If we haven't already started the timer for the next slot, start it
-                // TODO:Can implement different forwarding methods (can be random, can forward to
-                // f+1, current one is the most pessimisstic)
+                // TODO:Can implement different forwarding methods (can be random, can forward to f+1, current one is the most pessimisstic)
                 if !self.timers.contains(&(slot + 1, 1)) {
                     let timer = Timer::new(slot + 1, 1, self.timeout_delay);
                     self.timer_futures.push(Box::pin(timer));
@@ -839,6 +840,11 @@ impl Core {
 
                 // Ensure that we don't vote for another prepare in this slot, view
                 self.last_voted_consensus.insert((*slot, *view));
+
+                if self.use_fast_path {
+                      // Already checked that we were in the right view from validity checks, so just insert into our local high_proposals map
+                    self.high_proposals.insert(*slot, ConsensusMessage::Prepare { slot: *slot, view: *view, tc: None, proposals: proposals.clone()}); //Note: Don't need to store TC or QC's.
+                }
 
                 // Indicate that we vote for this instance's prepare message
                 //let sig = Signature::default();
@@ -867,8 +873,8 @@ impl Core {
                 proposals: _,
             } => {
                 // Already checked that we were in the right view from validity checks, so just
-                // insert into our local qc map
-                self.qcs.insert(*slot, confirm_message.clone());
+                // insert into our local high_qc map
+                self.high_qcs.insert(*slot, confirm_message.clone());
 
                 // Indicate that we vote for this instance's confirm message
                 //let sig = Signature::default();
@@ -909,6 +915,7 @@ impl Core {
             } => {
                 //Stop timer for this slot/view //Note: Ideally stop all timers for this slot, but timers for older views are obsolete anyways.
                 self.timers.remove(&(*slot, *view));
+                //self.high_qcs.insert(*slot, confirm_message.clone()); //ALTERNATIVELY insert into high_qcs...
 
                 //update bounding heuristic
                 self.last_committed_slot = max(slot.clone(), self.last_committed_slot);
@@ -1026,7 +1033,7 @@ impl Core {
         };
 
         // If we have already committed then ignore the timeout
-        match self.qcs.get(&slot) {
+        match self.high_qcs.get(&slot) {
             Some(message) => {
                 match message {
                     ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals: _ } => {
@@ -1044,7 +1051,8 @@ impl Core {
         let timeout = Timeout::new(
             slot,
             view,
-            self.qcs.get(&slot).cloned(),
+            self.high_qcs.get(&slot).cloned(),
+            self.high_proposals.get(&slot).cloned(),
             self.name,
             self.signature_service.clone(),
         )
@@ -1139,7 +1147,7 @@ impl Core {
     async fn generate_prepare_from_tc(&mut self, tc: &TC) -> DagResult<()> {
         // Make a new prepare message if we are the next leader.
         if self.name == self.leader_elector.get_leader(tc.slot, tc.view + 1) {
-            let mut winning_proposals = tc.get_winning_proposals();
+            let mut winning_proposals = tc.get_winning_proposals(&self.committee);
 
             // If there is no QC we have to propose, then use our current tips for our proposal
             if winning_proposals.is_empty() {
