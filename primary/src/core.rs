@@ -6,7 +6,7 @@ use crate::aggregators::{QCMaker, TCMaker, VotesAggregator};
 use crate::error::{DagError, DagResult};
 use crate::leader::LeaderElector;
 use crate::messages::{
-    Certificate, ConsensusMessage, Header, Proposal, Timeout, Vote, TC,
+    Certificate, ConsensusMessage, Header, Proposal, Timeout, Vote, TC, ConsensusType, QC, verify_confirm, verify_commit,
 };
 use crate::primary::{Height, PrimaryMessage, Slot, View};
 use crate::synchronizer::Synchronizer;
@@ -394,22 +394,19 @@ impl Core {
         let num_active_consensus_messages = self.current_header.num_active_instances;
         debug!("num active instances {:?}", num_active_consensus_messages);
 
-        // let mut num_active_consensus_messages_e = 0;
-        // for (_, message) in &self.current_header.consensus_messages {
-        //     match message {
-        //         ConsensusMessage::Prepare { slot, view, tc, proposals } => {
-        //             num_active_consensus_messages_e += 1;
-        //         },
-        //         ConsensusMessage::Confirm { slot, view, qc, proposals } => {
-        //             num_active_consensus_messages_e += 1;
-        //         },
-        //         _ => {},
-        //     };
-        // }
-        // debug!("num active expected instances {:?}", num_active_consensus_messages_e);
-
-        // Iterate through all votes for each consensus instance
+        // Iterate through vote for each consensus instance
         for (digest, sig) in vote.consensus_sigs.iter() {
+
+            debug!("current header {:?}", self.current_header);
+            debug!("digest is {:?}", digest);
+            //Get vote type of the instance: Prepare/Confirm-vote
+            let current_instance = self
+                        .current_header
+                        .consensus_messages
+                        .get(digest)
+                        .unwrap();
+
+
             // If not already a qc maker for this consensus instance message, create one
             match self.qc_makers.get(&digest) {
                 Some(_) => {
@@ -420,10 +417,16 @@ impl Core {
                 }
             }
 
-            println!("digest is {:?}", digest);
+            
 
             // Otherwise get the qc maker for this instance
             let qc_maker = self.qc_makers.get_mut(&digest).unwrap();
+
+            //Configure qc_maker to try to use Fast Path
+            qc_maker.try_fast = match current_instance {
+                ConsensusMessage::Prepare {slot: _, view: _, tc: _, proposals: _, } => self.use_fast_path,  //Only PrepareQC should try to compute a FastQC
+                _ => false,
+            };
 
             println!("qc maker weight {:?}", qc_maker.votes.len());
 
@@ -444,35 +447,33 @@ impl Core {
                     println!("QC formed");
                     self.current_qcs_formed += 1;
 
-                    let current_instance = self
-                        .current_header
-                        .consensus_messages
-                        .get(&digest)
-                        .unwrap();
+                    // let current_instance = self
+                    //     .current_header
+                    //     .consensus_messages
+                    //     .get(&digest)
+                    //     .unwrap();
                     match current_instance {
-                        ConsensusMessage::Prepare {
-                            slot,
-                            view,
-                            tc: _,
-                            proposals,
-                        } => {
+                        ConsensusMessage::Prepare {slot, view, tc: _, proposals,} 
+                        => {
                             debug!("Prepare QC formed in slot {:?}", slot);
-                            // Create a tip proposal for the header which contains the prepare message,
-                            // so that it can be committed as part of the proposals
-                            let leader_tip_proposal: Proposal = Proposal {
-                                header_digest: self.current_header.digest(),
-                                height: self.current_header.height(),
-                            };
+                            debug!("Prepare has slot: {}, view: {}, digest: {}", slot, view, current_instance.digest());
+
+                            //TODO: FIXME: (I assume this is the leader tip optimization): Re-factor this to be set at Header propose time already.
+                            // Create a tip proposal for the header which contains the prepare message, so that it can be committed as part of the proposals
+                            let leader_tip_proposal: Proposal = Proposal {header_digest: self.current_header.digest(), height: self.current_header.height(),};
                             // Add this cert to the proposals for this instance
-                            let mut new_proposals = proposals.clone();
+                            let mut new_proposals = proposals.clone(); 
                             new_proposals.insert(self.name, leader_tip_proposal);
 
-                            let new_consensus_message = ConsensusMessage::Confirm {
-                                slot: *slot,
-                                view: *view,
-                                qc,
-                                proposals: new_proposals,
+                            if qc_maker.try_fast {
+                                panic!("should not be running in fast mode currently");
+                            }
+                            
+                            let new_consensus_message = match qc_maker.try_fast {
+                                true => ConsensusMessage::Commit {slot: *slot, view: *view,  qc, proposals: new_proposals,}, // Create Commit if we have FastPrepareQC
+                                false => ConsensusMessage::Confirm {slot: *slot, view: *view,  qc, proposals: new_proposals,},
                             };
+                            //let new_consensus_message = ConsensusMessage::Confirm {slot: *slot, view: *view,  qc, proposals: new_proposals,};
 
                             // Send this new instance to the proposer
                             self.tx_info
@@ -480,19 +481,10 @@ impl Core {
                                 .await
                                 .expect("Failed to send info");
                         }
-                        ConsensusMessage::Confirm {
-                            slot,
-                            view,
-                            qc: _,
-                            proposals,
-                        } => {
+                        ConsensusMessage::Confirm {slot, view, qc: _,proposals,}
+                        => {
                             debug!("Commit QC formed in slot {:?}", slot);
-                            let new_consensus_message = ConsensusMessage::Commit {
-                                slot: *slot,
-                                view: *view,
-                                qc,
-                                proposals: proposals.clone(),
-                            };
+                            let new_consensus_message = ConsensusMessage::Commit {slot: *slot, view: *view, qc, proposals: proposals.clone(),};
 
                             // Send this new instance to the proposer
                             self.tx_info
@@ -500,12 +492,7 @@ impl Core {
                                 .await
                                 .expect("Failed to send info");
                         }
-                        ConsensusMessage::Commit {
-                            slot: _,
-                            view: _,
-                            qc: _,
-                            proposals: _,
-                        } => {}
+                        ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals: _, } => {}
                     };
                 }
             }
@@ -718,8 +705,11 @@ impl Core {
                         }
                     },
                     None => {
-                        // Any prepare is valid for view 1
-                        ticket_valid = *view == 1;
+                        // Any prepare is valid for view 1 //TODO: Add option for sequential ticket enforcement + bounding
+                        if !self.use_parallel_proposals {
+                            panic!("Parallel proposals should be true");
+                        }
+                        ticket_valid = *view == 1 && self.use_parallel_proposals; //With parallel proposals turned on, should have prepare ticket. FIXME: ADD THIS
                     },
                 };
 
@@ -729,11 +719,13 @@ impl Core {
             },
             ConsensusMessage::Confirm { slot, view, qc, proposals: _ } => {
                 // Ensure that the QC is valid, and that we are in the same view
-                qc.verify(&self.committee).is_ok() && self.views.get(slot).unwrap() == view
+               //qc.verify(&self.committee).is_ok() && self.views.get(slot).unwrap() == view
+                self.views.get(slot).unwrap() == view && verify_confirm(consensus_message, &self.committee)
             },
-            ConsensusMessage::Commit { slot, view, qc, proposals: _ } => {
+            ConsensusMessage::Commit { slot, view, qc, proposals } => {
                 // Ensure that the QC is valid, and that we are in the same view
-                qc.verify(&self.committee).is_ok() && self.views.get(slot).unwrap() == view
+                //qc.verify(&self.committee).is_ok() && self.views.get(slot).unwrap() == view
+                self.views.get(slot).unwrap() == view && verify_commit(consensus_message, &self.committee)
             },
         }
     }
@@ -803,7 +795,7 @@ impl Core {
                     } => {
                         println!("processing commit message");
                         debug!("processing commit in slot {:?}", slot);
-                        self.process_commit_message(consensus_message.clone(), header).await?;
+                        self.process_commit_message(consensus_message.clone(), header).await?; //FIXME: Does this need to be a copy?
                     }
                 }
             }
@@ -856,6 +848,7 @@ impl Core {
                     .request_signature(prepare_message.digest())
                     .await;
                 consensus_sigs.push((prepare_message.digest(), sig));
+                debug!("Prepare-Vote for slot: {}, view: {},has digest: {}", slot, view, prepare_message.digest());
             }
             _ => {}
         }
@@ -870,8 +863,8 @@ impl Core {
         match confirm_message {
             ConsensusMessage::Confirm {
                 slot,
-                view: _,
-                qc: _,
+                view,
+                qc,
                 proposals: _,
             } => {
                 // Already checked that we were in the right view from validity checks, so just
@@ -885,6 +878,7 @@ impl Core {
                     .request_signature(confirm_message.digest())
                     .await;
                 consensus_sigs.push((confirm_message.digest(), sig));
+                debug!("Confirm-Vote for slot: {}, view: {}, qc_dig {:?} -> has digest: {}", slot, view, qc.id , confirm_message.digest());
             }
             _ => {}
         }

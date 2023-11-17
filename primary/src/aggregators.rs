@@ -65,7 +65,7 @@ pub struct QCMaker {
     pub votes: Vec<(PublicKey, Signature)>,
     used: HashSet<PublicKey>,
 
-    try_fast: bool,  //TODO: Configure it for Fast path (if it's a Quorummaker for Prepare)
+    pub try_fast: bool,  //TODO: Configure it for Fast path (if it's a Quorummaker for Prepare)
     qc_dig: Digest, 
 }
 

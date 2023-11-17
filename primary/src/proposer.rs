@@ -118,7 +118,12 @@ impl Proposer {
               // Instead of including Certificate as parent => include digest.
         }
 
+
         debug!("Created {:?}", header);
+
+        for (digest, _) in &header.consensus_messages {
+           debug!("Header has {:?}", digest);
+        }
 
         #[cfg(feature = "benchmark")]
         for digest in header.payload.keys() {
@@ -182,11 +187,12 @@ impl Proposer {
                     debug!("received consensus info");
 
                     match &info {
-                        ConsensusMessage::Prepare { slot: _, view: _, tc: _, proposals: _} => {
+                        ConsensusMessage::Prepare { slot, view, tc: _, proposals: _} => {
                             if self.use_special_rule {
                                 self.is_special = true;
                             }
                             self.num_active_instances +=1;
+                            debug!("prepare has digest: {}", info.digest());
                         },
                         ConsensusMessage::Confirm { slot: _, view: _, qc: _, proposals: _} => {
                             self.is_special = true;

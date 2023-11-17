@@ -12,6 +12,7 @@ use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
 use log::debug;
 use serde::{Deserialize, Serialize};
+use core::panic;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryInto;
 use std::fmt;
@@ -64,6 +65,13 @@ impl Hash for Proposal {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+pub enum ConsensusType {
+    Prepare,
+    Confirm,
+    Commit
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub enum ConsensusMessage {  //TODO: Easier to re-factor into a single message type, and just add an enum for "type"?
     Prepare {
         slot: Slot,
@@ -84,6 +92,95 @@ pub enum ConsensusMessage {  //TODO: Easier to re-factor into a single message t
         qc: QC, //ConfirmQC
         proposals: HashMap<PublicKey, Proposal>,
     },
+}
+
+pub fn verify_commit(consensus_message: &ConsensusMessage, committee: &Committee) -> bool {
+    
+    match consensus_message {
+        ConsensusMessage::Commit{ slot, view, qc, proposals } => {
+            let mut hasher = Sha512::new();
+            hasher.update(slot.to_le_bytes());
+            hasher.update(view.to_le_bytes());
+            //hasher.update(proposal_digest(consensus_message)); FIXME: ADD THIS AND DEBUG
+            hasher.update((0 as u8).to_le_bytes());
+            let prepare_id = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
+
+            debug!("PrepareIDCheck has slot: {}, view: {}, digest: {}", slot, view, prepare_id);
+
+            if qc.votes.len() == committee.size() { //verify fast QC (3f+1 Prepare Votes)
+                //Alternatively could check stake if stake is full
+                //Check ID
+                if prepare_id != qc.id {
+                    return false;
+                }
+                 //Check Sigs.  
+                qc.verify(committee).is_ok()
+
+            }
+            else{ //SlowQC only has 2f+1 Confirm Votes
+                //TODO: If Confirm hashes proposals instead of prepare_id we don't need the iterative hashing...
+
+                //TODO: Need to have digest of the confirm vote
+                // Confirm vote has digest = 
+                let mut hasher = Sha512::new();
+                hasher.update(slot.to_le_bytes());
+                hasher.update(view.to_le_bytes());
+                hasher.update(&prepare_id.0);
+                hasher.update((1 as u8).to_le_bytes());
+                let confirm_id = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
+
+                debug!("ConfirmIDCheck for slot: {}, view: {}, qc_dig {:?} -> has digest: {}", slot, view, prepare_id , confirm_id);
+
+                if confirm_id != qc.id {
+                    panic!("ids don't match");
+                    return false;
+                }
+                 //Check Sigs. 
+                qc.verify(committee).is_ok()
+            }
+        },
+        _ => false
+
+    }
+}
+
+//  //TODO: Check that ID of QC belongs to digest of Confirm. 
+//                 //TODO: FIXME: Commit QC has to check that it's signatures for Confirm Votes.  / PrepareVotes for fast.
+//                 //I.e. re-construct id and check that QC.id = recon-ID
+//                 //re-con ID = Confirm(s, v, proposals).digest()   //FIXME: add proposal_digest to ConsensusMessage .digest
+//                 // For prepare QC check id = Prepare... + verify 3f+1 sigs.
+//                 let fast_size = self.committee.fast_threshold() as usize;
+//                 if qc.votes.len() == fast_size { //verify fast QC
+//                     let id = &ConsensusMessage::Prepare { slot: *slot, view: *view, tc: None, proposals: proposals.clone() }.digest();
+//                     //
+//                 }
+//                 else{
+//                     let id = ConsensusMessage::Confirm { slot: *slot, view: *view, qc: QC::default(), proposals: proposals.clone() }.digest();
+//                 }
+//                 true
+
+pub fn verify_confirm(consensus_message: &ConsensusMessage, committee: &Committee) -> bool {
+    match consensus_message {
+        ConsensusMessage::Confirm { slot, view, qc, proposals } => {
+
+            //Check ID
+            let mut hasher = Sha512::new();
+            hasher.update(slot.to_le_bytes());
+            hasher.update(view.to_le_bytes());
+            //hasher.update(proposal_digest(consensus_message)); FIXME: ADD THIS AND DEBUG
+            hasher.update((0 as u8).to_le_bytes());
+            let prepare_id = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
+
+            if prepare_id != qc.id {
+                return false;
+            }
+    
+            //Check Sigs.
+            qc.verify(committee).is_ok()
+        },
+        _ => false,
+    }
+    
 }
 
 pub fn proposal_digest(consensus_message: &ConsensusMessage) -> Digest {
@@ -121,6 +218,7 @@ impl Hash for ConsensusMessage {
             } => {
                 hasher.update(slot.to_le_bytes());
                 hasher.update(view.to_le_bytes());
+                //hasher.update(proposal_digest(self)); FIXME: ADD THIS AND DEBUG
                 //hasher.update(tc.digest().0);
                 // NOTE: Indicates a prepare message
                 hasher.update((0 as u8).to_le_bytes());
@@ -133,7 +231,8 @@ impl Hash for ConsensusMessage {
             } => {
                 hasher.update(slot.to_le_bytes());
                 hasher.update(view.to_le_bytes());
-                hasher.update(qc.digest().0);
+                hasher.update(&qc.id);
+                //hasher.update(qc.digest().0);
                 // NOTE: Indicates a confirm message
                 hasher.update((1 as u8).to_le_bytes());
             }
@@ -145,7 +244,8 @@ impl Hash for ConsensusMessage {
             } => {
                 hasher.update(slot.to_le_bytes());
                 hasher.update(view.to_le_bytes());
-                hasher.update(qc.digest().0);
+                hasher.update(&qc.id);
+                //hasher.update(qc.digest().0);
                 // NOTE: Indicates a commit message
                 hasher.update((2 as u8).to_le_bytes());
             }
@@ -153,6 +253,8 @@ impl Hash for ConsensusMessage {
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }
 }
+
+
 
 impl std::hash::Hash for ConsensusMessage {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
