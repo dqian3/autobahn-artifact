@@ -458,6 +458,7 @@ impl Core {
                         //Creates a dummy vote with the same id as this vote, but only the waiting digest as consensus sigs
                         //Upon triggering timer, it will call loopback again, which will get the QC and proceed. 
                         //By including only the digest of the missing instance we avoid duplicates. 
+                            //Alternatively could modify QCMaker such that it wipes the QC after first use
 
                     let t_vote = Vote {
                         id: vote.id.clone(), 
