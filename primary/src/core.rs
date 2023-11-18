@@ -187,8 +187,8 @@ impl Core {
                 use_optimistic_tips: true,     //default = true (TODO: implement non optimistic tip option)
                 use_parallel_proposals: true,    //default = true (TODO: implement sequential slot option)
                 max_open_consensus_instances,
-                fast_path_timeout: 50,
-                car_timeout: 200,
+                fast_path_timeout: 500,
+                car_timeout: 1000,
                 car_timer_futures: FuturesUnordered::new(),
             }
             .run()
