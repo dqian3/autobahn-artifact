@@ -10,7 +10,7 @@ use crate::messages::{
 };
 use crate::primary::{Height, PrimaryMessage, Slot, View};
 use crate::synchronizer::Synchronizer;
-use crate::timer::Timer;
+use crate::timer::{Timer, CarTimer};
 use async_recursion::async_recursion;
 use bytes::Bytes;
 use config::{Committee, Stake};
@@ -114,7 +114,9 @@ pub struct Core {
     use_optimistic_tips: bool,     //default = true (TODO: implement non optimistic tip option)
     use_parallel_proposals: bool,  //default = true (TODO: implement sequential slot option)
     max_open_consensus_instances: u64, //limit k on number of open honest instances (k+f instances can be open) => if require QC, then hard limit to k.
-
+    fast_path_timeout: u64,
+    car_timeout: u64,
+    car_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = Vote> + Send>>>,
 }
 
 impl Core {
@@ -185,6 +187,9 @@ impl Core {
                 use_optimistic_tips: true,     //default = true (TODO: implement non optimistic tip option)
                 use_parallel_proposals: true,    //default = true (TODO: implement sequential slot option)
                 max_open_consensus_instances,
+                fast_path_timeout: 50,
+                car_timeout: 200,
+                car_timer_futures: FuturesUnordered::new(),
             }
             .run()
             .await;
@@ -449,15 +454,22 @@ impl Core {
             // {
                 if qc_opt.is_none() {
                     // Slow QC is available but we should wait for Fast
-                    //TODO: Start timers.
+                    //Start timer for Fast:
+                        //Creates a dummy vote with the same id as this vote, but only the waiting digest as consensus sigs
+                        //Upon triggering timer, it will call loopback again, which will get the QC and proceed. 
+                        //By including only the digest of the missing instance we avoid duplicates. 
 
-                    //Timer should be able to ask qc_maker (needs to find whether qc.maker still exists -- i.e. needs digest)
-                    //Timer needs to find out whether current_instance is still ongoing ()
-                    //Timer needs to check if all QCs attached are ready. (current_qcs == all active) => if so, check if car is ready.
-                      // => elegant: just call with Vote again. But this time mark it special such that it tries to use qc_maker.get instead of append.
-                     let timer = Timer::new(tc.slot, tc.view + 1, self.timeout_delay);
-                    self.timer_futures.push(Box::pin(timer));
-                    self.timers.insert((tc.slot, tc.view + 1));
+                    let t_vote = Vote {
+                        id: vote.id.clone(), 
+                        height: 0, 
+                        origin: PublicKey::default(), 
+                        author: PublicKey::default(), 
+                        signature: Signature::default(), 
+                        consensus_sigs: vec![(digest.clone(), Signature::default())]
+                    };
+                    let fast_timer = CarTimer::new(t_vote, self.fast_path_timeout);
+                    self.car_timer_futures.push(Box::pin(fast_timer));
+                    //self.timers.insert((tc.slot, tc.view + 1));
                 }
 
                 else if let Some(qc) = qc_opt { //If QC = some (i.e. FastPathQC succeed, or SlowPathQC suceed if running without FP)
@@ -514,16 +526,52 @@ impl Core {
             }
         }
 
-        // Add the vote to the votes aggregator for the actual header
-        let dissemination_cert = self.votes_aggregator.append(vote, &self.committee, &self.current_header)?;
-
-        // If there are no consensus instances in the header then only wait for the dissemination cert (f+1) votes
-        let dissemination_ready: bool = self.current_header.consensus_messages.is_empty() && dissemination_cert.is_some();
         // If there are some consensus instances in the header then wait for 2f+1 votes to form QCs
-        let consensus_ready: bool = !self.current_header.consensus_messages.is_empty() && self.current_qcs_formed == num_active_consensus_messages;
-        debug!("sentToProposer {:?}, diss_ready {:?}, consensus_ready {:?}", self.sent_cert_to_proposer, dissemination_ready, consensus_ready);
+                //let consensus_ready: bool = !self.current_header.consensus_messages.is_empty() && self.current_qcs_formed == num_active_consensus_messages;
+        //NEW: Consider consensus ready if there is nothing we need to wait for either!
+        let consensus_ready: bool = self.current_header.consensus_messages.is_empty() || self.current_qcs_formed == num_active_consensus_messages;
 
-        if !self.sent_cert_to_proposer && (dissemination_ready || consensus_ready) {
+        //Next: Check whether Car is ready to go
+        let vote_id = vote.id.clone();
+        let car_timeout = is_loopback && vote.consensus_sigs.is_empty();
+
+        // Add the vote to the votes aggregator for the actual header
+        //Note: car_cert_ready is true if QC exists (f+1 votes) 
+        //=> aggregator will ignore new votes after (in particular it will ignore the fake loopback vote)
+        let (car_cert_ready, first) = self.votes_aggregator.append(vote, &self.committee, &self.current_header)?;
+           
+        //only take the dissemination QC if consensus is ready, or we have timed out (this avoids needless copies)
+        let dissemination_cert = match consensus_ready || car_timeout {
+            true => self.votes_aggregator.get()?, 
+            false => None
+        };
+       
+             //Old: If there are no consensus instances in the header then only wait for the dissemination cert (f+1) votes
+             //let dissemination_ready: bool = self.current_header.consensus_messages.is_empty() && dissemination_cert.is_some();
+        //New: dissemination ready as soon as 
+        let dissemination_ready: bool = car_cert_ready && dissemination_cert.is_some();
+
+        debug!("sentToProposer {:?}, diss_ready {:?}, consensus_ready {:?}", 
+            self.sent_cert_to_proposer, dissemination_ready, consensus_ready);
+
+
+        //If ready to disseminate car (dissemination cert exists) but waiting for consensus 
+        if dissemination_ready && !consensus_ready && first { //first => start only one Timer
+            let t_vote = Vote {
+                id: vote_id, 
+                height: 0, 
+                origin: PublicKey::default(), 
+                author: PublicKey::default(), 
+                signature: Signature::default(), 
+                consensus_sigs: vec![], //Create dummy vote with no sigs => this indicates its the Car timeout
+            };
+            let fast_timer = CarTimer::new(t_vote, self.fast_path_timeout);
+            self.car_timer_futures.push(Box::pin(fast_timer));
+            //self.timers.insert((tc.slot, tc.view + 1));
+        }
+
+        //if !self.sent_cert_to_proposer && (dissemination_ready || consensus_ready) {
+        if !self.sent_cert_to_proposer && (dissemination_ready && consensus_ready) {    
             //debug!("Assembled {:?}", dissemination_cert.unwrap());
             println!("diss ready {:?}, consensus ready {:?}", dissemination_ready, consensus_ready);
 
@@ -1397,6 +1445,8 @@ impl Core {
 
                 // We receive an event that timer expired
                 Some((slot, view)) = self.timer_futures.next() => self.local_timeout_round(slot, view).await,
+
+                Some(vote) = self.car_timer_futures.next() => self.process_vote(vote, true).await,
 
             };
             match result {

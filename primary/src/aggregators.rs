@@ -13,6 +13,8 @@ pub struct VotesAggregator {
     pub votes: Vec<(PublicKey, Signature)>,
     used: HashSet<PublicKey>,
     diss_cert: Option<Certificate>,
+
+    complete: bool, 
 }
 
 impl VotesAggregator {
@@ -22,6 +24,7 @@ impl VotesAggregator {
             votes: Vec::new(),
             used: HashSet::new(),
             diss_cert: None,
+            complete: false,
         }
     }
 
@@ -30,7 +33,10 @@ impl VotesAggregator {
         vote: Vote,
         committee: &Committee,
         header: &Header,
-    ) -> DagResult<Option<Certificate>> {
+    ) -> DagResult<(bool, bool)> {
+        if self.complete {
+            return Ok((true, false));
+        }
         let author = vote.author;
         // Ensure it is the first time this authority votes.
         println!("author is {:?}", author);
@@ -51,9 +57,15 @@ impl VotesAggregator {
 
                 self.diss_cert = Some(dissemination_cert);
             }
+            self.complete = true;
             //return Ok(self.diss_cert.clone());
+            return Ok((true, true));
         }
+        Ok((false, false))
+        //Ok(self.diss_cert.clone())
+    }
 
+    pub fn get(&mut self,) -> DagResult<Option<Certificate>> {
         Ok(self.diss_cert.clone())
     }
 }
@@ -67,6 +79,7 @@ pub struct QCMaker {
 
     pub try_fast: bool,  //TODO: Configure it for Fast path (if it's a Quorummaker for Prepare)
     qc_dig: Digest, 
+    first: bool, 
 }
 
 impl QCMaker {
@@ -75,8 +88,9 @@ impl QCMaker {
             weight: 0,
             votes: Vec::new(),
             used: HashSet::new(),
-            try_fast: false, //TODO: explicitly set it. (NOT done via constructor) 
+            try_fast: false, // explicitly set it. (NOT done via constructor) 
             qc_dig: Digest::default(),
+            first: true, 
         }
     }
 
@@ -115,7 +129,9 @@ impl QCMaker {
         }
         else if self.weight >= committee.quorum_threshold() {
             self.qc_dig = vote_dig;
-            return Ok((true, None))
+            let first = self.first;
+            self.first = false;
+            return Ok((first, None)); //Only say qc_ready ONCE for 2f+1 => I.e. only one timer will be started
         }
 
         Ok((false, None))
