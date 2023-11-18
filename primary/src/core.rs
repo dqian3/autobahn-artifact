@@ -541,7 +541,7 @@ impl Core {
         let (car_cert_ready, first) = self.votes_aggregator.append(vote, &self.committee, &self.current_header)?;
            
         //only take the dissemination QC if consensus is ready, or we have timed out (this avoids needless copies)
-        let dissemination_cert = match consensus_ready || car_timeout {
+        let dissemination_cert = match car_cert_ready && (consensus_ready || car_timeout) {
             true => self.votes_aggregator.get()?, 
             false => None
         };
