@@ -452,7 +452,7 @@ impl Core {
             if qc_ready {
             // if let Some(qc) = qc_maker.append(vote.author, (digest.clone(), sig.clone()), &self.committee)?
             // {
-                if qc_opt.is_none() {
+                if qc_opt.is_none() && self.use_fast_path {
                     // Slow QC is available but we should wait for Fast
                     //Start timer for Fast:
                         //Creates a dummy vote with the same id as this vote, but only the waiting digest as consensus sigs
@@ -545,7 +545,7 @@ impl Core {
         let consensus_ready = consensus_ready || car_timeout;
         //only take the dissemination QC if consensus is ready, or we have timed out (this avoids needless copies)
         let dissemination_cert = match car_cert_ready && consensus_ready {
-            true => self.votes_aggregator.get()?, 
+            true => self.votes_aggregator.get()?, //Get will only return Cert ONCE
             false => None
         };
        
@@ -570,7 +570,6 @@ impl Core {
             };
             let fast_timer = CarTimer::new(t_vote, self.fast_path_timeout);
             self.car_timer_futures.push(Box::pin(fast_timer));
-            //self.timers.insert((tc.slot, tc.view + 1));
         }
 
         //if !self.sent_cert_to_proposer && (dissemination_ready || consensus_ready) {

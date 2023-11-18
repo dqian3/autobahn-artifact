@@ -15,6 +15,7 @@ pub struct VotesAggregator {
     diss_cert: Option<Certificate>,
 
     complete: bool, 
+    get_once: bool,
 }
 
 impl VotesAggregator {
@@ -25,6 +26,7 @@ impl VotesAggregator {
             used: HashSet::new(),
             diss_cert: None,
             complete: false,
+            get_once: true, 
         }
     }
 
@@ -66,7 +68,14 @@ impl VotesAggregator {
     }
 
     pub fn get(&mut self,) -> DagResult<Option<Certificate>> {
-        Ok(self.diss_cert.clone())
+        if self.get_once {
+            self.get_once = false;
+            Ok(self.diss_cert.clone())
+        }
+        else{
+           Ok(None) 
+        }
+        
     }
 }
 
@@ -80,6 +89,7 @@ pub struct QCMaker {
     pub try_fast: bool,  //TODO: Configure it for Fast path (if it's a Quorummaker for Prepare)
     qc_dig: Digest, 
     first: bool, 
+    completed: bool,
 }
 
 impl QCMaker {
@@ -91,6 +101,7 @@ impl QCMaker {
             try_fast: false, // explicitly set it. (NOT done via constructor) 
             qc_dig: Digest::default(),
             first: true, 
+            completed: false,
         }
     }
 
@@ -125,6 +136,7 @@ impl QCMaker {
         if self.weight >= committee.fast_threshold() {
             // Ensure QC is only made once.
             self.weight = 0; 
+            self.completed = true;
             return Ok((true, Some(QC { id: vote_dig, votes: self.votes.clone() })))
         }
         else if self.weight >= committee.quorum_threshold() {
@@ -139,6 +151,9 @@ impl QCMaker {
 
     //Call this function to fetch slowQC after fastQC timer expires
     pub fn get_qc(&mut self) -> DagResult<(bool, Option<QC>)> {
+        if self.completed {
+            return Ok((false, None)); //Already finished fast.
+        }
         ensure!(
             self.qc_dig != Digest::default(),  //I.e. SlowQC is ready!
             DagError::InvalidSlowQCRequest
