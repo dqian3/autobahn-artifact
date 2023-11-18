@@ -539,9 +539,11 @@ impl Core {
         //Note: car_cert_ready is true if QC exists (f+1 votes) 
         //=> aggregator will ignore new votes after (in particular it will ignore the fake loopback vote)
         let (car_cert_ready, first) = self.votes_aggregator.append(vote, &self.committee, &self.current_header)?;
-           
+        
+        //Consider consensus "ready" if we timed out (i.e. just move on without waiting for consensus)
+        let consensus_ready = consensus_ready || car_timeout;
         //only take the dissemination QC if consensus is ready, or we have timed out (this avoids needless copies)
-        let dissemination_cert = match car_cert_ready && (consensus_ready || car_timeout) {
+        let dissemination_cert = match car_cert_ready && consensus_ready {
             true => self.votes_aggregator.get()?, 
             false => None
         };
