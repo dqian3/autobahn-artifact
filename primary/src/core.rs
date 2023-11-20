@@ -94,6 +94,8 @@ pub struct Core {
     high_proposals: HashMap<Slot, ConsensusMessage>,
     high_qcs: HashMap<Slot, ConsensusMessage>, // NOTE: Store the latest QC for each slot
     qc_makers: HashMap<Digest, QCMaker>,
+    pqc_makers: HashMap<(Slot, View), QCMaker>,
+    cqc_makers: HashMap<(Slot, View), QCMaker>,
     current_qcs_formed: usize,
     tc_makers: HashMap<(Slot, View), TCMaker>,
     prepare_tickets: VecDeque<ConsensusMessage>,
@@ -176,6 +178,8 @@ impl Core {
                 high_qcs: HashMap::with_capacity(2 * gc_depth as usize),
                 high_proposals: HashMap::with_capacity(2 * gc_depth as usize),
                 qc_makers: HashMap::with_capacity(2 * gc_depth as usize),
+                pqc_makers: HashMap::with_capacity(2 * gc_depth as usize),
+                cqc_makers: HashMap::with_capacity(2 * gc_depth as usize),
                 tc_makers: HashMap::with_capacity(2 * gc_depth as usize),
                 prepare_tickets: VecDeque::with_capacity(2 * gc_depth as usize),
                 timeout_delay,
@@ -417,18 +421,24 @@ impl Core {
                 false => self.current_header.consensus_messages.get(digest).unwrap(),
             };
             
-            // If not already a qc maker for this consensus instance message, create one
-            match self.qc_makers.get(&digest) {
-                Some(_) => {
-                    println!("QC Maker already exists");
-                }
-                None => {
-                    self.qc_makers.insert(digest.clone(), QCMaker::new());
-                }
-            }
+            let qc_maker = match current_instance {
+                ConsensusMessage::Prepare {slot, view, tc: _, proposals: _, } => self.pqc_makers.entry((*slot, *view)).or_insert(QCMaker::new()),  //Only PrepareQC should try to compute a FastQC
+                ConsensusMessage::Confirm {slot, view, qc: _, proposals: _, } => self.cqc_makers.entry((*slot, *view)).or_insert(QCMaker::new()),  //Only PrepareQC should try to compute a FastQC
+                _ => unreachable!("Should never try and fetch a qc_maker for Commit"),
+            };
 
-            // Otherwise get the qc maker for this instance
-            let qc_maker = self.qc_makers.get_mut(&digest).unwrap();
+        //    // If not already a qc maker for this consensus instance message, create one
+        //     match self.qc_makers.get(&digest) {
+        //         Some(_) => {
+        //             println!("QC Maker already exists");
+        //         }
+        //         None => {
+        //             self.qc_makers.insert(digest.clone(), QCMaker::new());
+        //         }
+        //     }
+
+        //     // Otherwise get the qc maker for this instance
+        //     let qc_maker = self.qc_makers.get_mut(&digest).unwrap();
 
             //Configure qc_maker to try to use Fast Path
             qc_maker.try_fast = match current_instance {
@@ -988,7 +998,10 @@ impl Core {
                 //self.high_qcs.insert(*slot, confirm_message.clone()); //ALTERNATIVELY insert into high_qcs...
 
                 //update bounding heuristic
-                self.last_committed_slot = max(slot.clone(), self.last_committed_slot);
+                let sl = *slot;
+                self.last_committed_slot = max(sl, self.last_committed_slot);
+
+
 
                 //self.begin_slot_from_commit(&commit_message).await.expect("Failed to start next consensus");
 
@@ -1002,6 +1015,10 @@ impl Core {
                         .await
                         .expect("Failed to send headers");
                 }
+
+                //GC QC_Makers
+                self.pqc_makers.retain(|(s, _), _| s != &sl); 
+                self.cqc_makers.retain(|(s, _), _| s != &sl); 
             }
             _ => {}
         }
