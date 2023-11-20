@@ -616,6 +616,8 @@ pub struct Vote {
     pub author: PublicKey,
     pub signature: Signature,
     pub consensus_sigs: Vec<(Digest, Signature)>,
+    //special loopback information. PURELY LOCAL HACK
+    pub consensus_instance: Option<ConsensusMessage>,
 }
 
 impl Vote {
@@ -632,6 +634,7 @@ impl Vote {
             author: *author,
             signature: Signature::default(),
             consensus_sigs,
+            consensus_instance: None,
         };
         let signature = signature_service.request_signature(vote.digest()).await;
         Self { signature, ..vote }
@@ -691,6 +694,7 @@ impl Vote {
             author,
             signature: Signature::default(),
             consensus_sigs,
+            consensus_instance: None,
         };
         let signature = Signature::new(&vote.digest(), &secret);
         Self { signature, ..vote }
@@ -1363,7 +1367,8 @@ impl TC {
                                 *weight += committee.stake(&timeout.author);
                 
                                 if *weight >= committee.validity_threshold(){
-                                    winning_view = *view;
+                                    winning_view = *view;    
+                                    //Slightly imprecise: The f+1 prepares may have different views. FIXME: We should be using the f+1st smallest (If there is more than f+1 votes => keep upgrading view)
                                     winning_proposals = proposals.clone();
                                 }
                             }

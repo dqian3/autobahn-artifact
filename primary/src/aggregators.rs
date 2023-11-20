@@ -14,8 +14,8 @@ pub struct VotesAggregator {
     used: HashSet<PublicKey>,
     diss_cert: Option<Certificate>,
 
-    complete: bool, 
-    get_once: bool,
+    complete: bool,  //Indicate that QC is ready. Stops adding new signatures
+    get_once: bool,  //Indicate that QC was already used. E.g. do not re-submit QC if Timer triggers after we succeeded already
 }
 
 impl VotesAggregator {
@@ -88,8 +88,8 @@ pub struct QCMaker {
 
     pub try_fast: bool,  //TODO: Configure it for Fast path (if it's a Quorummaker for Prepare)
     qc_dig: Digest, 
-    first: bool, 
-    completed: bool,
+    first: bool,          //Indicate when SlowQC is first ready -> I.e. only start ONE timer.
+    completed_fast: bool, //Indicate whether or not we succeeded on Fast Path. This stops timer that loopbacks from re-submitting QC
 }
 
 impl QCMaker {
@@ -101,7 +101,7 @@ impl QCMaker {
             try_fast: false, // explicitly set it. (NOT done via constructor) 
             qc_dig: Digest::default(),
             first: true, 
-            completed: false,
+            completed_fast: false,
         }
     }
 
@@ -136,7 +136,7 @@ impl QCMaker {
         if self.weight >= committee.fast_threshold() {
             // Ensure QC is only made once.
             self.weight = 0; 
-            self.completed = true;
+            self.completed_fast = true;
             return Ok((true, Some(QC { id: vote_dig, votes: self.votes.clone() })))
         }
         else if self.weight >= committee.quorum_threshold() {
@@ -151,7 +151,7 @@ impl QCMaker {
 
     //Call this function to fetch slowQC after fastQC timer expires
     pub fn get_qc(&mut self) -> DagResult<(bool, Option<QC>)> {
-        if self.completed {
+        if self.completed_fast {
             return Ok((false, None)); //Already finished fast.
         }
         ensure!(

@@ -200,8 +200,8 @@ impl Core {
         println!("Received own header");
         debug!("Processing own header with {:?} consensus messages", header.consensus_messages.len());
 
-        //GC all obsolete qc_makers //WARNING: Can only do this here if Votes are piggybacked on cars (i.e. not external.)
-        self.qc_makers.clear();
+        //GC all obsolete qc_makers //WARNING: FIXME: Can only do this here if Votes are piggybacked on cars (i.e. not external and never delayed)
+        //self.qc_makers.clear();
 
         // Update the current header we are collecting votes for
         self.current_header = header.clone();
@@ -380,14 +380,19 @@ impl Core {
         Ok(())
     }
 
+
+
     #[async_recursion]
     async fn process_vote(&mut self, vote: Vote, is_loopback: bool) -> DagResult<()> {
         debug!("Processing Vote {:?}", vote);
 
         // NOTE: If sending externally then need map of open consensus instances
 
+        //If consensus vote loopback => Look up digest directly instead of via current instance.
+        let consensus_loopback = is_loopback && !vote.consensus_instance.is_some();
+
         // Only process votes for the current header
-        if vote.id != self.current_header.id {
+        if vote.id != self.current_header.id || consensus_loopback {
             println!("Wrong header");
             return Ok(())
         }
@@ -407,13 +412,11 @@ impl Core {
             debug!("current header {:?}", self.current_header);
             debug!("digest is {:?}", digest);
             //Get vote type of the instance: Prepare/Confirm-vote
-            let current_instance = self
-                        .current_header
-                        .consensus_messages
-                        .get(digest)
-                        .unwrap();
-
-
+            let current_instance = match consensus_loopback {
+                true => &vote.consensus_instance.as_ref().unwrap(), //Just look it up from the buffered instance 
+                false => self.current_header.consensus_messages.get(digest).unwrap(),
+            };
+            
             // If not already a qc maker for this consensus instance message, create one
             match self.qc_makers.get(&digest) {
                 Some(_) => {
@@ -423,8 +426,6 @@ impl Core {
                     self.qc_makers.insert(digest.clone(), QCMaker::new());
                 }
             }
-
-            
 
             // Otherwise get the qc maker for this instance
             let qc_maker = self.qc_makers.get_mut(&digest).unwrap();
@@ -441,6 +442,8 @@ impl Core {
             // TODO: Put fast path logic in qc maker (decide whether to wait timeout etc.), add
             // external messages
 
+            //If qc_ready, but qc_opt = None => This is first Slow QC;
+            //If qc_ready and qc_opt => This is FastQC or Consumption of Loopback to fetch SlowQC
             let (qc_ready, qc_opt) = match is_loopback {
                 false => qc_maker.append(vote.author, (digest.clone(), sig.clone()), &self.committee)?,
                 true => {
@@ -461,12 +464,13 @@ impl Core {
                             //Alternatively could modify QCMaker such that it wipes the QC after first use
 
                     let t_vote = Vote {
-                        id: vote.id.clone(), 
+                        id: Digest::default(),//vote.id.clone(), 
                         height: 0, 
                         origin: PublicKey::default(), 
                         author: PublicKey::default(), 
                         signature: Signature::default(), 
-                        consensus_sigs: vec![(digest.clone(), Signature::default())]
+                        consensus_sigs: vec![(digest.clone(), Signature::default())],
+                        consensus_instance: Some(current_instance.clone()), //Buffer instance. Current header could've advanced in the meantime and thus no longer include this instance by the time timer triggers
                     };
                     let fast_timer = CarTimer::new(t_vote, self.fast_path_timeout);
                     self.car_timer_futures.push(Box::pin(fast_timer));
@@ -537,7 +541,7 @@ impl Core {
         let car_timeout = is_loopback && vote.consensus_sigs.is_empty();
 
         // Add the vote to the votes aggregator for the actual header
-        //Note: car_cert_ready is true if QC exists (f+1 votes) 
+        //Note: car_cert_ready is true if QC exists (f+1 votes); first = true when QC is formed the first time (this starts timer only once)
         //=> aggregator will ignore new votes after (in particular it will ignore the fake loopback vote)
         let (car_cert_ready, first) = self.votes_aggregator.append(vote, &self.committee, &self.current_header)?;
         
@@ -545,7 +549,7 @@ impl Core {
         let consensus_ready = consensus_ready || car_timeout;
         //only take the dissemination QC if consensus is ready, or we have timed out (this avoids needless copies)
         let dissemination_cert = match car_cert_ready && consensus_ready {
-            true => self.votes_aggregator.get()?, //Get will only return Cert ONCE
+            true => self.votes_aggregator.get()?, //Get will only return Cert ONCE. I.e. if timer loopbacks after it's already been used, then nothing happens.
             false => None
         };
        
@@ -567,6 +571,7 @@ impl Core {
                 author: PublicKey::default(), 
                 signature: Signature::default(), 
                 consensus_sigs: vec![], //Create dummy vote with no sigs => this indicates its the Car timeout
+                consensus_instance: None
             };
             let fast_timer = CarTimer::new(t_vote, self.fast_path_timeout);
             self.car_timer_futures.push(Box::pin(fast_timer));
