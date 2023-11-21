@@ -86,6 +86,8 @@ pub struct Core {
     cancel_handlers: HashMap<Height, Vec<CancelHandler>>,
 
     current_proposal_tips: HashMap<PublicKey, Proposal>,
+
+    consensus_instances: HashMap<(Slot, Digest), ConsensusMessage>,
     views: HashMap<Slot, View>,
     timers: HashSet<(Slot, View)>,
     last_voted_consensus: HashSet<(Slot, View)>,
@@ -93,7 +95,7 @@ pub struct Core {
     // TODO: Add garbage collection, related to how deep pipeline (parameter k)
     high_proposals: HashMap<Slot, ConsensusMessage>,
     high_qcs: HashMap<Slot, ConsensusMessage>, // NOTE: Store the latest QC for each slot
-    qc_makers: HashMap<Digest, QCMaker>,
+    qc_makers: HashMap<(Slot, Digest), QCMaker>,
     pqc_makers: HashMap<(Slot, View), QCMaker>,
     cqc_makers: HashMap<(Slot, View), QCMaker>,
     current_qcs_formed: usize,
@@ -172,6 +174,7 @@ impl Core {
                 cancel_handlers: HashMap::with_capacity(2 * gc_depth as usize),
                 already_proposed_slots: HashSet::new(),
                 current_proposal_tips: HashMap::with_capacity(2 * gc_depth as usize),
+                consensus_instances: HashMap::with_capacity(2 * gc_depth as usize),
                 views: HashMap::with_capacity(2 * gc_depth as usize),
                 timers: HashSet::with_capacity(2 * gc_depth as usize),
                 last_voted_consensus: HashSet::with_capacity(2 * gc_depth as usize),
@@ -214,6 +217,16 @@ impl Core {
 
         // Reset the votes aggregator.
         self.votes_aggregator = VotesAggregator::new();
+
+        //Set all consensus instances
+        for (dig, consensus) in &header.consensus_messages {
+            match consensus { //TODO: Re-factor ConsensusMessages to all have slot/view, option for TC/QC, and a type.
+                ConsensusMessage::Prepare {slot, view, tc: _, proposals: _, } => {self.consensus_instances.insert((*slot, dig.clone()), consensus.clone());},  
+                ConsensusMessage::Confirm {slot, view, qc: _, proposals: _, } => {self.consensus_instances.insert((*slot, dig.clone()), consensus.clone());},  
+                _ => {},
+            };
+            //self.consensus_instances.insert(dig.clone(), consensus.clone());
+        }
 
         // Broadcast the new header in a reliable manner.
         let addresses = self
@@ -344,19 +357,19 @@ impl Core {
         {
             println!("voting for header");
             // Process the consensus instances contained in the header (if any)
-            let consensus_sigs = self
+            let consensus_votes = self
                 .process_consensus_messages(&header)
                 .await?;
 
-            println!("Consensus sigs length {:?}", consensus_sigs.len());
-            debug!("Consensus sigs length {:?}", consensus_sigs.len());
+            println!("Consensus sigs length {:?}", consensus_votes.len());
+            debug!("Consensus sigs length {:?}", consensus_votes.len());
 
             // Create a vote for the header and any valid consensus instances
             let vote = Vote::new(
                 &header,
                 &self.name,
                 &mut self.signature_service,
-                consensus_sigs,
+                consensus_votes,
             )
             .await;
             println!("Created vote");
@@ -393,9 +406,9 @@ impl Core {
         // NOTE: If sending externally then need map of open consensus instances
 
         //If consensus vote loopback => Look up digest directly instead of via current instance.
-        let consensus_loopback = is_loopback && !vote.consensus_instance.is_some();
+        let consensus_loopback = is_loopback && !vote.consensus_votes.is_empty();//vote.consensus_instance.is_some();
 
-        // Only process votes for the current header
+        // Only process votes for the current header (or loopbacks for consensus)
         if vote.id != self.current_header.id || consensus_loopback {
             println!("Wrong header");
             return Ok(())
@@ -411,21 +424,32 @@ impl Core {
         debug!("num active instances {:?}", num_active_consensus_messages);
 
         // Iterate through vote for each consensus instance
-        for (digest, sig) in vote.consensus_sigs.iter() {
+        for (slot, digest, sig) in vote.consensus_votes.iter() {
 
             debug!("current header {:?}", self.current_header);
             debug!("digest is {:?}", digest);
             //Get vote type of the instance: Prepare/Confirm-vote
-            let current_instance = match consensus_loopback {
-                true => &vote.consensus_instance.as_ref().unwrap(), //Just look it up from the buffered instance 
-                false => self.current_header.consensus_messages.get(digest).unwrap(),
-            };
+
+            let opt_curr_instance = self.consensus_instances.get(&(*slot, digest.clone()));
+            if opt_curr_instance.is_none() {
+                debug!("consensus instance slot has committed, skip processing vote");
+                continue;
+            }
+            let current_instance = opt_curr_instance.unwrap();
+            //Why does this code not work?
+            //let current_instance = self.consensus_instances.get(&(*slot, digest.clone())).unwrap(); //todo: Throw a panic if it does not exist.
+
+            // let current_instance = match consensus_loopback {
+            //     true => &vote.consensus_instance.as_ref().unwrap(), //Just look it up from the buffered instance 
+            //     false => self.current_header.consensus_messages.get(digest).unwrap(),
+            // };
             
-            let qc_maker = match current_instance {
-                ConsensusMessage::Prepare {slot, view, tc: _, proposals: _, } => self.pqc_makers.entry((*slot, *view)).or_insert(QCMaker::new()),  //Only PrepareQC should try to compute a FastQC
-                ConsensusMessage::Confirm {slot, view, qc: _, proposals: _, } => self.cqc_makers.entry((*slot, *view)).or_insert(QCMaker::new()),  //Only PrepareQC should try to compute a FastQC
-                _ => unreachable!("Should never try and fetch a qc_maker for Commit"),
-            };
+            let qc_maker = self.qc_makers.entry((*slot, digest.clone())).or_insert(QCMaker::new());
+            // let qc_maker = match current_instance {
+            //     ConsensusMessage::Prepare {slot, view, tc: _, proposals: _, } => self.qc_makers.entry((*slot, digest.clone())).or_insert(QCMaker::new()), //self.pqc_makers.entry((*slot, *view)).or_insert(QCMaker::new()), 
+            //     ConsensusMessage::Confirm {slot, view, qc: _, proposals: _, } => self.qc_makers.entry((*slot, digest.clone())).or_insert(QCMaker::new()), //self.cqc_makers.entry((*slot, *view)).or_insert(QCMaker::new()),  
+            //     _ => unreachable!("Should never try and fetch a qc_maker for Commit"),
+            // };
 
         //    // If not already a qc maker for this consensus instance message, create one
         //     match self.qc_makers.get(&digest) {
@@ -479,8 +503,8 @@ impl Core {
                         origin: PublicKey::default(), 
                         author: PublicKey::default(), 
                         signature: Signature::default(), 
-                        consensus_sigs: vec![(digest.clone(), Signature::default())],
-                        consensus_instance: Some(current_instance.clone()), //Buffer instance. Current header could've advanced in the meantime and thus no longer include this instance by the time timer triggers
+                        consensus_votes: vec![(*slot, digest.clone(), Signature::default())], 
+                        //consensus_instance: Some(current_instance.clone()), //Buffer instance. Current header could've advanced in the meantime and thus no longer include this instance by the time timer triggers
                     };
                     let fast_timer = CarTimer::new(t_vote, self.fast_path_timeout);
                     self.car_timer_futures.push(Box::pin(fast_timer));
@@ -548,7 +572,7 @@ impl Core {
 
         //Next: Check whether Car is ready to go
         let vote_id = vote.id.clone();
-        let car_timeout = is_loopback && vote.consensus_sigs.is_empty();
+        let car_timeout = is_loopback && vote.consensus_votes.is_empty();
 
         // Add the vote to the votes aggregator for the actual header
         //Note: car_cert_ready is true if QC exists (f+1 votes); first = true when QC is formed the first time (this starts timer only once)
@@ -580,8 +604,8 @@ impl Core {
                 origin: PublicKey::default(), 
                 author: PublicKey::default(), 
                 signature: Signature::default(), 
-                consensus_sigs: vec![], //Create dummy vote with no sigs => this indicates its the Car timeout
-                consensus_instance: None
+                consensus_votes: vec![], //Create dummy vote with no sigs => this indicates its the Car timeout
+                //consensus_instance: None
             };
             let fast_timer = CarTimer::new(t_vote, self.fast_path_timeout);
             self.car_timer_futures.push(Box::pin(fast_timer));
@@ -836,10 +860,10 @@ impl Core {
     async fn process_consensus_messages(
         &mut self,
         header: &Header,
-    ) -> DagResult<Vec<(Digest, Signature)>> {
+    ) -> DagResult<Vec<(Slot, Digest, Signature)>> {
         // Map between consensus instance digest and a signature indicating a vote for that
         // instance
-        let mut consensus_sigs: Vec<(Digest, Signature)> = Vec::new();
+        let mut consensus_votes: Vec<(Slot, Digest, Signature)> = Vec::new();
 
         for (_, consensus_message) in &header.consensus_messages {
             println!("processing instance");
@@ -854,7 +878,7 @@ impl Core {
                     } => {
                         println!("processing prepare message");
                         debug!("processing prepare in slot {:?}", slot);
-                        self.process_prepare_message(consensus_message, consensus_sigs.as_mut()).await;
+                        self.process_prepare_message(consensus_message, consensus_votes.as_mut()).await;
                     },
                     ConsensusMessage::Confirm {
                         slot,
@@ -866,7 +890,7 @@ impl Core {
                         debug!("processing confirm in slot {:?}", slot);
                         // Start syncing on the proposals if we haven't already
                         self.synchronizer.get_proposals(consensus_message, header).await?;
-                        self.process_confirm_message(consensus_message, consensus_sigs.as_mut()).await;
+                        self.process_confirm_message(consensus_message, consensus_votes.as_mut()).await;
                     },
                     ConsensusMessage::Commit {
                         slot,
@@ -882,15 +906,15 @@ impl Core {
             }
         }
 
-        println!("Returning from process consensus size of consensus sigs {:?}", consensus_sigs.len());
-        Ok(consensus_sigs)
+        println!("Returning from process consensus size of consensus sigs {:?}", consensus_votes.len());
+        Ok(consensus_votes)
     }
 
     //#[async_recursion]
     async fn process_prepare_message(
         &mut self,
         prepare_message: &ConsensusMessage,
-        consensus_sigs: &mut Vec<(Digest, Signature)>,
+        consensus_sigs: &mut Vec<(Slot, Digest, Signature)>,
     ) {
         match prepare_message {
             ConsensusMessage::Prepare {
@@ -932,7 +956,7 @@ impl Core {
                     .signature_service
                     .request_signature(prepare_message.digest())
                     .await;
-                consensus_sigs.push((prepare_message.digest(), sig));
+                consensus_sigs.push((*slot, prepare_message.digest(), sig));
                 debug!("Prepare-Vote for slot: {}, view: {},has digest: {}", slot, view, prepare_message.digest());
             }
             _ => {}
@@ -943,7 +967,7 @@ impl Core {
     async fn process_confirm_message(
         &mut self,
         confirm_message: &ConsensusMessage,
-        consensus_sigs: &mut Vec<(Digest, Signature)>,
+        consensus_sigs: &mut Vec<(Slot, Digest, Signature)>,
     ) {
         match confirm_message {
             ConsensusMessage::Confirm {
@@ -962,7 +986,7 @@ impl Core {
                     .signature_service
                     .request_signature(confirm_message.digest())
                     .await;
-                consensus_sigs.push((confirm_message.digest(), sig));
+                consensus_sigs.push((*slot, confirm_message.digest(), sig));
                 debug!("Confirm-Vote for slot: {}, view: {}, qc_dig {:?} -> has digest: {}", slot, view, qc.id , confirm_message.digest());
             }
             _ => {}
@@ -1016,15 +1040,28 @@ impl Core {
                         .expect("Failed to send headers");
                 }
 
-                //GC QC_Makers
-                self.pqc_makers.retain(|(s, _), _| s != &sl); 
-                self.cqc_makers.retain(|(s, _), _| s != &sl); 
+                // Garbage collect
+                self.clean_slot(sl).await?;
             }
             _ => {}
         }
 
         Ok(())
     }
+
+    #[async_recursion]
+    async fn clean_slot(&mut self, slot: Slot) -> DagResult<()> {
+
+        //GC Consensus instances
+        self.consensus_instances.retain(|(s, _), _| s != &slot); 
+
+        //GC QC_Makers
+        self.qc_makers.retain(|(s, _), _| s != &slot); 
+        // self.pqc_makers.retain(|(s, _), _| s != &sl); 
+        // self.cqc_makers.retain(|(s, _), _| s != &sl); 
+        Ok(())
+    }
+
 
     #[async_recursion]
     async fn process_loopback(&mut self, consensus_message: ConsensusMessage, header: Header) -> DagResult<()> {

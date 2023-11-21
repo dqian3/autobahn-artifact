@@ -609,15 +609,32 @@ impl fmt::Display for Header {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+pub struct ConsensusVote {
+    pub slot: Slot,
+    pub digest: Digest,
+    pub sig: Signature,
+}
+impl ConsensusVote {
+    pub async fn new(slot: Slot, digest: Digest, sig: Signature) -> Self {
+        Self {
+            slot,
+            digest,
+            sig
+        }
+    }
+}
+
+
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Vote {
     pub id: Digest, //the header we are voting for.
     pub height: Height,
     pub origin: PublicKey,
     pub author: PublicKey,
     pub signature: Signature,
-    pub consensus_sigs: Vec<(Digest, Signature)>,
+    pub consensus_votes: Vec<(Slot, Digest, Signature)>,
     //special loopback information. PURELY LOCAL HACK
-    pub consensus_instance: Option<ConsensusMessage>,
+    //pub consensus_instance: Option<ConsensusMessage>,
 }
 
 impl Vote {
@@ -625,7 +642,7 @@ impl Vote {
         header: &Header,
         author: &PublicKey,
         signature_service: &mut SignatureService,
-        consensus_sigs: Vec<(Digest, Signature)>,
+        consensus_votes: Vec<(Slot, Digest, Signature)>,
     ) -> Self {
         let vote = Self {
             id: header.id.clone(),
@@ -633,8 +650,8 @@ impl Vote {
             origin: header.author,
             author: *author,
             signature: Signature::default(),
-            consensus_sigs,
-            consensus_instance: None,
+            consensus_votes,
+            //consensus_instance: None,
         };
         let signature = signature_service.request_signature(vote.digest()).await;
         Self { signature, ..vote }
@@ -683,7 +700,7 @@ impl fmt::Debug for Vote {
 impl Vote {
     pub fn new_from_key(
         header: Header,
-        consensus_sigs: Vec<(Digest, Signature)>,
+        consensus_votes: Vec<(Slot, Digest, Signature)>,
         author: PublicKey,
         secret: &SecretKey,
     ) -> Self {
@@ -693,8 +710,8 @@ impl Vote {
             origin: header.origin(),
             author,
             signature: Signature::default(),
-            consensus_sigs,
-            consensus_instance: None,
+            consensus_votes,
+            //consensus_instance: None,
         };
         let signature = Signature::new(&vote.digest(), &secret);
         Self { signature, ..vote }
