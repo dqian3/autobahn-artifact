@@ -96,8 +96,8 @@ pub struct Core {
     high_proposals: HashMap<Slot, ConsensusMessage>,
     high_qcs: HashMap<Slot, ConsensusMessage>, // NOTE: Store the latest QC for each slot
     qc_makers: HashMap<(Slot, Digest), QCMaker>,
-    pqc_makers: HashMap<(Slot, View), QCMaker>,
-    cqc_makers: HashMap<(Slot, View), QCMaker>,
+    // pqc_makers: HashMap<(Slot, View), QCMaker>,
+    // cqc_makers: HashMap<(Slot, View), QCMaker>,
     current_qcs_formed: usize,
     tc_makers: HashMap<(Slot, View), TCMaker>,
     prepare_tickets: VecDeque<ConsensusMessage>,
@@ -108,6 +108,7 @@ pub struct Core {
     // GC the vote aggregators and current headers
     // gc_map: HashMap<Round, Digest>,
   
+    committed_slots: HashSet<Slot>,
     last_committed_slot: u64, 
     //TODO: if we are not enforcing a ticket, then only start when we committed all instances < s-k.
     // If we just check that s-k is committed, but all it's predecessors are not, then we may still open an arbitrary number of instances in the absolute worst case
@@ -117,7 +118,7 @@ pub struct Core {
     use_fast_path: bool,           //default = false
     use_optimistic_tips: bool,     //default = true (TODO: implement non optimistic tip option)
     use_parallel_proposals: bool,  //default = true (TODO: implement sequential slot option)
-    max_open_consensus_instances: u64, //limit k on number of open honest instances (k+f instances can be open) => if require QC, then hard limit to k.
+    k: u64, //limit k on number of open honest instances (k+f instances can be open) => if require QC, then hard limit to k.
     fast_path_timeout: u64,
     car_timeout: u64,
     car_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = Vote> + Send>>>,
@@ -143,7 +144,7 @@ impl Core {
         tx_info: Sender<ConsensusMessage>,
         leader_elector: LeaderElector,
         timeout_delay: u64,
-        max_open_consensus_instances: u64,
+        k: u64,
     ) {
         tokio::spawn(async move {
             Self {
@@ -181,19 +182,20 @@ impl Core {
                 high_qcs: HashMap::with_capacity(2 * gc_depth as usize),
                 high_proposals: HashMap::with_capacity(2 * gc_depth as usize),
                 qc_makers: HashMap::with_capacity(2 * gc_depth as usize),
-                pqc_makers: HashMap::with_capacity(2 * gc_depth as usize),
-                cqc_makers: HashMap::with_capacity(2 * gc_depth as usize),
+                // pqc_makers: HashMap::with_capacity(2 * gc_depth as usize),
+                // cqc_makers: HashMap::with_capacity(2 * gc_depth as usize),
                 tc_makers: HashMap::with_capacity(2 * gc_depth as usize),
                 prepare_tickets: VecDeque::with_capacity(2 * gc_depth as usize),
                 timeout_delay,
                 timer_futures: FuturesUnordered::new(),
                 //gc_map: HashMap::with_capacity(2 * gc_depth as usize),
-    
+                
+                committed_slots: HashSet::with_capacity(2 * gc_depth as usize),
                 last_committed_slot: 0,
                 use_fast_path: true,           //default = false
                 use_optimistic_tips: true,     //default = true (TODO: implement non optimistic tip option)
                 use_parallel_proposals: true,    //default = true (TODO: implement sequential slot option)
-                max_open_consensus_instances,
+                k,
                 fast_path_timeout: 500,
                 car_timeout: 1000,
                 car_timer_futures: FuturesUnordered::new(),
@@ -327,19 +329,8 @@ impl Core {
             println!("updating tip");
             debug!("updating tip");
 
-            // TODO: Move to a function try_prepare_next_slot()
             // Since we received a new tip, check if any of our pending tickets are ready
-            if !self.prepare_tickets.is_empty() {
-                println!("checking prepare ticket");
-                // Get the first buffered prepare ticket
-                let prepare_msg = self.prepare_tickets.pop_front().unwrap();
-                let ticket_ready = self.is_prepare_ticket_ready(&prepare_msg).await.unwrap();
-
-                // If the ticket is not ready rebuffer it to the front
-                if !ticket_ready {
-                    self.prepare_tickets.push_front(prepare_msg);
-                }
-            }
+            self.try_prepare_waiting_slots().await?;
         }
 
         println!("after height check");
@@ -396,7 +387,6 @@ impl Core {
         }
         Ok(())
     }
-
 
 
     #[async_recursion]
@@ -706,9 +696,27 @@ impl Core {
         }
     }
 
+    #[async_recursion]
+    async fn try_prepare_waiting_slots(&mut self) -> DagResult<()> {
+        //Could there even be multiple prepares?
+    
+        for i in 0..self.prepare_tickets.len() {
+            println!("checking prepare ticket");
+            // Get the first buffered prepare ticket
+            let prepare_msg = self.prepare_tickets.pop_front().unwrap();
+            self.is_prepare_ticket_ready(&prepare_msg).await?;
+        }
+
+        Ok(())
+    }
+
+     // if !self.is_prepare_ticket_ready(prepare_message).await.unwrap() {
+                //     println!("prepare ticket not ready");
+                //     self.prepare_tickets.push_back(prepare_message.clone());
+                // }
 
 
-    async fn is_prepare_ticket_ready(&mut self, prepare_message: &ConsensusMessage) -> DagResult<bool> {
+    async fn is_prepare_ticket_ready(&mut self, prepare_message: &ConsensusMessage) -> DagResult<()> {
         match prepare_message {
             ConsensusMessage::Prepare { slot, view: _, tc: _, proposals } => {
                 let new_proposals = self.current_proposal_tips.clone();
@@ -734,7 +742,7 @@ impl Core {
                         println!("forwarding to the leader");
                     
                     }
-                    return Ok(true)
+                    return Ok(())
                 }
                 
                 
@@ -742,14 +750,20 @@ impl Core {
                 // If we are the leader of the next slot, view 1, and have already proposed in the next slot
                 // then don't process the prepare ticket, just return true
                 if self.already_proposed_slots.contains(&(slot + 1)) {
-                    return Ok(true)
+                    return Ok(())
                 }
 
                 //Check that we have bounded instances.
-                if slot + 1 > self.last_committed_slot + self.max_open_consensus_instances {
+                        // => Wait for instance s - k to commit. This ensures that <= k consecutive instances are open at any time (since we also only start if have prepare ticket from s-1)
+                if self.committed_slots.contains(&(slot + 1 - self.k)) {
                     println!("too many instances open");
-                    return Ok(true)
+                    self.prepare_tickets.push_back(prepare_message.clone());
+                    return Ok(())
                 }
+                // if slot + 1 > self.last_committed_slot + self.k {
+                //     println!("too many instances open");
+                //     return Ok(true)
+                // }
             
 
                 // If there is enough coverage and we haven't already proposed in the next slot then create a new
@@ -765,20 +779,22 @@ impl Core {
 
                     println!("The new slot is {:?}", slot + 1);
                     self.already_proposed_slots.insert(slot + 1);
-                    self.prepare_tickets.pop_front();
+                    //self.prepare_tickets.pop_front();
 
                     self.tx_info
                         .send(new_prepare_instance)
                         .await
                         .expect("failed to send info to proposer");
-                    return Ok(true);
+                    return Ok(());
                 } else {
                     // Not enough coverage, add this prepare ticket to the pending queue
                     // until enough new proposals have arrived
-                    return Ok(false);
+                    println!("prepare ticket not ready");
+                    self.prepare_tickets.push_back(prepare_message.clone());
+                    return Ok(());
                 }
             },
-            _ => Ok(true),
+            _ => Ok(()),
         }
     }
 
@@ -926,10 +942,11 @@ impl Core {
                 // Check if this prepare message can be used for a ticket to propose in the next
                 // slot
                 // TODO: Remove from process_header
-                if !self.is_prepare_ticket_ready(prepare_message).await.unwrap() {
-                    println!("prepare ticket not ready");
-                    self.prepare_tickets.push_back(prepare_message.clone());
-                }
+                self.is_prepare_ticket_ready(prepare_message).await;
+                // if !self.is_prepare_ticket_ready(prepare_message).await.unwrap() {
+                //     println!("prepare ticket not ready");
+                //     self.prepare_tickets.push_back(prepare_message.clone());
+                // }
                     //TODO: WE could start timers only locally after checking our local coverage as well.
 
                 // If we haven't already started the timer for the next slot, start it
@@ -1021,10 +1038,10 @@ impl Core {
                 self.timers.remove(&(*slot, *view));
                 //self.high_qcs.insert(*slot, confirm_message.clone()); //ALTERNATIVELY insert into high_qcs...
 
-                //update bounding heuristic
                 let sl = *slot;
+                //update bounding heuristic
                 self.last_committed_slot = max(sl, self.last_committed_slot);
-
+                self.committed_slots.insert(sl);
 
 
                 //self.begin_slot_from_commit(&commit_message).await.expect("Failed to start next consensus");
@@ -1040,8 +1057,11 @@ impl Core {
                         .expect("Failed to send headers");
                 }
 
-                // Garbage collect
-                self.clean_slot(sl).await?;
+                self.try_prepare_waiting_slots().await?;
+
+                // Garbage collect (can be ascyn)
+                //self.clean_slot(sl);
+                self.clean_slot_periods(sl);
             }
             _ => {}
         }
@@ -1059,6 +1079,24 @@ impl Core {
         self.qc_makers.retain(|(s, _), _| s != &slot); 
         // self.pqc_makers.retain(|(s, _), _| s != &sl); 
         // self.cqc_makers.retain(|(s, _), _| s != &sl); 
+        Ok(())
+    }
+
+    #[async_recursion]
+    async fn clean_slot_periods(&mut self, slot: Slot) -> DagResult<()> {
+
+        //slot periodics
+        let slot_period = slot % self.k;
+        let k = self.k;
+
+        //GC Consensus instances
+        self.consensus_instances.retain(|(s, _), _| s % k != slot_period); 
+        self.committed_slots.retain(|s| s % k != slot_period);
+
+        //GC QC_Makers
+        self.qc_makers.retain(|(s, _), _| s % k != slot_period); 
+     
+
         Ok(())
     }
 
@@ -1092,9 +1130,8 @@ impl Core {
             ConsensusMessage::Prepare { slot: _, view: _, tc: _, proposals: _ } => {
                 // We have a ticket for instance (slot + 1, 1), so check if we have enough coverage
                 // to send a prepare message, otherwise buffer it
-                if !self.is_prepare_ticket_ready(&consensus_message).await.unwrap() {
-                    self.prepare_tickets.push_back(consensus_message);
-                }
+                self.is_prepare_ticket_ready(&consensus_message).await?;
+                 
             },
             ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals: _ } => {
                 // Process any forwarded commit messages
