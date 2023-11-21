@@ -192,7 +192,7 @@ impl Core {
                 
                 committed_slots: HashSet::with_capacity(2 * gc_depth as usize),
                 last_committed_slot: 0,
-                use_fast_path: true,           //default = false
+                use_fast_path: false,           //default = false
                 use_optimistic_tips: true,     //default = true (TODO: implement non optimistic tip option)
                 use_parallel_proposals: true,    //default = true (TODO: implement sequential slot option)
                 k,
@@ -205,7 +205,7 @@ impl Core {
         });
     }
 
-    async fn process_own_header(&mut self, header: Header) -> DagResult<()> {
+    async fn process_own_header(&mut self, mut header: Header) -> DagResult<()> {
         println!("Received own header");
         debug!("Processing own header with {:?} consensus messages", header.consensus_messages.len());
 
@@ -220,10 +220,32 @@ impl Core {
         // Reset the votes aggregator.
         self.votes_aggregator = VotesAggregator::new();
 
+        let mut new_prepares: HashMap<Digest, ConsensusMessage> = HashMap::new();
+
+        // Augment consensus messages with latest prepares
+        for (dig, consensus) in &header.consensus_messages {
+            match consensus { //TODO: Re-factor ConsensusMessages to all have slot/view, option for TC/QC, and a type.
+                ConsensusMessage::Prepare {slot, view, tc, proposals: _, } => {
+                    // Add new proposal tips
+                    let new_prepare_msg = ConsensusMessage::Prepare { slot: *slot, view: *view, tc: tc.clone(), proposals: self.current_proposal_tips.clone() };
+                    new_prepares.insert(dig.clone(), new_prepare_msg);
+                },  
+                _ => {},
+            };
+        }
+
+        for dig in new_prepares.keys() {
+            let new_prepare = new_prepares.get(dig).unwrap().clone();
+            header.consensus_messages.insert(dig.clone(), new_prepare);
+        }
+
+
         //Set all consensus instances
         for (dig, consensus) in &header.consensus_messages {
             match consensus { //TODO: Re-factor ConsensusMessages to all have slot/view, option for TC/QC, and a type.
-                ConsensusMessage::Prepare {slot, view, tc: _, proposals: _, } => {self.consensus_instances.insert((*slot, dig.clone()), consensus.clone());},  
+                ConsensusMessage::Prepare {slot, view, tc: _, proposals, } => {
+                    self.consensus_instances.insert((*slot, dig.clone()), consensus.clone());
+                },  
                 ConsensusMessage::Confirm {slot, view, qc: _, proposals: _, } => {self.consensus_instances.insert((*slot, dig.clone()), consensus.clone());},  
                 _ => {},
             };
@@ -736,7 +758,7 @@ impl Core {
                         slot: slot + 1,
                         view: 1,
                         tc: None,
-                        proposals: new_proposals,
+                        proposals: HashMap::new(),
                     };
 
                     println!("The new slot is {:?}", slot + 1);
@@ -834,7 +856,7 @@ impl Core {
                         slot: slot + 1,
                         view: 1,
                         tc: None,
-                        proposals: new_proposals,
+                        proposals: HashMap::new(),
                     };
 
                     println!("The new slot is {:?}", slot + 1);
@@ -1017,6 +1039,10 @@ impl Core {
                     self.timers.insert((slot + 1, 1));
                 }
 
+
+                for (pk, proposal) in proposals {
+                    debug!("prepare slot {:?}, proposal height {:?}", slot, proposal.height);
+                }
                 debug!("prepare vote in slot {:?}", slot);
 
                 // Ensure that we don't vote for another prepare in this slot, view
@@ -1530,21 +1556,22 @@ impl Core {
         self.timers.insert((1, 1));
         self.views.insert(1, 1);
 
-        // If we are the first leader then send a prepare
+        // If we are the first leader then create a prepare ticket for slot 1
         if self.name == self.leader_elector.get_leader(1, 1) {
-            println!("We are the first leader creating a prepare msg");
+            println!("We are the first leader creating a prepare ticket");
             let new_prepare_instance = ConsensusMessage::Prepare {
-                slot: 1,
-                view: 1,
+                slot: 0,
+                view: 0,
                 tc: None,
-                proposals: self.current_proposal_tips.clone(),
+                proposals: Header::genesis_proposals(&self.committee),
             };
-            self.already_proposed_slots.insert(1);
-            debug!("sending prepare instance to proposer");
+            self.prepare_tickets.push_back(new_prepare_instance);
+            self.already_proposed_slots.insert(0);
+            /*debug!("sending prepare instance to proposer");
             self.tx_info
                 .send(new_prepare_instance)
                 .await
-                .expect("failed to send info to proposer");
+                .expect("failed to send info to proposer");*/
         }
 
         // Initiate the proposer with a genesis parent
