@@ -14,7 +14,7 @@ pub struct VotesAggregator {
     used: HashSet<PublicKey>,
     diss_cert: Option<Certificate>,
 
-    complete: bool,  //Indicate that QC is ready. Stops adding new signatures
+    pub complete: bool,  //Indicate that QC is ready. Stops adding new signatures
     get_once: bool,  //Indicate that QC was already used. E.g. do not re-submit QC if Timer triggers after we succeeded already
 }
 

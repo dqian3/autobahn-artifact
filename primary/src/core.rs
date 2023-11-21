@@ -394,14 +394,14 @@ impl Core {
     }
 
     fn check_cast_vote(&self, header: &Header) -> bool {
-        //Consider yourself a voter if name within 2f+1 after author
+        //Only 2f+1 replicas need to vote for cars; i.e. skip f //Alternatively: Consider yourself a voter if name within 2f+1 after author 
         let mut start = false;
-        let mut count = 0;
+        let mut count = 1; //start at 1, f do not need to vote.
 
         let mut iter = self.committee.authorities.iter();
     
-        //find origin position. After that check 
-        while count < self.committee.quorum_threshold() {
+        //find origin position. After that identify first f that should not send.
+        while count < self.committee.validity_threshold() {
             let x = iter.next();
             if x.is_none(){
                 iter = self.committee.authorities.iter(); //wrap around
@@ -410,17 +410,41 @@ impl Core {
             let (id, _) = x.unwrap();
             if header.author.eq(&id) {
                 start = true;
+                continue;
             }
             if start {
                 if self.name.eq(id) {
-                    debug!("CAST VOTE for header: {}", header.id);
-                    return true;
+                    debug!("DO NOT CAST VOTE for header: {}", header.id);
+                    return false;
                 }
                 count += 1;
             }
         }
-        debug!("DO NOT CAST VOTE for header: {}", header.id);
-        return false;
+        debug!("CAST VOTE for header: {}", header.id);
+        return true;
+
+        //Alternatively: Count 2f+1 that should send.
+        //let mut count = 0;
+        // while count < self.committee.quorum_threshold() {
+        //     let x = iter.next();
+        //     if x.is_none(){
+        //         iter = self.committee.authorities.iter(); //wrap around
+        //         continue; 
+        //     }
+        //     let (id, _) = x.unwrap();
+        //     if header.author.eq(&id) {
+        //         start = true;
+        //     }
+        //     if start {
+        //         if self.name.eq(id) {
+        //             debug!("CAST VOTE for header: {}", header.id);
+        //             return true;
+        //         }
+        //         count += 1;
+        //     }
+        // }
+        // debug!("DO NOT CAST VOTE for header: {}", header.id);
+        // return false;
     }
 
 
@@ -1466,6 +1490,18 @@ impl Core {
         //         },
         //     }
         // }
+
+        //Check: 
+        //If vote has no consensus sigs and vote.aggregator already has QC => ignore vote.   //TODO: Can also avoid
+        if self.current_header.id.eq(&vote.id) && self.votes_aggregator.complete {
+            if vote.consensus_votes.is_empty() {   //Note: If vote is empty, but self.current_header.consensus_messages is not we can still ignore processing this vote (since it requires no consensus processing)
+                return Err(DagError::CarAlreadySatisfied);
+            }
+            else { //Don't need to check signature (won't use it), but do need to process vote for consensus contents
+                return Ok(());
+            } 
+        }
+
 
         // Verify the vote.
         vote.verify(&self.committee).map_err(DagError::from)

@@ -79,6 +79,10 @@ pub enum DagError {
     #[error("Slow QC not ready")]
     InvalidSlowQCRequest, //TODO: move to ConsensusError
 
+    #[error("Do not need to process this signature")]
+    CarAlreadySatisfied,
+
+
 }
 
 
@@ -156,6 +160,5 @@ pub enum ConsensusError {
 
     #[error("Header of parent ticket not committed")]
     MissingParentTicketHeader,
-
         
 }
