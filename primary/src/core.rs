@@ -192,7 +192,7 @@ impl Core {
                 
                 committed_slots: HashSet::with_capacity(2 * gc_depth as usize),
                 last_committed_slot: 0,
-                use_fast_path: false,           //default = false
+                use_fast_path: true,           //default = false
                 use_optimistic_tips: true,     //default = true (TODO: implement non optimistic tip option)
                 use_parallel_proposals: true,    //default = true (TODO: implement sequential slot option)
                 k,
@@ -227,7 +227,10 @@ impl Core {
             match consensus { //TODO: Re-factor ConsensusMessages to all have slot/view, option for TC/QC, and a type.
                 ConsensusMessage::Prepare {slot, view, tc, proposals: _, } => {
                     // Add new proposal tips
-                    let new_prepare_msg = ConsensusMessage::Prepare { slot: *slot, view: *view, tc: tc.clone(), proposals: self.current_proposal_tips.clone() };
+                    let mut new_proposals = self.current_proposal_tips.clone();
+                    // Leader tip proposal
+                    new_proposals.insert(self.name, Proposal { header_digest: header.digest(), height: header.height() });
+                    let new_prepare_msg = ConsensusMessage::Prepare { slot: *slot, view: *view, tc: tc.clone(), proposals: new_proposals };
                     new_prepares.insert(dig.clone(), new_prepare_msg);
                 },  
                 _ => {},
@@ -599,17 +602,17 @@ impl Core {
 
                             //TODO: FIXME: (I assume this is the leader tip optimization): Re-factor this to be set at Header propose time already.
                             // Create a tip proposal for the header which contains the prepare message, so that it can be committed as part of the proposals
-                            let leader_tip_proposal: Proposal = Proposal {header_digest: self.current_header.digest(), height: self.current_header.height(),};
+                            /*let leader_tip_proposal: Proposal = Proposal {header_digest: self.current_header.digest(), height: self.current_header.height(),};
                             // Add this cert to the proposals for this instance
                             let mut new_proposals = proposals.clone(); 
-                            new_proposals.insert(self.name, leader_tip_proposal);
+                            new_proposals.insert(self.name, leader_tip_proposal);*/
                             
                             let new_consensus_message = match qc_maker.try_fast {
                                 true => {
                                     debug!("taking fast path!");
-                                    ConsensusMessage::Commit {slot: *slot, view: *view,  qc, proposals: new_proposals,}
+                                    ConsensusMessage::Commit {slot: *slot, view: *view,  qc, proposals: proposals.clone() }
                                     }, // Create Commit if we have FastPrepareQC
-                                false => ConsensusMessage::Confirm {slot: *slot, view: *view,  qc, proposals: new_proposals,},
+                                false => ConsensusMessage::Confirm {slot: *slot, view: *view,  qc, proposals: proposals.clone() },
                             };
                             //let new_consensus_message = ConsensusMessage::Confirm {slot: *slot, view: *view,  qc, proposals: new_proposals,};
 
@@ -1567,11 +1570,6 @@ impl Core {
             };
             self.prepare_tickets.push_back(new_prepare_instance);
             self.already_proposed_slots.insert(0);
-            /*debug!("sending prepare instance to proposer");
-            self.tx_info
-                .send(new_prepare_instance)
-                .await
-                .expect("failed to send info to proposer");*/
         }
 
         // Initiate the proposer with a genesis parent
