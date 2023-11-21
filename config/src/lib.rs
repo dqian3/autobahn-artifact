@@ -1,5 +1,5 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crypto::{generate_production_keypair, PublicKey, SecretKey};
+use crypto::{generate_production_keypair, PublicKey, SecretKey, Hash};
 use log::info;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -153,6 +153,7 @@ pub struct Authority {
 #[derive(Clone, Deserialize)]
 pub struct Committee {
     pub authorities: BTreeMap<PublicKey, Authority>,
+    //pub id_map: HashMap<PublicKey, u64>, //position 
 }
 
 impl Import for Committee {}

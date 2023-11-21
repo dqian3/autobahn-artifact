@@ -339,6 +339,11 @@ impl Core {
         // Process the parent certificate
         self.process_certificate(header.clone().parent_cert).await?;
 
+        //If Header has no consensus messages (i.e. is pure car) then only 2f+1 replicas need to vote and reply.
+        if header.consensus_messages.is_empty() && !self.check_cast_vote(&header) {
+            return Ok(());
+        }
+
         // Check if we can vote for this header.
         if self
             .last_voted
@@ -386,6 +391,36 @@ impl Core {
             }
         }
         Ok(())
+    }
+
+    fn check_cast_vote(&self, header: &Header) -> bool {
+        //Consider yourself a voter if name within 2f+1 after author
+        let mut start = false;
+        let mut count = 0;
+
+        let mut iter = self.committee.authorities.iter();
+    
+        //find origin position. After that check 
+        while count < self.committee.quorum_threshold() {
+            let x = iter.next();
+            if x.is_none(){
+                iter = self.committee.authorities.iter(); //wrap around
+                continue; 
+            }
+            let (id, _) = x.unwrap();
+            if header.author.eq(&id) {
+                start = true;
+            }
+            if start {
+                if self.name.eq(id) {
+                    debug!("CAST VOTE for header: {}", header.id);
+                    return true;
+                }
+                count += 1;
+            }
+        }
+        debug!("DO NOT CAST VOTE for header: {}", header.id);
+        return false;
     }
 
 
@@ -698,7 +733,7 @@ impl Core {
 
     #[async_recursion]
     async fn try_prepare_waiting_slots(&mut self) -> DagResult<()> {
-        //Could there even be multiple prepares?
+        //Could there even be multiple prepares? Bounding l <= 4 should make it so that each replica can only be the original leader for one slot? VC leaders are not blocked on coverage (they just propose current tips)
     
         for i in 0..self.prepare_tickets.len() {
             println!("checking prepare ticket");
@@ -755,14 +790,15 @@ impl Core {
 
                 //Check that we have bounded instances.
                         // => Wait for instance s - k to commit. This ensures that <= k consecutive instances are open at any time (since we also only start if have prepare ticket from s-1)
-                if self.committed_slots.contains(&(slot + 1 - self.k)) {
-                    println!("too many instances open");
+                if *slot > self.k && !self.committed_slots.contains(&(slot + 1 - self.k)) {
+                    debug!("too many instances open");
                     self.prepare_tickets.push_back(prepare_message.clone());
                     return Ok(())
                 }
                 // if slot + 1 > self.last_committed_slot + self.k {
                 //     println!("too many instances open");
-                //     return Ok(true)
+                //     self.prepare_tickets.push_back(prepare_message.clone());
+                //     return Ok(())
                 // }
             
 
@@ -1091,7 +1127,7 @@ impl Core {
 
         //GC Consensus instances
         self.consensus_instances.retain(|(s, _), _| s % k != slot_period); 
-        self.committed_slots.retain(|s| s % k != slot_period);
+        //self.committed_slots GC those that are older.
 
         //GC QC_Makers
         self.qc_makers.retain(|(s, _), _| s % k != slot_period); 

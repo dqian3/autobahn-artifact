@@ -163,7 +163,7 @@ impl Primary {
 
         let timeout_delay = 1000;
 
-        let k = 2; //Max open instances.
+        let k = 4; //Max open instances.
 
         // The `Core` receives and handles headers, votes, and certificates from the other primaries.
         Core::spawn(
