@@ -112,6 +112,11 @@ impl Synchronizer {
                         continue;
                     }
 
+                    if proposal.header_digest == delivered_header.digest() {
+                        proposals_vector.push(delivered_header.clone());
+                        continue;
+                    }
+
                     match self.store.read(proposal.header_digest.to_vec()).await? {
                         Some(header) => {
                             println!("in some case");

@@ -20,6 +20,7 @@ use futures::stream::FuturesUnordered;
 use futures::{Future, StreamExt};
 use log::{debug, error, warn};
 use network::{CancelHandler, ReliableSender};
+use std::borrow::BorrowMut;
 //use tokio::time::error::Elapsed;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::Pin;
@@ -205,7 +206,7 @@ impl Core {
         });
     }
 
-    async fn process_own_header(&mut self, header: Header) -> DagResult<()> {
+    async fn process_own_header(&mut self, mut header: Header) -> DagResult<()> {
         println!("Received own header");
         debug!("Processing own header with {:?} consensus messages", header.consensus_messages.len());
         // for (dig, consensus) in &header.consensus_messages {
@@ -226,6 +227,26 @@ impl Core {
 
         // Reset the votes aggregator.
         self.votes_aggregator = VotesAggregator::new();
+
+        // Augment consensus messages with latest prepares
+        let dig = header.digest(); //TODO: Somehow get this call into the loop only?
+        for consensus in header.consensus_messages.values_mut() {
+            match consensus { //TODO: Re-factor ConsensusMessages to all have slot/view, option for TC/QC, and a type.
+                ConsensusMessage::Prepare {slot, view, tc, qc_ticket: _, proposals} => {
+                    let set_proposal = proposals.is_empty(); 
+                     //Set tips to propose if it is a new proposal (empty by default), or winning_proposal = empty. => if there is a winning prop proposals will not be empty
+                    if set_proposal {
+                        // Add new proposal tips
+                        *proposals = self.current_proposal_tips.clone();
+                        // Leader tip proposal
+                        proposals.insert(self.name, Proposal { header_digest: dig.clone(), height: header.height });
+                        
+                    }
+                },  
+                _ => {},
+            };
+        }
+
 
         //Set all consensus instances
         for (dig, consensus) in &header.consensus_messages {
@@ -592,17 +613,17 @@ impl Core {
 
                             //TODO: FIXME: (I assume this is the leader tip optimization): Re-factor this to be set at Header propose time already.
                             // Create a tip proposal for the header which contains the prepare message, so that it can be committed as part of the proposals
-                            let leader_tip_proposal: Proposal = Proposal {header_digest: self.current_header.digest(), height: self.current_header.height(),};
+                            /*let leader_tip_proposal: Proposal = Proposal {header_digest: self.current_header.digest(), height: self.current_header.height(),};
                             // Add this cert to the proposals for this instance
                             let mut new_proposals = proposals.clone(); 
-                            new_proposals.insert(self.name, leader_tip_proposal);
+                            new_proposals.insert(self.name, leader_tip_proposal);*/
                             
                             let new_consensus_message = match qc_maker.try_fast {
                                 true => {
                                     debug!("taking fast path!");
-                                    ConsensusMessage::Commit {slot: *slot, view: *view,  qc, proposals: new_proposals,}
+                                    ConsensusMessage::Commit {slot: *slot, view: *view,  qc, proposals: proposals.clone() }
                                     }, // Create Commit if we have FastPrepareQC
-                                false => ConsensusMessage::Confirm {slot: *slot, view: *view,  qc, proposals: new_proposals,},
+                                false => ConsensusMessage::Confirm {slot: *slot, view: *view,  qc, proposals: proposals.clone() },
                             };
                             //let new_consensus_message = ConsensusMessage::Confirm {slot: *slot, view: *view,  qc, proposals: new_proposals,};
 
@@ -752,7 +773,7 @@ impl Core {
                         view: 1,
                         tc: None,
                         qc_ticket: None, //TODO: Add ticket
-                        proposals: new_proposals,
+                        proposals: HashMap::new(), //new_proposals,
                     };
 
                     println!("The new slot is {:?}", slot + 1);
@@ -859,7 +880,7 @@ impl Core {
                         view: 1,
                         tc: None,
                         qc_ticket,
-                        proposals: new_proposals,
+                        proposals: HashMap::new(), //new_proposals,
                     };
 
                     println!("The new slot is {:?}", slot + 1);
@@ -1067,6 +1088,10 @@ impl Core {
                     self.timers.insert((slot + 1, 1));
                 }
 
+
+                for (pk, proposal) in proposals {
+                    debug!("prepare slot {:?}, proposal height {:?}", slot, proposal.height);
+                }
                 debug!("prepare vote in slot {:?}", slot);
 
                 // Ensure that we don't vote for another prepare in this slot, view
@@ -1419,12 +1444,12 @@ impl Core {
     async fn generate_prepare_from_tc(&mut self, tc: &TC) -> DagResult<()> {
         // Make a new prepare message if we are the next leader.
         if self.name == self.leader_elector.get_leader(tc.slot, tc.view + 1) {
-            let mut winning_proposals = tc.get_winning_proposals(&self.committee);
+            let winning_proposals = tc.get_winning_proposals(&self.committee);
 
-            // If there is no QC we have to propose, then use our current tips for our proposal
-            if winning_proposals.is_empty() {
-                winning_proposals = self.current_proposal_tips.clone();
-            }
+            // If there is no QC we have to propose, then use our current tips for our proposal => happens later
+            // if winning_proposals.is_empty() {
+            //     winning_proposals = self.current_proposal_tips.clone();
+            // }
 
             // Create a prepare message for the next view, containing the ticket and proposals
             // TODO: Low priority can make winning proposals empty
@@ -1582,22 +1607,18 @@ impl Core {
         self.timers.insert((1, 1));
         self.views.insert(1, 1);
 
-        // If we are the first leader then send a prepare
+        // If we are the first leader then create a prepare ticket for slot 1
         if self.name == self.leader_elector.get_leader(1, 1) {
-            println!("We are the first leader creating a prepare msg");
+            println!("We are the first leader creating a prepare ticket");
             let new_prepare_instance = ConsensusMessage::Prepare {
-                slot: 1,
-                view: 1,
+                slot: 0,
+                view: 0,
                 tc: None,
                 qc_ticket: None, 
-                proposals: self.current_proposal_tips.clone(),
+                proposals: Header::genesis_proposals(&self.committee),
             };
-            self.already_proposed_slots.insert(1);
-            debug!("sending prepare instance to proposer");
-            self.tx_info
-                .send(new_prepare_instance)
-                .await
-                .expect("failed to send info to proposer");
+            self.prepare_tickets.push_back(new_prepare_instance);
+            self.already_proposed_slots.insert(0);
         }
 
         // Initiate the proposer with a genesis parent
