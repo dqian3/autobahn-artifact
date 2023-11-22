@@ -71,13 +71,33 @@ pub enum ConsensusType {
     Commit
 }
 
+//TODO: Define identical Commit message
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct CommitQC {
+    pub slot: Slot,
+    view: View,
+    qc: QC, //ConfirmQC
+    proposals: HashMap<PublicKey, Proposal>,
+}
+
+impl CommitQC {
+    pub async fn new(slot: Slot, view: View, qc: QC, proposals: HashMap<PublicKey, Proposal>,) -> Self {
+        Self {
+            slot,
+            view,
+            qc,
+            proposals,
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub enum ConsensusMessage {  //TODO: Easier to re-factor into a single message type, and just add an enum for "type"?
     Prepare {
         slot: Slot,
         view: View,
         tc: Option<TC>, //TC for previous view; if None => must have ticket for previous slot 
-        //TODO: ADD qc ticket from slot s-k to bound instances. (For now: only issue this Prepare if have s-k Committed) => byz can open f more instances without tickets, but honest won't.
+        qc_ticket: Option<CommitQC>, //TODO: ADD qc ticket from slot s-k to bound instances. (For now: only issue this Prepare if have s-k Committed) => byz can open f more instances without tickets, but honest won't.
         proposals: HashMap<PublicKey, Proposal>,
     },
     Confirm {
@@ -92,6 +112,10 @@ pub enum ConsensusMessage {  //TODO: Easier to re-factor into a single message t
         qc: QC, //ConfirmQC
         proposals: HashMap<PublicKey, Proposal>,
     },
+}
+
+pub fn transform_commitQC(commit_qc: CommitQC) -> ConsensusMessage {
+    ConsensusMessage::Commit {slot: commit_qc.slot, view: commit_qc.view, qc: commit_qc.qc, proposals: commit_qc.proposals}
 }
 
 pub fn verify_commit(consensus_message: &ConsensusMessage, committee: &Committee) -> bool {
@@ -186,7 +210,7 @@ pub fn verify_confirm(consensus_message: &ConsensusMessage, committee: &Committe
 pub fn proposal_digest(consensus_message: &ConsensusMessage) -> Digest {
     let mut hasher = Sha512::new();
     match consensus_message {
-        ConsensusMessage::Prepare { slot: _, view: _, tc: _, proposals } => {
+        ConsensusMessage::Prepare { slot: _, view: _, tc: _, qc_ticket: _, proposals } => {
             for (_, proposal) in proposals {
                 hasher.update(proposal.header_digest.0);
             }
@@ -214,6 +238,7 @@ impl Hash for ConsensusMessage {
                 slot,
                 view,
                 tc,
+                qc_ticket,
                 proposals: _,
             } => {
                 hasher.update(slot.to_le_bytes());
@@ -269,6 +294,7 @@ impl PartialEq for ConsensusMessage {
                 slot,
                 view,
                 tc,
+                qc_ticket,
                 proposals,
             } => {
                 return match other {
@@ -276,6 +302,7 @@ impl PartialEq for ConsensusMessage {
                         slot: other_slot,
                         view: other_view,
                         tc: other_tc,
+                        qc_ticket: other_ticket,
                         proposals: other_proposals,
                     } => {
                         slot == other_slot
@@ -331,6 +358,7 @@ impl fmt::Debug for ConsensusMessage {
                 slot,
                 view: _,
                 tc: _,
+                qc_ticket,
                 proposals: _,
             } => {
                 write!(f, "T{})", slot,)
@@ -364,6 +392,7 @@ impl fmt::Display for ConsensusMessage {
                 slot,
                 view,
                 tc,
+                qc_ticket,
                 proposals,
             } => {
                 write!(f, "T{})", slot,)
@@ -1378,7 +1407,7 @@ impl TC {
             match &timeout.high_prop {
                 Some(prepare) => {
                     match prepare {
-                        ConsensusMessage::Prepare { slot, view, tc: _, proposals } => {
+                        ConsensusMessage::Prepare { slot, view, tc: _, qc_ticket: _, proposals } => {
                             if view > &winning_view{
                                 let weight = prepared_feq.entry(prepare.digest()).or_default();
                                 *weight += committee.stake(&timeout.author);

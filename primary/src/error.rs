@@ -82,6 +82,8 @@ pub enum DagError {
     #[error("Do not need to process this signature")]
     CarAlreadySatisfied,
 
+    #[error("Wrong QC ticket")]
+    InvalidQCTicket,
 
 }
 

@@ -30,6 +30,8 @@ const TIMER_RESOLUTION: u64 = 1_000;
 pub enum WaiterMessage {
     SyncBatches(HashMap<Digest, WorkerId>, Header),
     SyncProposals(Vec<Proposal>, ConsensusMessage, Header),
+    // SyncProposalsC(Vec<Proposal>, ConsensusMessage), //Consensus is independent of header.
+    // SyncProposalsCAsync(Vec<Proposal>), //Consensus is independent of header.
     SyncParent(Digest, Header),
     SyncHeader(Digest),
 }

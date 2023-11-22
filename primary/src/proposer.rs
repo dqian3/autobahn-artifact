@@ -187,7 +187,7 @@ impl Proposer {
                     debug!("received consensus info");
 
                     match &info {
-                        ConsensusMessage::Prepare { slot, view, tc: _, proposals: _} => {
+                        ConsensusMessage::Prepare { slot, view, tc: _, qc_ticket: _, proposals: _} => {
                             if self.use_special_rule {
                                 self.is_special = true;
                             }
