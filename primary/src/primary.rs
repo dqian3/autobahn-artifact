@@ -10,7 +10,7 @@ use crate::garbage_collector::GarbageCollector;
 use crate::header_waiter::HeaderWaiter;
 use crate::helper::Helper;
 use crate::leader::LeaderElector;
-use crate::messages::{Certificate, Header, Vote, Timeout, TC, Proposal, ConsensusMessage};
+use crate::messages::{Certificate, Header, Vote, Timeout, TC, Proposal, ConsensusMessage, ConsensusVote, ConsensusRequest};
 use crate::payload_receiver::PayloadReceiver;
 use crate::proposer::Proposer;
 use crate::synchronizer::Synchronizer;
@@ -47,6 +47,8 @@ pub enum PrimaryMessage {
     Timeout(Timeout),
     TC(TC),
     ConsensusMessage(ConsensusMessage),
+    ConsensusRequest(ConsensusRequest),
+    ConsensusVote(ConsensusVote),
     CertificatesRequest(Vec<Digest>, /* requestor */ PublicKey),
     HeadersRequest(Vec<Digest>, /* requestor */ PublicKey),
     ProposalHeadersRequest(Proposal, Height, /* requestor */ PublicKey),
@@ -163,7 +165,7 @@ impl Primary {
 
         let timeout_delay = 1000;
 
-        let k = 4; //Max open instances.
+        let k = 1; //Max open instances.
 
         // The `Core` receives and handles headers, votes, and certificates from the other primaries.
         Core::spawn(

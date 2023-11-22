@@ -285,7 +285,7 @@ impl HeaderWaiter {
                             let id = proposal_digest(&consensus_message);
                             println!("syncing proposals in header waiter");
 
-                            // Ensure we sync only once per header.
+                            // Ensure we sync only once per proposal
                             if self.pending.contains_key(&id) {
                                 continue;
                             }

@@ -361,7 +361,7 @@ impl fmt::Debug for ConsensusMessage {
                 qc_ticket,
                 proposals: _,
             } => {
-                write!(f, "T{})", slot,)
+                write!(f, "Prepare({})", slot,)
             }
 
             ConsensusMessage::Confirm {
@@ -370,7 +370,7 @@ impl fmt::Debug for ConsensusMessage {
                 qc: _,
                 proposals: _,
             } => {
-                write!(f, "T{})", slot,)
+                write!(f, "Confirm({})", slot,)
             }
 
             ConsensusMessage::Commit {
@@ -379,7 +379,7 @@ impl fmt::Debug for ConsensusMessage {
                 qc: _,
                 proposals: _,
             } => {
-                write!(f, "T{})", slot,)
+                write!(f, "Commit({})", slot,)
             }
         }
     }
@@ -619,19 +619,106 @@ impl fmt::Display for Header {
     }
 }
 
+
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ConsensusRequest { //Signed wrapper around ONE ConsensusMessage
+    pub author: PublicKey,
+    pub message: ConsensusMessage,
+    pub sig: Signature,
+    //TODO: Re-factor ConsensusMessage to be structured like this
+    // pub req_type: ConsensusType,
+    // pub slot: Slot,
+    // pub view: View,
+    // pub proposals: HashMap<PublicKey, Proposal>,
+    // pub qc: Option<QC>,
+    // pub tc: Option<TC>
+}
+impl ConsensusRequest {
+    pub async fn new(author: PublicKey, message: ConsensusMessage, signature_service: &mut SignatureService,) -> Self {
+        let req = Self {
+            author,
+            message,
+            sig: Signature::default(),
+        };
+        let sig= signature_service.request_signature(req.message.digest()).await;
+        Self { sig, ..req }
+    }
+
+    pub fn verify(&self, committee: &Committee) -> DagResult<()> {
+        // Ensure the authority has voting rights.
+        ensure!(
+            committee.stake(&self.author) > 0,
+            DagError::UnknownAuthority(self.author)
+        );
+
+        // Check the signature.
+        self.sig.verify(&self.message.digest(), &self.author).map_err(DagError::from)
+    }
+}
+
+impl fmt::Debug for ConsensusRequest {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        return self.message.fmt(f);
+    }
+}
+
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ConsensusVote {
+    pub author: PublicKey,
     pub slot: Slot,
-    pub digest: Digest,
+    pub digest: Digest, //This uniquely captures the (slot,view,proposal) of ConsensusMessage we are voting for. => Can simply sign this, don't need to take Digest of CV
     pub sig: Signature,
 }
 impl ConsensusVote {
-    pub async fn new(slot: Slot, digest: Digest, sig: Signature) -> Self {
-        Self {
+    pub async fn new(author: PublicKey, slot: Slot, digest: Digest, signature_service: &mut SignatureService,) -> Self {
+        let vote = Self {
+            author,
             slot,
             digest,
-            sig
-        }
+            sig: Signature::default(),
+        };
+        let sig= signature_service.request_signature(vote.digest.clone()).await;
+        Self { sig, ..vote }
+    }
+
+    pub fn verify(&self, committee: &Committee) -> DagResult<()> {
+        // Ensure the authority has voting rights.
+        ensure!(
+            committee.stake(&self.author) > 0,
+            DagError::UnknownAuthority(self.author)
+        );
+
+        // Check the signature.
+        self.sig
+            .verify(&self.digest, &self.author)
+            .map_err(DagError::from)
+    }
+}
+
+// impl Hash for ConsensusVote {
+//     fn digest(&self) -> Digest {
+//         let mut hasher = Sha512::new();
+//         // hasher.update(&self.id);
+//         // hasher.update(self.view.to_le_bytes());
+//         hasher.update(&self.id);
+//         hasher.update(self.height.to_le_bytes());
+//         //hasher.update(&self.origin);
+//         //hasher.update(self.special_valid.to_le_bytes());
+//         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
+//     }
+// }
+
+impl fmt::Debug for ConsensusVote {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        write!(
+            f,
+            "CV{}({}, {})",
+            self.digest,
+            self.slot,
+            self.author,
+        )
     }
 }
 

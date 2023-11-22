@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::time::{sleep, Duration, Instant, Sleep};
 
-use crate::messages::Vote;
+use crate::messages::{Vote, ConsensusVote};
 use crate::primary::{Slot, View};
 
 //#[cfg(test)]
@@ -73,3 +73,34 @@ impl Future for CarTimer {
     }
 }
 
+
+
+pub struct FastTimer {
+    vote: ConsensusVote, 
+    duration: u64,
+    sleep: Pin<Box<Sleep>>,
+}
+
+impl FastTimer {
+    pub fn new(vote: ConsensusVote, duration: u64) -> Self {
+        let sleep = Box::pin(sleep(Duration::from_millis(duration)));
+        Self {vote, duration, sleep }
+    }
+
+    pub fn reset(&mut self) {
+        self.sleep
+            .as_mut()
+            .reset(Instant::now() + Duration::from_millis(self.duration));
+    }
+}
+
+impl Future for FastTimer {
+    type Output = ConsensusVote;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.sleep.as_mut().poll(cx) {
+            Poll::Ready(_) => Poll::Ready(self.vote.clone()),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}

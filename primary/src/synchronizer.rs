@@ -97,7 +97,7 @@ impl Synchronizer {
     /// Returns the proposals of a consensus message if we have them all. If at least one parent is missing,
     /// we return an empty vector, synchronize with other nodes, and re-schedule processing
     /// of the header for when we will have all the parents.
-    pub async fn get_proposals(&mut self, consensus_message: &ConsensusMessage, delivered_header: &Header) -> DagResult<Vec<Header>> {
+    pub async fn get_proposals(&mut self, consensus_message: &ConsensusMessage, delivered_header: &Header) -> DagResult<Vec<Header>> { 
         let mut missing = Vec::new();
         let mut proposals_vector = Vec::new();
         println!("getting proposals");
