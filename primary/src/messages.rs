@@ -565,29 +565,6 @@ impl Header {
             ..header
         }
     }
-
-    pub fn digest(&self) -> Digest {
-        let mut hasher = Sha512::new();
-        hasher.update(&self.author);
-        hasher.update(self.height.to_le_bytes());
-        for (x, y) in &self.payload {
-            hasher.update(x);
-            hasher.update(y.to_le_bytes());
-        }
-        //hasher.update(&self.parent_cert);
-
-        /*for info in &self.prepare_info_list {
-            hasher.update(&info.consensus_info.slot.to_le_bytes());
-            hasher.update(&info.consensus_info.view.to_le_bytes());
-        }*/
-
-        //TODO: Sign Consensus Messages too.
-        // for (dig, _) in &self.consensus_messages {
-        //     hasher.update(dig);
-        // }
-
-        Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
-    }
 }
 
 impl Hash for Header {
@@ -606,6 +583,11 @@ impl Hash for Header {
             hasher.update(&info.consensus_info.slot.to_le_bytes());
             hasher.update(&info.consensus_info.view.to_le_bytes());
         }*/
+
+        //TODO: Sign Consensus Messages too.
+    //     // for (dig, _) in &self.consensus_messages {
+    //     //     hasher.update(dig);
+    //     // }
 
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
     }

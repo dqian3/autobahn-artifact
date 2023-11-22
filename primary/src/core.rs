@@ -229,8 +229,7 @@ impl Core {
         self.votes_aggregator = VotesAggregator::new();
 
         // Augment consensus messages with latest prepares
-        let dig = header.digest(); //TODO: Somehow get this call into the loop only?
-        for consensus in header.consensus_messages.values_mut() {
+        for (dig, consensus) in header.consensus_messages.borrow_mut() {
             match consensus { //TODO: Re-factor ConsensusMessages to all have slot/view, option for TC/QC, and a type.
                 ConsensusMessage::Prepare {slot, view, tc, qc_ticket: _, proposals} => {
                     let set_proposal = proposals.is_empty(); 
@@ -239,7 +238,10 @@ impl Core {
                         // Add new proposal tips
                         *proposals = self.current_proposal_tips.clone();
                         // Leader tip proposal
-                        proposals.insert(self.name, Proposal { header_digest: dig.clone(), height: header.height });
+                        proposals.insert(self.name, Proposal { header_digest: header.id.clone(), height: header.height });
+                        
+                        //TODO: If we want to hash also the proposals, then stored digest must change!!.
+                        //*dig = consensus.digest();
                         
                     }
                 },  
@@ -978,6 +980,10 @@ impl Core {
                     // the history
                     is_ready = is_ready && !self.synchronizer.get_proposals(consensus_message, header).await.unwrap().is_empty();
                 },
+                ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals: _ } => {
+                    //TODO: If we'd like to process it earlier
+                    //self.process_commit_message(consensus_message.clone(), &Header::default()).await?; 
+                },
                 _ => {},
             };
         }
@@ -1161,7 +1167,7 @@ impl Core {
 
     #[async_recursion]
     async fn process_commit_message(&mut self, commit_message: ConsensusMessage, header: &Header) -> DagResult<()> {
-        println!("Called process commit");
+       debug!("Called process commit");
         match &commit_message {
             ConsensusMessage::Commit {
                 slot,
