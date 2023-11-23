@@ -816,6 +816,10 @@ impl Core {
                     *proposals = self.current_proposal_tips.clone();
                     // Leader tip proposal
                     proposals.insert(self.name, Proposal { header_digest: header.id.clone(), height: header.height });
+
+                    for (pk, proposal) in proposals {
+                        debug!("new proposal height is {:?}", proposal.height);
+                    }
                     
                     //TODO: If we want to hash also the proposals, then stored digest must change!! => have to remove entry from map and add it back with a new hash.
                     
@@ -842,6 +846,11 @@ impl Core {
             .collect();
         let message = bincode::serialize(&PrimaryMessage::ConsensusRequest(consensus_req.clone())).expect("Failed to serialize timeout message");
         let handlers = self.network.broadcast(addresses, Bytes::from(message)).await;
+
+        self.cancel_handlers
+            .entry(self.current_header.height())
+            .or_insert_with(Vec::new)
+            .extend(handlers);
 
         //process oneself
         self.process_consensus_request(consensus_req).await?;
@@ -1893,6 +1902,7 @@ impl Core {
     pub async fn run(&mut self) {
         // Initialize current proposals with the genesis tips
         self.current_proposal_tips = Header::genesis_proposals(&self.committee);
+        debug!("genesis tips are {:?}", self.current_proposal_tips);
 
         // Start the timeout for slot 1, view 1
         let first_timer = Timer::new(1, 1, self.timeout_delay);

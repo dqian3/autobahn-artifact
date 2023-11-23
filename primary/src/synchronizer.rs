@@ -144,12 +144,13 @@ impl Synchronizer {
             },
             ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals } => {
                 for (pk, proposal) in proposals {
-
+                    if proposal.height == 0 {
+                        continue;
+                    }
                     if proposal.header_digest == self.genesis_headers.get(&pk).unwrap().digest() {
                         proposals_vector.push(self.genesis_headers.get(&pk).unwrap().clone());
                         continue;
                     }
-
 
                     match self.store.read(proposal.header_digest.to_vec()).await? {
                         Some(header) => proposals_vector.push(bincode::deserialize(&header)?),
@@ -167,6 +168,7 @@ impl Synchronizer {
 
         println!("sending to header waiter");
         debug!("Triggering sync for proposals");
+        debug!("missing proposals are {:?}", missing);
         self.tx_header_waiter
             .send(WaiterMessage::SyncProposals(missing, consensus_message.clone(), delivered_header.clone()))
             .await
