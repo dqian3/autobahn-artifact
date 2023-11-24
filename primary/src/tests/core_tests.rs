@@ -1,8 +1,10 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use super::*;
+use super::panic;
 use crate::{common::{
     certificate, committee, committee_with_base_port, header, headers, keys, listener, votes, special_header, special_votes, header_from_cert,
 }, proposer::Proposer, header_waiter::HeaderWaiter};
+use config::Parameters;
 use crypto::{Hash, Signature};
 use std::{fs, time::Duration};
 use tokio::{sync::mpsc::channel, time::sleep};
@@ -55,6 +57,8 @@ async fn process_header() {
     );
 
     let leader_elector = LeaderElector::new(committee.clone());
+
+    let parameters = Parameters::default();
     let timeout_delay = 1000;
 
     // Spawn the core.
@@ -75,7 +79,14 @@ async fn process_header() {
         rx_request_header_sync,
         tx_info,
         leader_elector,
-        timeout_delay,
+        parameters.timeout_delay,
+        parameters.use_optimistic_tips,
+        parameters.use_parallel_proposals,
+        parameters.k,
+        parameters.use_fast_path,
+        parameters.fast_path_timeout,
+        parameters.use_ride_share,
+        parameters.car_timeout,
     );
 
     // Send a header to the core.
@@ -139,6 +150,8 @@ async fn process_header_missing_parent() {
     let leader_elector = LeaderElector::new(committee.clone());
     let timeout_delay = 1000;
 
+    let parameters = Parameters::default();
+
     // Spawn the core.
     Core::spawn(
         name,
@@ -157,13 +170,20 @@ async fn process_header_missing_parent() {
         rx_request_header_sync,
         tx_info,
         leader_elector,
-        timeout_delay,
+        parameters.timeout_delay,
+        parameters.use_optimistic_tips,
+        parameters.use_parallel_proposals,
+        parameters.k,
+        parameters.use_fast_path,
+        parameters.fast_path_timeout,
+        parameters.use_ride_share,
+        parameters.car_timeout,
     );
 
     let header_one = header();
     let cert_one = certificate(&header_one);
     let header_two: Header = Header { author: header_one.author, height: header_one.height + 1, payload: header_one.payload, 
-        parent_cert: cert_one, id: header_one.id, signature: header_one.signature, consensus_messages: HashMap::new()};
+        parent_cert: cert_one, id: header_one.id, signature: header_one.signature, consensus_messages: HashMap::new(), num_active_instances: 0, special: false};
     let id = header_two.digest().clone();
 
     // Send a header to the core.
@@ -212,6 +232,8 @@ async fn process_header_invalid_height() {
     let leader_elector = LeaderElector::new(committee().clone());
     let timeout_delay = 1000;
 
+    let parameters = Parameters::default();
+
     // Spawn the core.
     Core::spawn(
         name,
@@ -230,7 +252,14 @@ async fn process_header_invalid_height() {
         rx_request_header_sync,
         tx_info,
         leader_elector,
-        timeout_delay,
+        parameters.timeout_delay,
+        parameters.use_optimistic_tips,
+        parameters.use_parallel_proposals,
+        parameters.k,
+        parameters.use_fast_path,
+        parameters.fast_path_timeout,
+        parameters.use_ride_share,
+        parameters.car_timeout,
     );
 
     // Send a header to the core.
@@ -288,6 +317,8 @@ async fn process_header_missing_payload() {
     let leader_elector = LeaderElector::new(committee().clone());
     let timeout_delay = 1000;
 
+    let parameters = Parameters::default();
+
     // Spawn the core.
     Core::spawn(
         name,
@@ -306,7 +337,14 @@ async fn process_header_missing_payload() {
         rx_request_header_sync,
         tx_info,
         leader_elector,
-        timeout_delay,
+        parameters.timeout_delay,
+        parameters.use_optimistic_tips,
+        parameters.use_parallel_proposals,
+        parameters.k,
+        parameters.use_fast_path,
+        parameters.fast_path_timeout,
+        parameters.use_ride_share,
+        parameters.car_timeout,
     );
 
     // Send a header to the core.
@@ -362,13 +400,15 @@ async fn process_votes() {
     let leader_elector = LeaderElector::new(committee.clone());
     let timeout_delay = 1000;
 
+    let parameters = Parameters::default();
+
     // Spawn the core.
     Core::spawn(
         name,
         committee.clone(),
         store.clone(),
         synchronizer,
-        signature_service.clone(),
+        signature_service,
         /* consensus_round */ Arc::new(AtomicU64::new(0)),
         /* gc_depth */ 50,
         /* rx_primaries */ rx_primary_messages,
@@ -380,8 +420,16 @@ async fn process_votes() {
         rx_request_header_sync,
         tx_info,
         leader_elector,
-        timeout_delay,
+        parameters.timeout_delay,
+        parameters.use_optimistic_tips,
+        parameters.use_parallel_proposals,
+        parameters.k,
+        parameters.use_fast_path,
+        parameters.fast_path_timeout,
+        parameters.use_ride_share,
+        parameters.car_timeout,
     );
+
 
 
     // Receive geneis parent cert from the proposer
@@ -461,6 +509,8 @@ async fn process_certificates() {
     let leader_elector = LeaderElector::new(committee().clone());
     let timeout_delay = 1000;
 
+    let parameters = Parameters::default();
+
     // Spawn the core.
     Core::spawn(
         name,
@@ -479,8 +529,16 @@ async fn process_certificates() {
         rx_request_header_sync,
         tx_info,
         leader_elector,
-        timeout_delay,
+        parameters.timeout_delay,
+        parameters.use_optimistic_tips,
+        parameters.use_parallel_proposals,
+        parameters.k,
+        parameters.use_fast_path,
+        parameters.fast_path_timeout,
+        parameters.use_ride_share,
+        parameters.car_timeout,
     );
+
 
     // Send enough certificates to the core.
     let certificates: Vec<Certificate> = headers()
@@ -568,6 +626,8 @@ async fn process_prepare() {
     let leader_elector = LeaderElector::new(committee.clone());
     let timeout_delay = 1000;
 
+    let parameters = Parameters::default();
+
     // Spawn the core.
     Core::spawn(
         name,
@@ -586,8 +646,16 @@ async fn process_prepare() {
         rx_request_header_sync,
         tx_info,
         leader_elector,
-        timeout_delay,
+        parameters.timeout_delay,
+        parameters.use_optimistic_tips,
+        parameters.use_parallel_proposals,
+        parameters.k,
+        parameters.use_fast_path,
+        parameters.fast_path_timeout,
+        parameters.use_ride_share,
+        parameters.car_timeout,
     );
+
 
     // Send headers to the core, so they won't request sync
     let header_list = headers();
@@ -602,7 +670,7 @@ async fn process_prepare() {
     for x in &header_list {
         proposals.insert(x.author, Proposal { header_digest: x.digest(), height: x.height() });
     }
-    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, tc: None, proposals };
+    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, tc: None, qc_ticket: None, proposals };
 
     let mut consensus_messages: HashMap<Digest, ConsensusMessage> = HashMap::new();
     consensus_messages.insert(prepare_message.digest(), prepare_message.clone());
@@ -625,9 +693,9 @@ async fn process_prepare() {
     match bincode::deserialize(&received).unwrap() {
         PrimaryMessage::Vote(x) => {
             //assert_eq!(x, expected);
-            assert!(!x.consensus_sigs.is_empty());
+            assert!(!x.consensus_votes.is_empty());
             assert_eq!(x.height, 2);
-            assert_eq!(prepare_message.digest(), x.consensus_sigs[0].0);
+            assert_eq!(prepare_message.digest(), x.consensus_votes[0].1);
         }
         x => panic!("Unexpected message: {:?}", x),
     }
@@ -688,13 +756,15 @@ async fn generate_confirm() {
     let leader_elector = LeaderElector::new(committee.clone());
     let timeout_delay = 1000;
 
+    let parameters = Parameters::default();
+
     // Spawn the core.
     Core::spawn(
         name,
         committee.clone(),
         store.clone(),
         synchronizer,
-        signature_service.clone(),
+        signature_service,
         /* consensus_round */ Arc::new(AtomicU64::new(0)),
         /* gc_depth */ 50,
         /* rx_primaries */ rx_primary_messages,
@@ -706,8 +776,16 @@ async fn generate_confirm() {
         rx_request_header_sync,
         tx_info,
         leader_elector,
-        timeout_delay,
+        parameters.timeout_delay,
+        parameters.use_optimistic_tips,
+        parameters.use_parallel_proposals,
+        parameters.k,
+        parameters.use_fast_path,
+        parameters.fast_path_timeout,
+        parameters.use_ride_share,
+        parameters.car_timeout,
     );
+
 
     // Receive the first prepare message from proposer
     rx_info.recv().await.unwrap();
@@ -739,7 +817,7 @@ async fn generate_confirm() {
     for x in &header_list {
         proposals.insert(x.author, Proposal { header_digest: x.digest(), height: x.height() });
     }
-    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, tc: None, proposals: proposals.clone() };
+    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, tc: None, qc_ticket:None, proposals: proposals.clone() };
 
     let mut consensus_messages: HashMap<Digest, ConsensusMessage> = HashMap::new();
     consensus_messages.insert(prepare_message.digest().clone(), prepare_message.clone());
@@ -824,13 +902,16 @@ async fn generate_commit() {
     let leader_elector = LeaderElector::new(committee.clone());
     let timeout_delay = 1000;
 
+
+    let parameters = Parameters::default();
+
     // Spawn the core.
     Core::spawn(
         name,
         committee.clone(),
         store.clone(),
         synchronizer,
-        signature_service.clone(),
+        signature_service,
         /* consensus_round */ Arc::new(AtomicU64::new(0)),
         /* gc_depth */ 50,
         /* rx_primaries */ rx_primary_messages,
@@ -842,8 +923,16 @@ async fn generate_commit() {
         rx_request_header_sync,
         tx_info,
         leader_elector,
-        timeout_delay,
+        parameters.timeout_delay,
+        parameters.use_optimistic_tips,
+        parameters.use_parallel_proposals,
+        parameters.k,
+        parameters.use_fast_path,
+        parameters.fast_path_timeout,
+        parameters.use_ride_share,
+        parameters.car_timeout,
     );
+
 
     // Receive the first prepare message from proposer
     rx_info.recv().await.unwrap();
@@ -875,7 +964,7 @@ async fn generate_commit() {
     for x in &header_list {
         proposals.insert(x.author, Proposal { header_digest: x.digest(), height: x.height() });
     }
-    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, tc: None, proposals: proposals.clone() };
+    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, tc: None, qc_ticket: None, proposals: proposals.clone() };
 
     let mut consensus_messages: HashMap<Digest, ConsensusMessage> = HashMap::new();
     consensus_messages.insert(prepare_message.digest().clone(), prepare_message.clone());
@@ -1016,6 +1105,8 @@ async fn generate_pipelined_prepare() {
     let leader_elector = LeaderElector::new(committee.clone());
     let timeout_delay = 1000;
 
+    let parameters = Parameters::default();
+
     // Spawn the core.
     Core::spawn(
         name,
@@ -1034,8 +1125,16 @@ async fn generate_pipelined_prepare() {
         rx_request_header_sync,
         tx_info,
         leader_elector,
-        timeout_delay,
+        parameters.timeout_delay,
+        parameters.use_optimistic_tips,
+        parameters.use_parallel_proposals,
+        parameters.k,
+        parameters.use_fast_path,
+        parameters.fast_path_timeout,
+        parameters.use_ride_share,
+        parameters.car_timeout,
     );
+
 
 
     // Receive the first prepare message from proposer
@@ -1056,7 +1155,7 @@ async fn generate_pipelined_prepare() {
     for x in &header_list {
         proposals.insert(x.author, Proposal { header_digest: x.digest(), height: x.height() });
     }
-    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, tc: None, proposals };
+    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, tc: None, qc_ticket: None, proposals };
 
     let mut consensus_messages: HashMap<Digest, ConsensusMessage> = HashMap::new();
     consensus_messages.insert(prepare_message.digest(), prepare_message.clone());
@@ -1109,7 +1208,7 @@ async fn generate_pipelined_prepare() {
     let output_message = rx_info.recv().await.unwrap();
 
     match output_message {
-        ConsensusMessage::Prepare { slot, view, tc: _, proposals: _ } => {
+        ConsensusMessage::Prepare { slot, view, tc: _, qc_ticket: _, proposals: _ } => {
             assert_eq!(slot, 2);
             assert_eq!(view, 1);
         },
@@ -1172,6 +1271,8 @@ async fn local_timeout_view() {
     let leader_elector = LeaderElector::new(committee.clone());
     let timeout_delay = 1000;
 
+    let parameters = Parameters::default();
+
     // Spawn the core.
     Core::spawn(
         name,
@@ -1190,8 +1291,16 @@ async fn local_timeout_view() {
         rx_request_header_sync,
         tx_info,
         leader_elector,
-        timeout_delay,
+        parameters.timeout_delay,
+        parameters.use_optimistic_tips,
+        parameters.use_parallel_proposals,
+        parameters.k,
+        parameters.use_fast_path,
+        parameters.fast_path_timeout,
+        parameters.use_ride_share,
+        parameters.car_timeout,
     );
+
 
     /*let message = handle.await.unwrap();
 
@@ -1250,6 +1359,8 @@ async fn sync_missing_proposals() {
     let leader_elector = LeaderElector::new(committee.clone());
     let timeout_delay = 100000;
 
+    let parameters = Parameters::default();
+
     // Spawn the core.
     Core::spawn(
         name,
@@ -1268,8 +1379,16 @@ async fn sync_missing_proposals() {
         rx_request_header_sync,
         tx_info,
         leader_elector,
-        timeout_delay,
+        parameters.timeout_delay,
+        parameters.use_optimistic_tips,
+        parameters.use_parallel_proposals,
+        parameters.k,
+        parameters.use_fast_path,
+        parameters.fast_path_timeout,
+        parameters.use_ride_share,
+        parameters.car_timeout,
     );
+
 
 
     // Receive the first prepare message from proposer
@@ -1310,7 +1429,7 @@ async fn sync_missing_proposals() {
     for x in &header_list {
         proposals.insert(x.author, Proposal { header_digest: x.digest(), height: x.height() });
     }
-    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, tc: None, proposals };
+    let prepare_message: ConsensusMessage = ConsensusMessage::Prepare { slot: 1, view: 1, tc: None, qc_ticket: None, proposals };
 
     let mut consensus_messages: HashMap<Digest, ConsensusMessage> = HashMap::new();
     consensus_messages.insert(prepare_message.digest(), prepare_message.clone());

@@ -185,7 +185,7 @@ pub fn votes(header: &Header) -> Vec<Vote> {
                 origin: header.author,
                 author,
                 signature: Signature::default(),
-                consensus_sigs: Vec::new(),
+                consensus_votes: Vec::new(),
             };
             Vote {
                 signature: Signature::new(&vote.digest(), &secret),
@@ -206,7 +206,7 @@ pub fn special_votes(header: &Header, consensus_digests: Vec<Digest>) -> Vec<Vot
                 origin: header.author,
                 author,
                 signature: Signature::default(),
-                consensus_sigs: consensus_digests.iter().map(|x| (x.clone(), Signature::new(x, &secret))).collect(),
+                consensus_votes: consensus_digests.iter().map(|x| (1, x.clone(), Signature::new(x, &secret))).collect(), //Give them all "slot 1" for testing
 
                 //qc: None,
                 //tc: None,
