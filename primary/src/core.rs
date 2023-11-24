@@ -150,7 +150,13 @@ impl Core {
         tx_info: Sender<ConsensusMessage>,
         leader_elector: LeaderElector,
         timeout_delay: u64,
+        use_optimistic_tips: bool,
+        use_parallel_proposals: bool,
         k: u64,
+        use_fast_path: bool,
+        fast_path_timeout: u64,
+        use_ride_share: bool,
+        car_timeout: u64,
     ) {
         tokio::spawn(async move {
             Self {
@@ -199,13 +205,14 @@ impl Core {
                 
                 committed_slots: HashMap::with_capacity(2 * gc_depth as usize),
                 last_committed_slot: 0,
-                use_fast_path: true,           //default = false
-                use_optimistic_tips: true,     //default = true (TODO: implement non optimistic tip option)
-                use_parallel_proposals: true,    //default = true (TODO: implement sequential slot option)
+                
+                use_fast_path,           //default = true
+                use_optimistic_tips,     //default = true (TODO: implement non optimistic tip option)
+                use_parallel_proposals,    //default = true (TODO: implement sequential slot option)
                 k,
-                fast_path_timeout: 500,
-                use_ride_share: false,
-                car_timeout: 1000,
+                fast_path_timeout,
+                use_ride_share,
+                car_timeout,
                 car_timer_futures: FuturesUnordered::new(),
                 fast_timer_futures: FuturesUnordered::new(),
             }

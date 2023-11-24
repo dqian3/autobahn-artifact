@@ -81,12 +81,24 @@ pub struct Parameters {
     /// The delay after which the workers seal a batch of transactions, even if `max_batch_size`
     /// is not reached. Denominated in ms.
     pub max_batch_delay: u64,
+
+    //Autobahn protocol config parameters
+    pub use_optimistic_tips: bool,     //default = true (TODO: implement non optimistic tip option)
+    
+    pub use_parallel_proposals: bool,  //default = true (TODO: implement sequential slot option)
+    pub k: u64, //Max open conensus instances at a time.
+
+    pub use_fast_path: bool,           //default = false
+    pub fast_path_timeout: u64,
+
+    pub use_ride_share: bool,
+    pub car_timeout: u64,
 }
 
 impl Default for Parameters {
     fn default() -> Self {
         Self {
-            timeout_delay: 5_000,
+            timeout_delay: 1_000,
             header_size: 1_000,
             max_header_delay: 100,
             gc_depth: 50,
@@ -94,6 +106,16 @@ impl Default for Parameters {
             sync_retry_nodes: 3,
             batch_size: 500_000,
             max_batch_delay: 100,
+
+            //Autobahn microbench configs
+            use_optimistic_tips: true,
+            use_parallel_proposals: true,
+            k: 4,
+            use_fast_path: true,
+            fast_path_timeout: 500,
+            use_ride_share: false,
+            car_timeout: 2000,
+
         }
     }
 }
@@ -111,6 +133,11 @@ impl Parameters {
         info!("Sync retry nodes set to {} nodes", self.sync_retry_nodes);
         info!("Batch size set to {} B", self.batch_size);
         info!("Max batch delay set to {} ms", self.max_batch_delay);
+
+        info!("Fast path enabled? {}. Fast timeout: {}", self.use_fast_path, self.fast_path_timeout);
+        info!("Optimistic tips enabled? {}", self.use_optimistic_tips);
+        info!("Parallel Proposals enabled? {}. K: {}", self.use_parallel_proposals, self.k);
+        info!("Ride share enabled? {}. Car timeout: {}", self.use_ride_share, self.car_timeout);
     }
 }
 

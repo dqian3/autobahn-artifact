@@ -165,7 +165,17 @@ impl Primary {
 
         let timeout_delay = 1000;
 
-        let k = 1; //Max open instances.
+
+        // use_optimistic_tips: bool,     //default = true (TODO: implement non optimistic tip option)
+        
+        // use_parallel_proposals: bool,  //default = true (TODO: implement sequential slot option)
+        // let k = 1; //Max open conensus instances at a time.
+
+        // use_fast_path: bool,           //default = false
+        // fast_path_timeout: u64,
+
+        // use_ride_share: bool,
+        // car_timeout: u64,
 
         // The `Core` receives and handles headers, votes, and certificates from the other primaries.
         Core::spawn(
@@ -185,8 +195,14 @@ impl Primary {
             rx_request_header_sync,
             /*tx info */ tx_instance,
             LeaderElector::new(committee.clone()),
-            timeout_delay,
-            k,
+            parameters.timeout_delay,
+            parameters.use_optimistic_tips,
+            parameters.use_parallel_proposals,
+            parameters.k,
+            parameters.use_fast_path,
+            parameters.fast_path_timeout,
+            parameters.use_ride_share,
+            parameters.car_timeout,
         );
 
         Committer::spawn(committee.clone(), store.clone(), parameters.gc_depth, rx_mempool, rx_committer, rx_commit, tx_output, synchronizer);
