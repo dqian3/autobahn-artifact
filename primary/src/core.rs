@@ -1987,7 +1987,10 @@ impl Core {
 
                 // We receive here loopback headers from the `HeaderWaiter`. Those are headers for which we interrupted
                 // execution (we were missing some of their dependencies) and we are now ready to resume processing.
-                Some(header) = self.rx_header_waiter.recv() => self.process_header(header).await,
+                Some(header) = self.rx_header_waiter.recv() => {
+                    debug!("normal loopback for header");
+                    self.process_header(header).await
+                },
 
                 // Loopback for committed instance that hasn't had all of it ancestors yet
                 Some((consensus_message, header)) = self.rx_header_waiter_instances.recv() => self.process_loopback(consensus_message, header).await,
