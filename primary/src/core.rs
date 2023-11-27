@@ -1617,7 +1617,7 @@ impl Core {
         println!("timeout was triggered");
 
         //If timer was cancelled, ignore  -- Note: technically redundant with commit check below, but currently we do not insert CommitQC's... TODO: Need to insert these so we can avoid joining view change and just reply.
-        if self.timers.contains(&(slot, view)) {
+        if !self.timers.contains(&(slot, view)) {
             return Ok(())
         }
 
