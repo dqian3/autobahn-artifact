@@ -383,13 +383,13 @@ impl HeaderWaiter {
                     let mut retry = Vec::new();
                     for (digest, (_, timestamp)) in &self.header_requests {
                         if timestamp + (self.sync_retry_delay as u128) < now {
-                            debug!("Requesting sync for certificate {} (retry)", digest);
+                            debug!("Requesting sync for header {} (retry)", digest);
                             retry.push(digest.clone());
                         }
                     }
                     let addresses = self.committee.others_primaries(&self.name).iter().map(|(_, x)| x.primary_to_primary).collect();
                     let message = PrimaryMessage::HeadersRequest(retry, self.name);
-                    let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
+                    let bytes = bincode::serialize(&message).expect("Failed to serialize header request");
                     self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;
 
                     //Retry CertificateRequests
