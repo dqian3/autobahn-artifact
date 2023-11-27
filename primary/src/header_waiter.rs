@@ -23,7 +23,7 @@ use tokio::time::{sleep, Duration, Instant};
 
 /// The resolution of the timer that checks whether we received replies to our sync requests, and triggers
 /// new sync requests if we didn't.
-const TIMER_RESOLUTION: u64 = 1_000;
+const TIMER_RESOLUTION: u64 = 20_000;
 
 /// The commands that can be sent to the `Waiter`.
 #[derive(Debug)]
