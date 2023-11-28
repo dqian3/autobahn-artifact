@@ -86,7 +86,7 @@ pub struct Core {
     network: ReliableSender,
     /// Keeps the cancel handlers of the messages we sent.
     cancel_handlers: HashMap<Height, Vec<CancelHandler>>,
-    consensus_cancel_handlers: HashMap<Height, Vec<CancelHandler>>,
+    consensus_cancel_handlers: HashMap<Slot, Vec<CancelHandler>>,
 
     current_proposal_tips: HashMap<PublicKey, Proposal>,
 
@@ -1085,6 +1085,9 @@ impl Core {
                 match tc {
                     Some(tc) => {
                         // Ensure tc is valid
+                        if tc.view + 1 != *view {
+                            return false;
+                        }
                         ticket_valid = tc.verify(&self.committee).is_ok();
                         
                         let winning_proposals = tc.get_winning_proposals(&self.committee);
@@ -1301,6 +1304,7 @@ impl Core {
             => {
                 debug!("processing prepare in slot {:?} with proposal {:?}", slot, proposals);
                 if self.synchronizer.get_proposals(&consensus_message, &header).await.unwrap().is_empty() {
+                    debug!("proposals of prepare in slot {:?} with proposal {:?} are not ready", slot, proposals);
                     return Ok(());
                 }
                 self.process_prepare_message(&consensus_message, consensus_votes.as_mut()).await;
@@ -1357,7 +1361,7 @@ impl Core {
                     .expect("Failed to serialize our own vote");
                 let handler = self.network.send(address, Bytes::from(bytes)).await;
                 self.consensus_cancel_handlers
-                    .entry(slot)
+                    .entry(slot) 
                     .or_insert_with(Vec::new)
                     .push(handler);
         }
@@ -1522,6 +1526,7 @@ impl Core {
 
         //GC Consensus instances
         self.consensus_instances.retain(|(s, _), _| s != &slot); 
+        self.consensus_cancel_handlers.retain(|s, _| s != &slot); 
 
         //GC QC_Makers
         self.qc_makers.retain(|(s, _), _| s != &slot); 
@@ -1538,12 +1543,12 @@ impl Core {
         let k = self.k;
 
         //GC Consensus instances
-        self.consensus_instances.retain(|(s, _), _| s % k != slot_period); 
-        self.consensus_cancel_handlers.retain(|s, _| s % k != slot_period); 
+        self.consensus_instances.retain(|(s, _), _| s % k != slot_period && s <= &slot); 
+        self.consensus_cancel_handlers.retain(|s, _| s % k != slot_period && s <= &slot); 
         //self.committed_slots GC those that are older.
 
         //GC QC_Makers
-        self.qc_makers.retain(|(s, _), _| s % k != slot_period); 
+        self.qc_makers.retain(|(s, _), _| s % k != slot_period && s <= &slot); 
      
 
         Ok(())
@@ -1555,12 +1560,15 @@ impl Core {
         println!("reprocessing a header/commit message");
         debug!("Can reprocess a header/commit message");
         match &consensus_message {
-            ConsensusMessage::Prepare { slot: _, view: _, tc: _, qc_ticket: _, proposals: _ } => {
+            ConsensusMessage::Prepare { slot, view, tc: _, qc_ticket: _, proposals: _ } => {
                 if self.use_ride_share {
                     // Now that proposals are ready we can reprocess the header
                     self.process_header(header, true).await?;
                 }
                 else{
+                    if self.last_voted_consensus.contains(&(*slot, *view)){ //Don't prepare twice
+                        return Ok(());
+                    }
                     self.process_consensus_message(consensus_message, header.author).await? 
                 }
             },
@@ -1744,23 +1752,25 @@ impl Core {
 
             // Broadcast the TC.
             // TODO: Low priority: If you see f+1 timeouts then join the mutiny
-            debug!("Broadcasting {:?}", tc);
-            let addresses = self
-                .committee
-                .others_primaries(&self.name)
-                .iter()
-                .map(|(_, x)| x.primary_to_primary)
-                .collect();
-            let message = bincode::serialize(&PrimaryMessage::TC(tc.clone()))
-                .expect("Failed to serialize timeout certificate");
-            let handlers = self.network
-                .broadcast(addresses, Bytes::from(message))
-                .await;
 
-            self.cancel_handlers
-                .entry(self.current_header.height())
-                .or_insert_with(Vec::new)
-                .extend(handlers);
+            //FIXME: Don't need to broadcast TC if we join mutiny upon seeing f+1 timeouts.
+            // debug!("Broadcasting {:?}", tc);
+            // let addresses = self
+            //     .committee
+            //     .others_primaries(&self.name)
+            //     .iter()
+            //     .map(|(_, x)| x.primary_to_primary)
+            //     .collect();
+            // let message = bincode::serialize(&PrimaryMessage::TC(tc.clone()))
+            //     .expect("Failed to serialize timeout certificate");
+            // let handlers = self.network
+            //     .broadcast(addresses, Bytes::from(message))
+            //     .await;
+
+            // self.cancel_handlers
+            //     .entry(self.current_header.height())
+            //     .or_insert_with(Vec::new)
+            //     .extend(handlers);
 
             // Generate a new prepare if we are the next leader.
             self.generate_prepare_from_tc(&tc).await?;
@@ -1772,6 +1782,8 @@ impl Core {
     async fn generate_prepare_from_tc(&mut self, tc: &TC) -> DagResult<()> {
         // Make a new prepare message if we are the next leader.
         if self.name == self.leader_elector.get_leader(tc.slot, tc.view + 1) {
+
+            
             let winning_proposals = tc.get_winning_proposals(&self.committee);
 
             // If there is no QC we have to propose, then use our current tips for our proposal => happens later
@@ -1826,7 +1838,7 @@ impl Core {
     }
 
     async fn handle_tc(&mut self, tc: &TC) -> DagResult<()> {
-        debug!("Processing {:?}", tc);
+        debug!("Processing TC {:?}", tc);
         // Generate a new prepare if we are the next leader.
         self.generate_prepare_from_tc(tc).await?;
 

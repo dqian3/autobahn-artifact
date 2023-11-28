@@ -362,6 +362,16 @@ impl HeaderWaiter {
                             let _ = self.batch_requests.remove(x);
                         }
 
+                        let possibly_missing;
+                        match &deliver.0 {
+                            ConsensusMessage::Prepare {view: _, slot: _, tc: _, qc_ticket: _, proposals} => {possibly_missing = proposals},
+                            ConsensusMessage::Confirm {view: _, slot: _, qc: _, proposals} => {possibly_missing = proposals},
+                            ConsensusMessage::Commit {view: _, slot: _, qc: _, proposals} => {possibly_missing = proposals},
+                        }
+                        for (_, prop) in possibly_missing.iter() {
+                            let _ = self.parent_requests.remove(&prop.header_digest);
+                        }
+                     
                         self.tx_consensus_loopback.send(deliver).await.expect("Failed to send header");
                     },
                     Ok(None) => {
@@ -399,7 +409,7 @@ impl HeaderWaiter {
                     let mut retry = Vec::new();
                     for (digest, (_, timestamp)) in &self.parent_requests {
                         if timestamp + (self.sync_retry_delay as u128) < now {
-                            debug!("Requesting sync for parent header {} (retry)", digest);
+                            debug!("Requesting retry sync for parent header {} (retry)", digest);
                             retry.push(digest.clone());
                         }
                     }
