@@ -1270,7 +1270,7 @@ impl QC {
 
 impl Hash for QC {
     fn digest(&self) -> Digest {
-        let hasher = Sha512::new();
+        let hasher = Sha512::new(); //NOTE: We are not using this digest ever currently. QC verification happens on the ID included in the QC
         //hasher.update(&self.hash);
         //hasher.update(self.view.to_le_bytes());
         //hasher.update(self.view_round.to_le_bytes());
@@ -1348,7 +1348,7 @@ impl Timeout {
 
 impl Hash for Timeout {
     fn digest(&self) -> Digest {
-        let mut hasher = Sha512::new();
+        let mut hasher = Sha512::new();  
         /*hasher.update(self.view.to_le_bytes());
         if let Some(qc_view) = self.vote_high_qc {
             hasher.update(qc_view.to_le_bytes());
