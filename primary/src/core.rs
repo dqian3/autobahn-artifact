@@ -1696,8 +1696,8 @@ impl Core {
             .broadcast(addresses, Bytes::from(message))
             .await;
 
-        self.cancel_handlers
-            .entry(self.current_header.height())
+        self.consensus_cancel_handlers
+            .entry(slot)
             .or_insert_with(Vec::new)
             .extend(handlers);
 
@@ -1767,8 +1767,8 @@ impl Core {
             //     .broadcast(addresses, Bytes::from(message))
             //     .await;
 
-            // self.cancel_handlers
-            //     .entry(self.current_header.height())
+            // self.consensus_cancel_handlers
+            //     .entry(slot)
             //     .or_insert_with(Vec::new)
             //     .extend(handlers);
 
