@@ -50,7 +50,7 @@ impl Synchronizer {
     /// Returns `true` if we have all transactions of the payload. If we don't, we return false,
     /// synchronize with other nodes (through our workers), and re-schedule processing of the
     /// header for when we will have its complete payload.
-    pub async fn missing_payload(&mut self, header: &Header) -> DagResult<bool> {
+    pub async fn missing_payload(&mut self, header: &Header, force_sync: bool) -> DagResult<bool> {
         // We don't store the payload of our own workers.
         if header.author == self.name {
             return Ok(false);
@@ -81,7 +81,7 @@ impl Synchronizer {
         }
 
         self.tx_header_waiter
-            .send(WaiterMessage::SyncBatches(missing, header.clone()))
+            .send(WaiterMessage::SyncBatches(missing, header.clone(), force_sync))
             .await
             .expect("Failed to send sync batch request");
         Ok(true)

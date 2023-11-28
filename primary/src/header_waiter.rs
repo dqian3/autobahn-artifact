@@ -28,7 +28,7 @@ const TIMER_RESOLUTION: u64 = 1_000;
 /// The commands that can be sent to the `Waiter`.
 #[derive(Debug)]
 pub enum WaiterMessage {
-    SyncBatches(HashMap<Digest, WorkerId>, Header),
+    SyncBatches(HashMap<Digest, WorkerId>, Header, bool),
     SyncProposals(Vec<Proposal>, ConsensusMessage, Header),
     // SyncProposalsC(Vec<Proposal>, ConsensusMessage), //Consensus is independent of header.
     // SyncProposalsCAsync(Vec<Proposal>), //Consensus is independent of header.
@@ -162,7 +162,7 @@ impl HeaderWaiter {
             tokio::select! {
                 Some(message) = self.rx_synchronizer.recv() => {
                     match message {
-                        WaiterMessage::SyncBatches(missing, header) => {
+                        WaiterMessage::SyncBatches(missing, header, force_sync) => {
                             debug!("Synching the payload of {}", header);
                             let header_id = header.id.clone();
                             let round = header.height;
@@ -187,25 +187,27 @@ impl HeaderWaiter {
                             let fut = Self::waiter(wait_for, header, rx_cancel);
                             waiting.push(fut);
 
-                            // Ensure we didn't already send a sync request for these parents.
-                            let mut requires_sync = HashMap::new();
-                            for (digest, worker_id) in missing.into_iter() {
-                                self.batch_requests.entry(digest.clone()).or_insert_with(|| {
-                                    requires_sync.entry(worker_id).or_insert_with(Vec::new).push(digest);
-                                    round
-                                });
+                            if force_sync {
+                                // Ensure we didn't already send a sync request for these parents.
+                                let mut requires_sync = HashMap::new();
+                                for (digest, worker_id) in missing.into_iter() {
+                                    self.batch_requests.entry(digest.clone()).or_insert_with(|| {
+                                        requires_sync.entry(worker_id).or_insert_with(Vec::new).push(digest);
+                                        round
+                                    });
+                                }
+                                for (worker_id, digests) in requires_sync {
+                                    let address = self.committee
+                                        .worker(&self.name, &worker_id)
+                                        .expect("Author of valid header is not in the committee")
+                                        .primary_to_worker;
+                                    debug!("Sent syncbatches message for height {}", round);
+                                    let message = PrimaryWorkerMessage::Synchronize(digests, author);
+                                    let bytes = bincode::serialize(&message)
+                                        .expect("Failed to serialize batch sync request");
+                                    self.network.send(address, Bytes::from(bytes)).await;
+                                }
                             }
-                            // for (worker_id, digests) in requires_sync {
-                            //     let address = self.committee
-                            //         .worker(&self.name, &worker_id)
-                            //         .expect("Author of valid header is not in the committee")
-                            //         .primary_to_worker;
-                            //     debug!("Sent syncbatches message for height {}", round);
-                            //     let message = PrimaryWorkerMessage::Synchronize(digests, author);
-                            //     let bytes = bincode::serialize(&message)
-                            //         .expect("Failed to serialize batch sync request");
-                            //     self.network.send(address, Bytes::from(bytes)).await;
-                            // }
                         }
 
                         WaiterMessage::SyncHeader(missing) => {
