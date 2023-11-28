@@ -71,6 +71,7 @@ impl Synchronizer {
             //         X as they will be querying worker #1.
             let key = [digest.as_ref(), &worker_id.to_le_bytes()].concat();
             if self.store.read(key).await?.is_none() {
+                debug!("Missing Digest: {}, Author: {}. Name: {}. Round {}", digest, header.author, self.name, header.height);
                 missing.insert(digest.clone(), *worker_id);
             }
         }
