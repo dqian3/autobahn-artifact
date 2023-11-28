@@ -1684,9 +1684,14 @@ impl Core {
             .collect();
         let message = bincode::serialize(&PrimaryMessage::Timeout(timeout.clone()))
             .expect("Failed to serialize timeout message");
-        self.network
+        let handlers = self.network
             .broadcast(addresses, Bytes::from(message))
             .await;
+
+        self.cancel_handlers
+            .entry(self.current_header.height())
+            .or_insert_with(Vec::new)
+            .extend(handlers);
 
         println!("Processed our own timeout");
         // Process our message.
@@ -1748,9 +1753,14 @@ impl Core {
                 .collect();
             let message = bincode::serialize(&PrimaryMessage::TC(tc.clone()))
                 .expect("Failed to serialize timeout certificate");
-            self.network
+            let handlers = self.network
                 .broadcast(addresses, Bytes::from(message))
                 .await;
+
+            self.cancel_handlers
+                .entry(self.current_header.height())
+                .or_insert_with(Vec::new)
+                .extend(handlers);
 
             // Generate a new prepare if we are the next leader.
             self.generate_prepare_from_tc(&tc).await?;
