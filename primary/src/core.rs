@@ -1236,7 +1236,7 @@ impl Core {
         Ok(consensus_votes)
     }
 
-    async fn process_consensus_request(&mut self, consensus_req: ConsensusRequest,) -> DagResult<()> {
+    async fn process_consensus_request(&mut self, consensus_req: ConsensusRequest) -> DagResult<()> {
     
         
         let consensus_message = &consensus_req.message;
@@ -1265,7 +1265,7 @@ impl Core {
             }
         }
         let dig = consensus_message.digest();
-        match consensus_message { //TODO: Re-factor ConsensusMessages to all have slot/view, option for TC/QC, and a type.
+        match &consensus_message { //TODO: Re-factor ConsensusMessages to all have slot/view, option for TC/QC, and a type.
             ConsensusMessage::Prepare {slot, view, tc: _, qc_ticket: _, proposals: _, } => {self.consensus_instances.insert((*slot, dig.clone()), consensus_message.clone());},  
             ConsensusMessage::Confirm {slot, view, qc: _, proposals: _, } => {self.consensus_instances.insert((*slot, dig.clone()), consensus_message.clone());},  
             _ => {},
@@ -1276,48 +1276,59 @@ impl Core {
         if consensus_req.author != self.name {
             consensus_req.verify(&self.committee)?; 
             debug!("check validity");
-            valid = self.is_valid(consensus_message).await;
+            valid = self.is_valid(&consensus_message).await;
         }
+
+        if !valid {
+            return Ok(());
+        }
+
+        self.process_consensus_message(consensus_req.message, consensus_req.author).await
+    }
+
+    async fn process_consensus_message(&mut self, consensus_message: ConsensusMessage, author: PublicKey) -> DagResult<()> {
 
         let mut consensus_votes: Vec<(Slot, Digest, Signature)> = Vec::new();
        
-        debug!("processing consensus request");
+        debug!("processing consensus msg");
        
-        if valid {
-            match consensus_message {
-                ConsensusMessage::Prepare { slot, view: _, tc: _, qc_ticket: _, proposals,} 
-                => {
-                    debug!("processing prepare in slot {:?} with proposal {:?}", slot, proposals);
-                    self.process_prepare_message(consensus_message, consensus_votes.as_mut()).await;
-                },
-                ConsensusMessage::Confirm {
-                    slot,
-                    view: _,
-                    qc: _,
-                    proposals,
-                } => {
-                    println!("processing confirm message");
-                    debug!("processing confirm in slot {:?} with proposal {:?}", slot, proposals);
-                    // Start syncing on the proposals if we haven't already
-                    let mut header = Header::default();
-                    header.author = consensus_req.author;
-                    self.synchronizer.get_proposals(consensus_message, &header).await?;
-                    self.process_confirm_message(consensus_message, consensus_votes.as_mut()).await;
-                },
-                ConsensusMessage::Commit {
-                    slot,
-                    view: _,
-                    qc: _,
-                    proposals: _,
-                } => {
-                    println!("processing commit message");
-                    debug!("processing commit in slot {:?}", slot);
-                    let mut header = Header::default();
-                    header.author = consensus_req.author;
-                    self.process_commit_message(consensus_message.clone(), &header).await?; //FIXME: Does this need to be a copy?
+        
+        let mut header = Header::default();
+        header.author = author;
+
+        match &consensus_message {
+            ConsensusMessage::Prepare { slot, view: _, tc: _, qc_ticket: _, proposals,} 
+            => {
+                debug!("processing prepare in slot {:?} with proposal {:?}", slot, proposals);
+                if self.synchronizer.get_proposals(&consensus_message, &header).await.unwrap().is_empty() {
+                    return Ok(());
                 }
+                self.process_prepare_message(&consensus_message, consensus_votes.as_mut()).await;
+            },
+            ConsensusMessage::Confirm {
+                slot,
+                view: _,
+                qc: _,
+                proposals,
+            } => {
+                println!("processing confirm message");
+                debug!("processing confirm in slot {:?} with proposal {:?}", slot, proposals);
+                // Start syncing on the proposals if we haven't already
+                self.synchronizer.get_proposals(&consensus_message, &header).await?;
+                self.process_confirm_message(&consensus_message, consensus_votes.as_mut()).await;
+            },
+            ConsensusMessage::Commit {
+                slot,
+                view: _,
+                qc: _,
+                proposals: _,
+            } => {
+                println!("processing commit message");
+                debug!("processing commit in slot {:?}", slot);
+                self.process_commit_message(consensus_message.clone(), &header).await?; //FIXME: Does this need to be a copy?
             }
         }
+        
         
         debug!("Returning from process consensus size of consensus sigs {:?}", consensus_votes.len());
 
@@ -1330,16 +1341,16 @@ impl Core {
         let (slot, digest, sig) = consensus_votes.pop().unwrap();
         let vote = ConsensusVote {author: self.name, slot, digest, sig};
 
-        if consensus_req.author == self.name {
+        if author == self.name {
             debug!("Process own consensus vote");
             self.process_consensus_vote(vote, false).await.expect("Failed to process our own vote"); //TODO: Don't need to sign...
         } 
         else {
-            debug!("Send consensus vote to replica {}", consensus_req.author);
+            debug!("Send consensus vote to replica {}", author);
           
             let address = self
                     .committee
-                    .primary(&consensus_req.author)
+                    .primary(&author)
                     .expect("Author of valid header is not in the committee")
                     .primary_to_primary;
                 let bytes = bincode::serialize(&PrimaryMessage::ConsensusVote(vote))
@@ -1545,8 +1556,13 @@ impl Core {
         debug!("Can reprocess a header/commit message");
         match &consensus_message {
             ConsensusMessage::Prepare { slot: _, view: _, tc: _, qc_ticket: _, proposals: _ } => {
-                // Now that proposals are ready we can reprocess the header
-                self.process_header(header).await?;
+                if self.use_ride_share {
+                    // Now that proposals are ready we can reprocess the header
+                    self.process_header(header).await?;
+                }
+                else{
+                    self.process_consensus_message(consensus_message, header.author).await? 
+                }
             },
             ConsensusMessage::Confirm { slot: _, view: _, qc: _, proposals: _ } => {
                 // Don't need to do anything for the confirm case, since proposals will be
