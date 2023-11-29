@@ -105,7 +105,7 @@ impl Proposer {
         let mut header = Header::new(
                 self.name,
                 self.height,
-                self.digests.drain(..).collect(),
+                self.digests.drain(..1).collect(),
                 self.last_parent.clone().unwrap(),
                 &mut self.signature_service,
                 self.consensus_instances.clone(),
