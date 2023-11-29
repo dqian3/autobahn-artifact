@@ -38,7 +38,8 @@ impl Processor {
                 let digest = Digest(Sha512::digest(&batch).as_slice()[..32].try_into().unwrap());
 
                 // Store the batch.
-                store.write(digest.to_vec(), batch).await;
+                //store.write(digest.to_vec(), batch).await;
+                store.write(digest.to_vec(), Vec::default()).await;
 
                 // Deliver the batch's digest.
                 let message = match own_digest {
