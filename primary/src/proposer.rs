@@ -150,6 +150,7 @@ impl Proposer {
 
         let timer = sleep(Duration::from_millis(self.max_header_delay));
         tokio::pin!(timer);
+        let mut current_time = Instant::now();
 
         loop {
             // Check if we can propose a new header. We propose a new header when one of the following
@@ -171,6 +172,9 @@ impl Proposer {
                     debug!("Timer expired for height {}", self.height);
                 }
 
+                debug!("New car proposed after {:?} ms", current_time.elapsed().as_millis());
+                current_time = Instant::now();
+                
                 // Make a new header.
                 self.make_header().await;
                 self.payload_size = 0;
