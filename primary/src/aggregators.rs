@@ -41,7 +41,7 @@ impl VotesAggregator {
         }
         let author = vote.author;
         // Ensure it is the first time this authority votes.
-        println!("author is {:?}", author);
+        //println!("author is {:?}", author);
         ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
        
         self.votes.push((author, vote.signature));
@@ -111,13 +111,13 @@ impl QCMaker {
         vote: (Digest, Signature),
         committee: &Committee,
     ) -> DagResult<(bool, Option<QC>)> {   //bool = QC is available. Option = Some only if QC ready to be used.
-        println!("calling append");
+        //println!("calling append");
         ensure!(self.used.insert(author), DagError::AuthorityReuse(author));
-        println!("after ensure");
+        //println!("after ensure");
 
         self.votes.push((author, vote.1));
         self.weight += committee.stake(&author);
-        println!("QC weight is {:?}", self.weight);
+        //println!("QC weight is {:?}", self.weight);
 
         if self.try_fast {
             return self.check_fast_qc(vote.0, committee);

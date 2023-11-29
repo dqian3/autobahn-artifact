@@ -904,10 +904,10 @@ impl Certificate {
         if false {
             //matching_valids(&self.special_valids) {
             //DEBUG
-            // println!("verifiable digest: {:?}", &self.verifiable_digest());
+            // //println!("verifiable digest: {:?}", &self.verifiable_digest());
             // for (key, sig) in &self.votes {
-            //     println!("vote signature: {:?}", sig);
-            //     println!("vote author: {:?}", key);
+            //     //println!("vote signature: {:?}", sig);
+            //     //println!("vote author: {:?}", key);
             // }
             Signature::verify_batch(&self.verifiable_digest(), &self.votes).map_err(DagError::from)
         } else {

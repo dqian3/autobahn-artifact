@@ -91,7 +91,7 @@ async fn process_header() {
 
     // Send a header to the core.
     tx_primary_messages
-        .send(PrimaryMessage::Header(header()))
+        .send(PrimaryMessage::Header(header(), false))
         .await
         .unwrap();
 
@@ -188,7 +188,7 @@ async fn process_header_missing_parent() {
 
     // Send a header to the core.
     tx_primary_messages
-        .send(PrimaryMessage::Header(header_two))
+        .send(PrimaryMessage::Header(header_two, false))
         .await
         .unwrap();
 
@@ -270,7 +270,7 @@ async fn process_header_invalid_height() {
     };
     let id = header.id.clone();
     tx_primary_messages
-        .send(PrimaryMessage::Header(header))
+        .send(PrimaryMessage::Header(header, false))
         .await
         .unwrap();
 
@@ -354,7 +354,7 @@ async fn process_header_missing_payload() {
     };
     let id = header.id.clone();
     tx_primary_messages
-        .send(PrimaryMessage::Header(header))
+        .send(PrimaryMessage::Header(header, false))
         .await
         .unwrap();
 
@@ -452,7 +452,7 @@ async fn process_votes() {
 
     // Send a votes to the core.
     for vote in votes(&header) {
-        println!("Vote origin is {:?}", vote.origin);
+        //println!("Vote origin is {:?}", vote.origin);
         tx_primary_messages
             .send(PrimaryMessage::Vote(vote))
             .await
@@ -463,7 +463,7 @@ async fn process_votes() {
     assert_eq!(received_cert.height, expected.height);
     assert_eq!(received_cert.author, expected.author);
     assert_eq!(received_cert.header_digest, expected.header_digest);
-    println!("Expected cert is {:?}, {:?}", expected.header_digest, expected.height);
+    //println!("Expected cert is {:?}, {:?}", expected.header_digest, expected.height);
 
     // Ensure the listener received the certificate and stored it.
     /*let stored = store
@@ -555,25 +555,25 @@ async fn process_certificates() {
 
    
     for x in headers().iter() {
-        println!("author is {:?}", x.author);
+        //println!("author is {:?}", x.author);
         tx_primary_messages
-            .send(PrimaryMessage::Header(x.clone()))
+            .send(PrimaryMessage::Header(x.clone(), false))
             .await
             .unwrap();
     }
 
    
     for x in headers_from_certs {
-        println!("Sending headers with author {:?}", x.author);
+        //println!("Sending headers with author {:?}", x.author);
         tx_primary_messages
-            .send(PrimaryMessage::Header(x))
+            .send(PrimaryMessage::Header(x, false))
             .await
             .unwrap();
     }
 
     // Ensure the certificates are stored.
     for x in &certificates {
-        println!("Cert digest is {:?}", x.digest());
+        //println!("Cert digest is {:?}", x.digest());
         let stored = store.read(x.digest().to_vec()).await.unwrap();
         let serialized = bincode::serialize(x).unwrap();
         assert_eq!(stored, Some(serialized));
@@ -661,7 +661,7 @@ async fn process_prepare() {
     let header_list = headers();
     for x in header_list.clone() {
         tx_primary_messages
-            .send(PrimaryMessage::Header(x))
+            .send(PrimaryMessage::Header(x, false))
             .await
             .unwrap();
     }
@@ -680,7 +680,7 @@ async fn process_prepare() {
 
     // Send a header to the core.
     tx_primary_messages
-        .send(PrimaryMessage::Header(header.clone()))
+        .send(PrimaryMessage::Header(header.clone(), false))
         .await
         .unwrap();
 
@@ -808,7 +808,7 @@ async fn generate_confirm() {
     let header_list = headers();
     for x in header_list.clone() {
         tx_primary_messages
-            .send(PrimaryMessage::Header(x))
+            .send(PrimaryMessage::Header(x, false))
             .await
             .unwrap();
     }
@@ -835,7 +835,7 @@ async fn generate_confirm() {
 
 
     for vote in special_votes(&header, consensus_digests) {
-        println!("sending special votes");
+        //println!("sending special votes");
         let message = PrimaryMessage::Vote(vote);
         tx_primary_messages
             .send(message)
@@ -955,7 +955,7 @@ async fn generate_commit() {
     let header_list = headers();
     for x in header_list.clone() {
         tx_primary_messages
-            .send(PrimaryMessage::Header(x))
+            .send(PrimaryMessage::Header(x, false))
             .await
             .unwrap();
     }
@@ -982,7 +982,7 @@ async fn generate_commit() {
 
 
     for vote in special_votes(&header, consensus_digests) {
-        println!("sending special votes");
+        //println!("sending special votes");
         let message = PrimaryMessage::Vote(vote);
         tx_primary_messages
             .send(message)
@@ -1000,7 +1000,7 @@ async fn generate_commit() {
             let confirm_parent_cert = certificate(&header);
             let confirm_header = special_header(confirm_parent_cert, consensus_messages.clone());
 
-            println!("confirm header height {:?} author {:?}", confirm_header.height, confirm_header.author);
+            //println!("confirm header height {:?} author {:?}", confirm_header.height, confirm_header.author);
 
             tx_headers
                 .send(confirm_header.clone())
@@ -1011,7 +1011,7 @@ async fn generate_commit() {
             let confirm_digests = vec![confirm_message.digest().clone()];
 
             for vote in special_votes(&confirm_header, confirm_digests) {
-                println!("sending special votes confirm");
+                //println!("sending special votes confirm");
                 let message = PrimaryMessage::Vote(vote);
                 tx_primary_messages
                     .send(message)
@@ -1019,7 +1019,7 @@ async fn generate_commit() {
                     .unwrap();
             }
 
-            println!("after sending votes");
+            //println!("after sending votes");
 
             let commit_message = rx_info.recv().await.unwrap();
             rx_parents.recv().await.unwrap();
@@ -1032,7 +1032,7 @@ async fn generate_commit() {
                     let commit_parent_cert = certificate(&confirm_header);
                     let commit_header = special_header(commit_parent_cert, consensus_messages.clone());
 
-                    println!("sending commit header: {:?}, {:?}", commit_header.height, commit_header.author);
+                    //println!("sending commit header: {:?}, {:?}", commit_header.height, commit_header.author);
                     
                     // Ensure that the confirm header is processed and received
                     //sleep(Duration::from_millis(500)).await;
@@ -1042,7 +1042,7 @@ async fn generate_commit() {
                         .unwrap();
 
 
-                    println!("awaiting committer");
+                    //println!("awaiting committer");
                     let receive_commit_message = rx_committer.recv().await.unwrap();
                     match receive_commit_message {
                         ConsensusMessage::Commit { slot: slot2, view: view2, qc: qc2, proposals: proposals2 } => {
@@ -1145,7 +1145,7 @@ async fn generate_pipelined_prepare() {
     let header_list = headers();
     for x in header_list.clone() {
         tx_primary_messages
-            .send(PrimaryMessage::Header(x))
+            .send(PrimaryMessage::Header(x, false))
             .await
             .unwrap();
     }
@@ -1165,7 +1165,7 @@ async fn generate_pipelined_prepare() {
 
     // Send a header to the core.
     tx_primary_messages
-        .send(PrimaryMessage::Header(header.clone()))
+        .send(PrimaryMessage::Header(header.clone(), false))
         .await
         .unwrap();
 
@@ -1188,18 +1188,18 @@ async fn generate_pipelined_prepare() {
 
 
     for x in headers_from_certs.clone() {
-        println!("header author is {:?}", x.author);
+        //println!("header author is {:?}", x.author);
         tx_primary_messages
-            .send(PrimaryMessage::Header(x))
+            .send(PrimaryMessage::Header(x, false))
             .await
             .unwrap();
     }
 
 
     // Send a header to the core.
-    println!("special header author is {:?}", header.author);
+    //println!("special header author is {:?}", header.author);
     tx_primary_messages
-        .send(PrimaryMessage::Header(header.clone()))
+        .send(PrimaryMessage::Header(header.clone(), false))
         .await
         .unwrap();
 
@@ -1420,7 +1420,7 @@ async fn sync_missing_proposals() {
     }*/
 
     tx_primary_messages
-        .send(PrimaryMessage::Header(header_list[0].clone()))
+        .send(PrimaryMessage::Header(header_list[0].clone(), false))
         .await
         .unwrap();
 
@@ -1439,7 +1439,7 @@ async fn sync_missing_proposals() {
 
     // Send the special header to the core, should trigger sync
     tx_primary_messages
-        .send(PrimaryMessage::Header(header.clone()))
+        .send(PrimaryMessage::Header(header.clone(), false))
         .await
         .unwrap();
 
@@ -1447,9 +1447,9 @@ async fn sync_missing_proposals() {
     sleep(Duration::from_millis(500)).await;
     // Send the misssing proposals
     for x in header_list.into_iter().skip(1) {
-        println!("header author is {:?}", x.author);
+        //println!("header author is {:?}", x.author);
         tx_primary_messages
-            .send(PrimaryMessage::Header(x))
+            .send(PrimaryMessage::Header(x, false))
             .await
             .unwrap();
     }
@@ -1693,7 +1693,7 @@ async fn process_special_votes() {
             x => panic!("Unexpected message: {:?}", x),
         }
     }
-    println!("received all votes");
+    //println!("received all votes");
     // // Send a votes to the core. ==> Sending only 2 votes. Supplementing quorum with own vote (called as result of process_header).
     let mut count = 0;
     for vote in special_votes(&special_header()) {
@@ -1706,7 +1706,7 @@ async fn process_special_votes() {
         if count == 2 { break;}
     }
 
-    println!("count {}", count); 
+    //println!("count {}", count); 
 
      //send back val result = correct ==> allows us to form our own vote.
      let val = rx_special.recv().await.unwrap();
@@ -1720,7 +1720,7 @@ async fn process_special_votes() {
     // let received = rx_committer.recv().await.unwrap();
     // assert_eq!(received, expected);
 
-    println!("expected num votes: {}", expected.votes.len());
+    //println!("expected num votes: {}", expected.votes.len());
 
      // Spawn all listeners to receive our newly formed certificate.
     let cert_handles: Vec<_> = committee
@@ -1732,7 +1732,7 @@ async fn process_special_votes() {
     // Ensure all listeners got the certificate.
     for received in try_join_all(cert_handles).await.unwrap() {
         match bincode::deserialize(&received).unwrap() {
-            PrimaryMessage::Certificate(x) => {println!{"received cert with {} votes", x.votes.len()}; assert_eq!(x, expected)},
+            PrimaryMessage::Certificate(x) => {//println!{"received cert with {} votes", x.votes.len()}; assert_eq!(x, expected)},
             x => panic!("Unexpected message: {:?}", x),
         }
     }

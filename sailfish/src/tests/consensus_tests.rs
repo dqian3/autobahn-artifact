@@ -104,7 +104,7 @@ use serial_test::serial;
                             //Ignore all DAG processing TODO: Add a proper primary module here.
                            let ticket: Ticket = tick;
                            
-                           println!("Received a ticket for view {} at replica {}", ticket.view.clone(), author.clone());
+                           //println!("Received a ticket for view {} at replica {}", ticket.view.clone(), author.clone());
                            
                            //Issue Certificate to all nodes. (Note: This is simulating *only* special headers)
                            // Create a new header based on past ticket
@@ -121,15 +121,15 @@ use serial_test::serial;
                             }
                            
                            
-                            println!("Injecting new Certificate");
+                            //println!("Injecting new Certificate");
                            let cert: Certificate = Certificate { header: header, special_valids: Vec::new(), votes: Vec::new() };
 
-                           println!("Sending cert to all committers");
+                           //println!("Sending cert to all committers");
                            for sender in &committer_sender_channels{
                                 sender.send(cert.clone()).await.expect("failed to send cert to committer");
                            }  
                 
-                        println!("Sending cert to all consensus cores");
+                        //println!("Sending cert to all consensus cores");
                            for sender in &consensus_sender_channels{
                                sender.send(cert.clone()).await.expect("failed to send cert to consensus core");
                            }  
@@ -254,7 +254,7 @@ fn spawn_nodes_2(
                             //Ignore all DAG processing TODO: Add a proper primary module here.
                            let ticket: Ticket = tick;
                            
-                           println!("Received a ticket for view {} at replica {}", ticket.view.clone(), author.clone());
+                           //println!("Received a ticket for view {} at replica {}", ticket.view.clone(), author.clone());
                            
                            //Issue Certificate to all nodes. (Note: This is simulating *only* special headers)
                            // Create a new header based on past ticket
@@ -271,15 +271,15 @@ fn spawn_nodes_2(
                             }
                            
                            
-                            println!("Injecting new Certificate");
+                            //println!("Injecting new Certificate");
                            let cert: Certificate = Certificate { header: header, special_valids: Vec::new(), votes: Vec::new() };
 
-                           println!("Sending cert to all committers");
+                           //println!("Sending cert to all committers");
                            for sender in &committer_sender_channels{
                                 sender.send(cert.clone()).await.expect("failed to send cert to committer");
                            }  
                 
-                        println!("Sending cert to all consensus cores");
+                        //println!("Sending cert to all consensus cores");
                            for sender in &consensus_sender_channels{
                                sender.send(cert.clone()).await.expect("failed to send cert to consensus core");
                            }  
@@ -309,7 +309,7 @@ fn spawn_nodes_2(
                 );
 
                 while let Some(header) = rx_output.recv().await {
-                    println!("committed header for round {} at replica {}", header.round, replica.clone());
+                    //println!("committed header for round {} at replica {}", header.round, replica.clone());
                     // NOTE: Here goes the application logic.
                 }
             });
@@ -332,7 +332,7 @@ async fn end_to_end_single_header() {
     // Ensure all threads terminated correctly.
     let headers = try_join_all(handles).await.unwrap();
     for header in headers.clone() {
-        println!("committed header {:?}", header);
+        //println!("committed header {:?}", header);
     }
     assert!(headers.windows(2).all(|w| w[0] == w[1]));
 }
@@ -363,7 +363,7 @@ async fn end_to_end_with_dag_single_commit() {
     // Ensure all threads terminated correctly.
     let headers = try_join_all(handles).await.unwrap();
     for header in headers.clone() {
-        println!("committed header {:?}", header);
+        //println!("committed header {:?}", header);
     }
     assert!(headers.windows(2).all(|w| w[0] == w[1]));
 }
@@ -401,7 +401,7 @@ fn spawn_nodes_with_dag_single(
             let(tx_request_header_sync, mut rx_request_header_sync) = channel(1);
 
             let replica = name.clone();
-            println!("Spawning node {}", replica.clone());
+            //println!("Spawning node {}", replica.clone());
 
             let name_copy = name.clone();
             let mut store_copy = store.clone();
@@ -413,7 +413,7 @@ fn spawn_nodes_with_dag_single(
             tokio::spawn(async move {
 
                 //Create some supply of digests. Simualate Worker Batches
-                //println!("generating workload batches");
+                ////println!("generating workload batches");
                 //Note: Should Work without digest supply too: Will just time out
 
                 //TODO: Hack so that digests are automatically written to all replicas? (Avoid any synchronizer)
@@ -531,7 +531,7 @@ fn spawn_nodes_with_dag(
             let(tx_request_header_sync, mut rx_request_header_sync) = channel(1);
 
             let replica = name.clone();
-            println!("Spawning node {}", replica.clone());
+            //println!("Spawning node {}", replica.clone());
 
             let name_copy = name.clone();
             let mut store_copy = store.clone();
@@ -543,7 +543,7 @@ fn spawn_nodes_with_dag(
             tokio::spawn(async move {
 
                 //Create some supply of digests. Simualate Worker Batches
-                //println!("generating workload batches");
+                ////println!("generating workload batches");
                 //Note: Should Work without digest supply too: Will just time out
 
                 //TODO: Hack so that digests are automatically written to all replicas? (Avoid any synchronizer)
@@ -608,10 +608,10 @@ fn spawn_nodes_with_dag(
 
                 while let Some(header) = rx_output.recv().await {
                     if header.is_special {
-                        println!("SPECIAL committed view {}, view_round {} at replica {}", header.view, header.round, replica.clone());
+                        //println!("SPECIAL committed view {}, view_round {} at replica {}", header.view, header.round, replica.clone());
                     }
                     else{
-                        println!("NORMAL: committed header for round {} at replica {}", header.round, replica.clone());
+                        //println!("NORMAL: committed header for round {} at replica {}", header.round, replica.clone());
                     }
                     
                     // NOTE: Here goes the application logic.

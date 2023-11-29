@@ -221,7 +221,7 @@ impl Proposer {
                 }
 
                 Some((digest, worker_id)) = self.rx_workers.recv() => {
-                    println!("   received payload from worker {}", worker_id);
+                    //println!("   received payload from worker {}", worker_id);
                     self.payload_size += digest.size();
                     self.digests.push((digest, worker_id));
                 }

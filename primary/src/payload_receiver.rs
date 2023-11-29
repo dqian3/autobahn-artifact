@@ -26,6 +26,7 @@ impl PayloadReceiver {
             debug!("Receive Digest: {}", digest);
             let key = [digest.as_ref(), &worker_id.to_le_bytes()].concat();
             self.store.write(key.to_vec(), Vec::default()).await;
+            debug!("Wrote Digest: {}", digest);
         }
     }
 }

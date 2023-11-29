@@ -345,7 +345,7 @@ impl Core {
         return Ok(());
 
         warn!("Timeout reached for view {}", self.view);
-        println!("timeout reached for view {}", self.view);
+        //println!("timeout reached for view {}", self.view);
 
         // Increase the last prepared and voted view.
         self.increase_last_prepared_view(self.view);
@@ -391,7 +391,7 @@ impl Core {
             .collect();
         let message = bincode::serialize(&ConsensusMessage::Timeout(timeout.clone()))
             .expect("Failed to serialize timeout message");
-        println!("timeout message bytes {:?}", message.clone());
+        //println!("timeout message bytes {:?}", message.clone());
         self.network
             .broadcast(addresses.clone(), Bytes::from(message.clone()))
             .await;
@@ -547,7 +547,7 @@ impl Core {
         let mut consensus_sigs: Vec<(Info, Signature)> = Vec::new();
 
         for info in header.info_list.clone() {
-            println!("processing info");
+            //println!("processing info");
             match info.prepare_info {
                 Some(prepare_info) => {
                     self.process_prepare_info(header.clone(), prepare_info.clone(), info.instance_info).await;

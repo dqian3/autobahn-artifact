@@ -286,7 +286,7 @@ impl HeaderWaiter {
                             let height = header.height();
                             let author = header.author;
                             let id = proposal_digest(&consensus_message);
-                            println!("syncing proposals in header waiter");
+                            //println!("syncing proposals in header waiter");
 
                             // Ensure we sync only once per proposal
                             if self.pending.contains_key(&id) {
@@ -303,7 +303,7 @@ impl HeaderWaiter {
                             let (tx_cancel, rx_cancel) = channel(1);
                             self.pending.insert(id, (height, tx_cancel));
                             let fut = Self::proposal_waiter(wait_for, (consensus_message, header), rx_cancel);
-                            println!("created proposal waiter");
+                            //println!("created proposal waiter");
                             proposal_waiting.push(fut);
 
                             // Ensure we didn't already sent a sync request for these parents.
@@ -355,7 +355,7 @@ impl HeaderWaiter {
 
                 Some(result) = proposal_waiting.next() => match result {
                     Ok(Some(deliver)) => {
-                        println!("finished syncing");
+                        //println!("finished syncing");
                         let id = proposal_digest(&deliver.0);
                         let _ = self.pending.remove(&id);
                         for x in deliver.1.payload.keys() {

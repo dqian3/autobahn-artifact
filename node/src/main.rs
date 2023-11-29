@@ -20,6 +20,8 @@ pub const CHANNEL_CAPACITY: usize = 1_000;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    //std::env::set_var("RUST_BACKTRACE", "1");
+    
     let matches = App::new(crate_name!())
         .version(crate_version!())
         .about("A research implementation of Sailfish.")

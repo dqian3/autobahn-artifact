@@ -106,7 +106,7 @@ async fn process_special_header() {
     //let block = chain(vec![leader_keys(1)]).pop().unwrap();
     let (public_key, secret_key) = keys().pop().unwrap();
     let (public_key_1, secret_key_1) = leader_keys(1, 1);
-    //println!("Leader keys {}, {}, {}", leader_keys(2).0, leader_keys(3).0, leader_keys(4).0);
+    ////println!("Leader keys {}, {}, {}", leader_keys(2).0, leader_keys(3).0, leader_keys(4).0);
     //let vote = Vote::new_from_key(block.digest(), block.view, public_key, &secret_key);
 
     let ticket: Ticket = Ticket { header: Some(Header::genesis(&committee)), tc: None, slot: 0, proposals: BTreeMap::new() };
@@ -155,7 +155,7 @@ async fn process_special_cert() {
 
     let (public_key, secret_key) = keys().pop().unwrap();
     let (public_key_1, secret_key_1) = leader_keys(1, 1);
-    //println!("Leader keys {}, {}, {}", leader_keys(2).0, leader_keys(3).0, leader_keys(4).0);
+    ////println!("Leader keys {}, {}, {}", leader_keys(2).0, leader_keys(3).0, leader_keys(4).0);
     //let vote = Vote::new_from_key(block.digest(), block.view, public_key, &secret_key);
 
     let ticket: Ticket = Ticket { header: Some(Header::genesis(&committee)), tc: None, slot: 0, proposals: BTreeMap::new() };

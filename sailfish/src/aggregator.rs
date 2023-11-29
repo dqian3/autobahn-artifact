@@ -85,7 +85,7 @@ impl QCMaker {
 
         self.votes.push((author, vote.signature.clone()));
         self.weight += committee.stake(&author);
-        println!("self weight is {}", self.votes.len());
+        //println!("self weight is {}", self.votes.len());
         if self.weight >= committee.quorum_threshold() {
             self.weight = 0; // Ensures QC is only made once.
             return Ok(Some(QC {

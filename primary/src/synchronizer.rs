@@ -101,12 +101,12 @@ impl Synchronizer {
     pub async fn get_proposals(&mut self, consensus_message: &ConsensusMessage, delivered_header: &Header) -> DagResult<Vec<Header>> { 
         let mut missing = Vec::new();
         let mut proposals_vector = Vec::new();
-        println!("getting proposals");
+        //println!("getting proposals");
 
         match consensus_message {
             ConsensusMessage::Prepare { slot: _, view: _, tc: _, qc_ticket: _, proposals } => {
                 for (pk, proposal) in proposals {
-                    println!("proposal inside prepare");
+                    //println!("proposal inside prepare");
 
                     if proposal.header_digest == self.genesis_headers.get(&pk).unwrap().digest() {
                         proposals_vector.push(self.genesis_headers.get(&pk).unwrap().clone());
@@ -120,9 +120,9 @@ impl Synchronizer {
 
                     match self.store.read(proposal.header_digest.to_vec()).await? {
                         Some(header) => {
-                            println!("in some case");
+                            //println!("in some case");
                             proposals_vector.push(bincode::deserialize(&header)?);
-                            println!("after adding to proposal vector");
+                            //println!("after adding to proposal vector");
                         },
                         None => missing.push(proposal.clone()),
                     }
@@ -162,12 +162,12 @@ impl Synchronizer {
         }
 
         if missing.is_empty() {
-            println!("Have all proposals");
+            //println!("Have all proposals");
             debug!("have all proposals and their ancestors");
             return Ok(proposals_vector);
         }
 
-        println!("sending to header waiter");
+        //println!("sending to header waiter");
         debug!("Triggering sync for proposals");
         debug!("missing proposals are {:?}", missing);
         self.tx_header_waiter
@@ -179,12 +179,12 @@ impl Synchronizer {
 
     // pub async fn sync_proposals(&mut self, consensus_message: &ConsensusMessage) -> DagResult<bool> {
     //     let mut missing = Vec::new();
-    //     println!("synchronizing on proposals");
+    //     //println!("synchronizing on proposals");
 
     //     match consensus_message {
     //         ConsensusMessage::Prepare { slot: _, view: _, tc: _, qc_ticket: _, proposals } => {
     //             for (pk, proposal) in proposals {
-    //                 println!("proposal inside prepare");
+    //                 //println!("proposal inside prepare");
 
     //                 if proposal.header_digest == self.genesis_headers.get(&pk).unwrap().digest() {
     //                     continue;
