@@ -103,7 +103,7 @@ impl Proposer {
     async fn make_header(&mut self) {
         // Make a new header.
         debug!("digests size before is {:?}", self.digests.len());
-        let mut header: Header;
+        /*let mut header: Header;
         if self.digests.len() > 0 {
             header = Header::new(
                 self.name,
@@ -125,9 +125,18 @@ impl Proposer {
                 self.num_active_instances,
             ).await;
 
-        }
+        }*/
 
-        debug!("digests size after is {:?}", self.digests.len());
+        let mut header = Header::new(
+                self.name,
+                self.height,
+                self.digests.drain(..).collect(),
+                self.last_parent.clone().unwrap(),
+                &mut self.signature_service,
+                self.consensus_instances.clone(),
+                self.num_active_instances,
+            ).await;
+
 
         if self.is_special {
             header.special = true;
