@@ -93,7 +93,7 @@ impl Helper {
                                     //TODO: Remove this deserialization-serialization in the critical path.
                                     let header = bincode::deserialize(&data)
                                         .expect("Failed to deserialize our own certificate");
-                                    let bytes = bincode::serialize(&PrimaryMessage::Header(header))
+                                    let bytes = bincode::serialize(&PrimaryMessage::Header(header, true))  //sync = true
                                         .expect("Failed to serialize our own certificate");
                                     self.network.send(address, Bytes::from(bytes)).await;
                                 }

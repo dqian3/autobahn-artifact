@@ -41,7 +41,7 @@ pub type Slot = u64;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum PrimaryMessage {
-    Header(Header),
+    Header(Header, bool),
     Vote(Vote),
     Certificate(Certificate),
     Timeout(Timeout),

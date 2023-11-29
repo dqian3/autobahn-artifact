@@ -266,7 +266,7 @@ impl Core {
             .iter()
             .map(|(_, x)| x.primary_to_primary)
             .collect();
-        let bytes = bincode::serialize(&PrimaryMessage::Header(header.clone()))
+        let bytes = bincode::serialize(&PrimaryMessage::Header(header.clone(), false))
             .expect("Failed to serialize our own header");
         let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
         self.cancel_handlers
@@ -279,7 +279,7 @@ impl Core {
     }
 
     #[async_recursion]
-    async fn process_header(&mut self, header: Header, loopback: bool) -> DagResult<()> {
+    async fn process_header(&mut self, header: Header, sync: bool) -> DagResult<()> {
         debug!("Processing {:?}", header);
         println!("Processing the header with height {:?}", header.height);
 
@@ -309,7 +309,7 @@ impl Core {
 
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
         // reschedule processing of this header once we have it.
-        if self.synchronizer.missing_payload(&header, loopback).await? {
+        if self.synchronizer.missing_payload(&header, sync).await? {
             println!("Missing payload");
             debug!("Processing of {} suspended: missing payload", header);
             return Ok(());
@@ -1563,7 +1563,7 @@ impl Core {
             ConsensusMessage::Prepare { slot, view, tc: _, qc_ticket: _, proposals: _ } => {
                 if self.use_ride_share {
                     // Now that proposals are ready we can reprocess the header
-                    self.process_header(header, true).await?;
+                    self.process_header(header, false).await?;
                 }
                 else{
                     if self.last_voted_consensus.contains(&(*slot, *view)){ //Don't prepare twice
@@ -1981,9 +1981,9 @@ impl Core {
                 // We receive here messages from other primaries.
                 Some(message) = self.rx_primaries.recv() => {
                     match message {
-                        PrimaryMessage::Header(header) => {
+                        PrimaryMessage::Header(header, sync) => {
                             match self.sanitize_header(&header) {
-                                Ok(()) => self.process_header(header, false).await,
+                                Ok(()) => self.process_header(header, sync).await,
                                 error => error
                             }
 
@@ -2027,7 +2027,7 @@ impl Core {
                 // execution (we were missing some of their dependencies) and we are now ready to resume processing.
                 Some(header) = self.rx_header_waiter.recv() => {
                     debug!("normal loopback for header");
-                    self.process_header(header, true).await
+                    self.process_header(header, false).await
                 },
 
                 // Loopback for committed instance that hasn't had all of it ancestors yet
