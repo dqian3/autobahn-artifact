@@ -18,7 +18,7 @@ def local(ctx, debug=True):
         'workers': 1,
         'rate': 50_000,
         'tx_size': 512,
-        'duration': 20,
+        'duration': 10,
     }
     node_params = {
         'timeout_delay': 500,  # ms
@@ -33,10 +33,14 @@ def local(ctx, debug=True):
         'use_optimistic_tips': True,
         'use_parallel_proposals': True,
         'k': 4,
-        'use_fast_path': True,
+        'use_fast_path': False,
         'fast_path_timeout': 500,
         'use_ride_share': False,
-        'car_timeout': 2000
+        'car_timeout': 2000,
+
+        'simulate_asynchrony': False, 
+        'asynchrony_start': 2_000, #ms
+        'asynchrony_duration': 1_000 #ms
     }
     try:
         ret = LocalBench(bench_params, node_params).run(debug)

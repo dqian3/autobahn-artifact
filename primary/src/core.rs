@@ -128,6 +128,13 @@ pub struct Core {
     car_timeout: u64,
     car_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = Vote> + Send>>>,
     fast_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = ConsensusVote> + Send>>>, // Use this one for Fast Path on external Consensus case
+
+    //asynchrony simulation,
+    simulate_asynchrony: bool,
+    asynchrony_start: u64,
+    asynchrony_duration: u64,
+    during_simulated_asynchrony: bool,
+    async_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>
 }
 
 impl Core {
@@ -157,6 +164,10 @@ impl Core {
         fast_path_timeout: u64,
         use_ride_share: bool,
         car_timeout: u64,
+
+        simulate_asynchrony: bool,
+        asynchrony_start: u64,
+        asynchrony_duration: u64,
     ) {
         tokio::spawn(async move {
             Self {
@@ -215,6 +226,12 @@ impl Core {
                 car_timeout,
                 car_timer_futures: FuturesUnordered::new(),
                 fast_timer_futures: FuturesUnordered::new(),
+
+                simulate_asynchrony,
+                asynchrony_start,
+                asynchrony_duration,
+                during_simulated_asynchrony: false,
+                async_timer_futures: FuturesUnordered::new(),
             }
             .run()
             .await;
@@ -838,6 +855,36 @@ impl Core {
 
     #[async_recursion]
     async fn send_consensus_req(&mut self, mut consensus_message: ConsensusMessage) -> DagResult<()> {
+
+        //TODO: First test a single view change. For slot 5 fail to propose anything
+        //TODO: Then, test whether winning proposal works: For slot 5 fail to send confirm; or fail to send commit
+        //TODO: If those work: Try failing to send for as long as a timer is active.
+
+        match &consensus_message {
+            ConsensusMessage::Prepare {slot, view, tc, qc_ticket: _, proposals} => {
+                if self.during_simulated_asynchrony {
+                    debug!("Simulating Asynchrony: skip sending Prepare for slot {} view {}. This will trigger a view change", slot, view);
+                    return Ok(());
+                }
+                // if *slot == 5 && *view == 1 {
+                //     debug!("skip sending Prepare for slot 5 view 1. Trigger view change");
+                //     return Ok(());
+                // }
+            },
+            ConsensusMessage::Confirm {slot, view, qc: _, proposals} => {
+                // if *slot == 5 && *view == 1 {
+                //     debug!("skip sending Confirm for slot 5 view 1. Trigger view change");
+                //     return Ok(());
+                // }
+            },
+            ConsensusMessage::Commit {slot, view, qc: _, proposals} => {
+                // if *slot == 5 && *view <3  {
+                //     debug!("skip sending Commit for slot 5 view 1. Trigger view change");
+                //     return Ok(());
+                // }
+            },
+        };
+
         debug!("Send req for Consensus message {}", consensus_message);
 
         self.set_consensus_proposal(&mut consensus_message);
@@ -1015,7 +1062,7 @@ impl Core {
                 //     self.prepare_tickets.push_back(prepare_message.clone());
                 //     return Ok(())
                 // }
-            
+    
 
                 // If there is enough coverage and we haven't already proposed in the next slot then create a new
                 // prepare message if we are the leader of view 1 in the next slot
@@ -1397,12 +1444,15 @@ impl Core {
 
                 // If we haven't already started the timer for the next slot, start it
                 // TODO:Can implement different forwarding methods (can be random, can forward to f+1, current one is the most pessimisstic)
-                if !self.timers.contains(&(slot + 1, 1)) {
-                    let timer = Timer::new(slot + 1, 1, self.timeout_delay);
-                    self.timer_futures.push(Box::pin(timer));
-                    self.timers.insert((slot + 1, 1));
+              
+                if self.k > 1 { //check whether a) we have already committed; and if not b) whether ticket is ready (prepare and QC)
+                    if !self.committed_slots.contains_key(&(slot+1)) && !self.timers.contains(&(slot + 1, 1)) && self.committed_slots.contains_key(&(slot+1 - self.k))  { 
+                        debug!("start timer for slot {}", slot +1);
+                        let timer = Timer::new(slot + 1, 1, self.timeout_delay);
+                        self.timer_futures.push(Box::pin(timer));
+                        self.timers.insert((slot + 1, 1));
+                    }
                 }
-
 
                 for (pk, proposal) in proposals {
                     debug!("prepare slot {:?}, proposal height {:?}", slot, proposal.height);
@@ -1496,6 +1546,23 @@ impl Core {
 
 
                 //self.begin_slot_from_commit(&commit_message).await.expect("Failed to start next consensus");
+
+                if self.k == 1 { //Start timer for next slot
+                    if !self.timers.contains(&(slot + self.k, 1)) {
+                        debug!("start timer for slot {}", slot +1);
+                        let timer = Timer::new(slot + self.k, 1, self.timeout_delay);
+                        self.timer_futures.push(Box::pin(timer));
+                        self.timers.insert((slot + self.k, 1));
+                    }
+                }
+                else{ //If slot + k has ticket ready (Prepare from s+k-1 + QC in s)
+                    if !self.timers.contains(&(slot + self.k, 1)) && self.views.contains_key(&(slot+self.k -1)) {
+                        debug!("start timer for slot {}", slot +1);
+                        let timer = Timer::new(slot + self.k, 1, self.timeout_delay);
+                        self.timer_futures.push(Box::pin(timer));
+                        self.timers.insert((slot + self.k, 1));
+                    }
+                }
 
                 // Only send to committer if proposals and all ancestors are stored locally,
                 // otherwise sync will be triggered, and this commit message will be reprocessed
@@ -1642,6 +1709,7 @@ impl Core {
 
         //If timer was cancelled, ignore  -- Note: technically redundant with commit check below, but currently we do not insert CommitQC's... TODO: Need to insert these so we can avoid joining view change and just reply.
         if !self.timers.contains(&(slot, view)) {
+            debug!("Timer for slot {}, view {} is obsolete. Has been cancelled", slot, view);
             return Ok(())
         }
 
@@ -1649,6 +1717,7 @@ impl Core {
         match self.views.get(&slot) {
             Some(v) => {
                 if *v > view {
+                    debug!("Timer for slot {}, view {} is obsolete. Have moved to view {}", slot, view, *v);
                     return Ok(());
                 }
             },
@@ -1669,6 +1738,7 @@ impl Core {
             None => {},
         };
 
+        debug!("Sending Timeout for slot {}, view {}", slot, view);
         // Make a timeout message.for the slot, view, containing the highest QC this replica has
         // seen
         let timeout = Timeout::new(
@@ -1680,10 +1750,10 @@ impl Core {
             self.signature_service.clone(),
         )
         .await;
-        debug!("Created {:?}", timeout);
+        debug!("Created Timeout: {:?}", timeout);
 
         // Broadcast the timeout message.
-        debug!("Broadcasting {:?}", timeout);
+        debug!("Broadcasting Timeout: {:?}", timeout);
         let addresses = self
             .committee
             .others_primaries(&self.name)
@@ -1721,6 +1791,11 @@ impl Core {
             _ => {}
         };
 
+        if self.committed_slots.contains_key(&timeout.slot) {
+            //TODO: Forward CommitQC instead.
+            return Ok(());
+        }
+
         // Ensure the timeout is well formed.
         timeout.verify(&self.committee)?;
 
@@ -1740,7 +1815,7 @@ impl Core {
 
         // Add the new vote to our aggregator and see if we have a quorum.
         if let Some(tc) = tc_maker.append(timeout.clone(), &self.committee)? {
-            debug!("Assembled {:?}", tc);
+            debug!("Assembled TimeoutCertificate {:?}", tc);
 
             // Try to advance the view
             self.views.insert(timeout.slot, timeout.view + 1);
@@ -1783,8 +1858,11 @@ impl Core {
         // Make a new prepare message if we are the next leader.
         if self.name == self.leader_elector.get_leader(tc.slot, tc.view + 1) {
 
-            
+            debug!("IsLeader. Start prepare from TC");
             let winning_proposals = tc.get_winning_proposals(&self.committee);
+
+            debug!("winning proposals: {:?}", winning_proposals);
+            
 
             // If there is no QC we have to propose, then use our current tips for our proposal => happens later
             // if winning_proposals.is_empty() {
@@ -1807,7 +1885,6 @@ impl Core {
                 .expect("Failed to send consensus instance");
             }
             else{
-                debug!("start prepare from TC");
                 self.send_consensus_req(prepare_message).await?;
             }
            
@@ -1945,11 +2022,21 @@ impl Core {
 
     // Main loop listening to incoming messages.
     pub async fn run(&mut self) {
+
+        //Simulate asynchrony duration:
+        if self.simulate_asynchrony {
+            let async_start = Timer::new(0, 0, self.asynchrony_start);
+            let async_end = Timer::new(0, 0, self.asynchrony_start + self.asynchrony_duration);
+            self.async_timer_futures.push(Box::pin(async_start));
+            self.async_timer_futures.push(Box::pin(async_end));
+        }
+
         // Initialize current proposals with the genesis tips
         self.current_proposal_tips = Header::genesis_proposals(&self.committee);
         debug!("genesis tips are {:?}", self.current_proposal_tips);
 
         // Start the timeout for slot 1, view 1
+        debug!("start timer for slot {}", 1);
         let first_timer = Timer::new(1, 1, self.timeout_delay);
         self.timer_futures.push(Box::pin(first_timer));
         self.timers.insert((1, 1));
@@ -2050,6 +2137,8 @@ impl Core {
 
                 //Fast path loopback for external consensus
                 Some(vote) = self.fast_timer_futures.next() => self.process_consensus_vote(vote, true).await,
+
+                Some((slot, view)) = self.async_timer_futures.next() => {self.during_simulated_asynchrony = !self.during_simulated_asynchrony; Ok(())},
 
             };
             match result {

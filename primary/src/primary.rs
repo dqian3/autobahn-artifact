@@ -203,6 +203,9 @@ impl Primary {
             parameters.fast_path_timeout,
             parameters.use_ride_share,
             parameters.car_timeout,
+            parameters.simulate_asynchrony,
+            parameters.asynchrony_start,
+            parameters.asynchrony_duration,
         );
 
         Committer::spawn(committee.clone(), store.clone(), parameters.gc_depth, rx_mempool, rx_committer, rx_commit, tx_output, synchronizer);

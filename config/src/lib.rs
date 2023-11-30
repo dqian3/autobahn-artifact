@@ -93,6 +93,11 @@ pub struct Parameters {
 
     pub use_ride_share: bool,
     pub car_timeout: u64,
+
+    //asynchrony simulation:
+    pub simulate_asynchrony: bool,
+    pub asynchrony_start: u64,
+    pub asynchrony_duration: u64,
 }
 
 impl Default for Parameters {
@@ -116,6 +121,10 @@ impl Default for Parameters {
             use_ride_share: false,
             car_timeout: 2000,
 
+            //Async simulation:
+            simulate_asynchrony: false,
+            asynchrony_start: 20_000, //20 second in
+            asynchrony_duration: 10_000, //10 seconds
         }
     }
 }

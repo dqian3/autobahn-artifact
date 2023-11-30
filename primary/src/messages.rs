@@ -1570,7 +1570,7 @@ impl TC {
 
 impl fmt::Debug for TC {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        write!(f, "TC({}, {:?})", self.view, self.slot)
+        write!(f, "TC({}, {:?})", self.slot, self.view)
     }
 }
 
