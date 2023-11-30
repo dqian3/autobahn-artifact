@@ -9,7 +9,7 @@ use crypto::Hash as _;
 use crypto::{Digest, PublicKey};
 #[cfg(feature = "benchmark")]
 use log::info;
-use log::{error, warn};
+use log::{error, warn, debug};
 use network::NetMessage;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, HashMap};
@@ -192,6 +192,7 @@ impl Core {
     }
 
     async fn get_payload(&mut self, max: usize) -> MempoolResult<(Digest, Payload)> {
+        debug!("The queue size is {:?}", self.queue.len());
         if self.queue.is_empty() {
             if let Some(payload) = self.payload_maker.make().await {
                 let digest = payload.digest();
