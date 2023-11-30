@@ -39,6 +39,7 @@ impl Processor {
 
                 // Store the batch.
                 store.write(digest.to_vec(), batch).await;
+                //store.write(digest.to_vec(), Vec::default()).await;
 
                 // Deliver the batch's digest.
                 let message = match own_digest {

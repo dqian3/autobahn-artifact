@@ -9,6 +9,7 @@ use crypto::Digest;
 use crypto::PublicKey;
 #[cfg(feature = "benchmark")]
 use ed25519_dalek::{Digest as _, Sha512};
+use log::debug;
 #[cfg(feature = "benchmark")]
 use log::info;
 use network::{ReliableSender, SimpleSender};
@@ -79,6 +80,7 @@ impl BatchMaker {
     async fn run(&mut self) {
         let timer = sleep(Duration::from_millis(self.max_batch_delay));
         tokio::pin!(timer);
+        let mut current_time = Instant::now();
 
         loop {
             tokio::select! {
@@ -88,15 +90,22 @@ impl BatchMaker {
                     self.current_batch.push(transaction);
                     if self.current_batch_size >= self.batch_size {
                         self.seal().await;
+
+                        debug!("batch ready it took {:?} ms", current_time.elapsed().as_millis());
+                        current_time = Instant::now();
+
                         timer.as_mut().reset(Instant::now() + Duration::from_millis(self.max_batch_delay));
                     }
                 },
 
                 // If the timer triggers, seal the batch even if it contains few transactions.
                 () = &mut timer => {
+                    debug!("BatchMaker: max batch delay timer triggered");
                     if !self.current_batch.is_empty() {
                         self.seal().await;
                     }
+
+                    current_time = Instant::now();
                     timer.as_mut().reset(Instant::now() + Duration::from_millis(self.max_batch_delay));
                 }
             }

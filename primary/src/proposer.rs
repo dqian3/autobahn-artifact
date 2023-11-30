@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::messages::{Certificate, Header, ConsensusMessage};
@@ -102,6 +102,31 @@ impl Proposer {
     
     async fn make_header(&mut self) {
         // Make a new header.
+        debug!("digests size before is {:?}", self.digests.len());
+        /*let mut header: Header;
+        if self.digests.len() > 0 {
+            header = Header::new(
+                self.name,
+                self.height,
+                self.digests.drain(..1).collect(),
+                self.last_parent.clone().unwrap(),
+                &mut self.signature_service,
+                self.consensus_instances.clone(),
+                self.num_active_instances,
+            ).await;
+        } else {
+            header = Header::new(
+                self.name,
+                self.height,
+                BTreeMap::new(),
+                self.last_parent.clone().unwrap(),
+                &mut self.signature_service,
+                self.consensus_instances.clone(),
+                self.num_active_instances,
+            ).await;
+
+        }*/
+
         let mut header = Header::new(
                 self.name,
                 self.height,
@@ -111,6 +136,7 @@ impl Proposer {
                 self.consensus_instances.clone(),
                 self.num_active_instances,
             ).await;
+
 
         if self.is_special {
             header.special = true;
@@ -150,6 +176,7 @@ impl Proposer {
 
         let timer = sleep(Duration::from_millis(self.max_header_delay));
         tokio::pin!(timer);
+        let mut current_time = Instant::now();
 
         loop {
             // Check if we can propose a new header. We propose a new header when one of the following
@@ -171,6 +198,9 @@ impl Proposer {
                     debug!("Timer expired for height {}", self.height);
                 }
 
+                debug!("New car proposed after {:?} ms", current_time.elapsed().as_millis());
+                current_time = Instant::now();
+                
                 // Make a new header.
                 self.make_header().await;
                 self.payload_size = 0;
