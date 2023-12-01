@@ -12,7 +12,7 @@ use log::info;
 use log::{error, warn, debug};
 use network::NetMessage;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet, HashMap};
+use std::collections::{HashSet, HashMap, VecDeque};
 #[cfg(feature = "benchmark")]
 use std::convert::TryInto as _;
 use store::Store;
@@ -39,7 +39,7 @@ pub struct Core {
     core_channel: Receiver<MempoolMessage>,
     consensus_channel: Receiver<ConsensusMempoolMessage>,
     network_channel: Sender<NetMessage>,
-    queue: HashMap<Digest, Payload>,
+    queue: VecDeque<(Digest, Payload)>,
 }
 
 impl Core {
@@ -55,7 +55,7 @@ impl Core {
         consensus_channel: Receiver<ConsensusMempoolMessage>,
         network_channel: Sender<NetMessage>,
     ) -> Self {
-        let queue = HashMap::with_capacity(parameters.queue_capacity);
+        let queue = VecDeque::with_capacity(parameters.queue_capacity);
         Self {
             name,
             committee,
@@ -142,7 +142,7 @@ impl Core {
         // we will add to the queue.
         let digest = payload.digest();
         self.process_own_payload(&digest, &payload).await?;
-        self.queue.insert(digest, payload);
+        self.queue.push_back((digest, payload));
         Ok(())
     }
 
@@ -201,26 +201,11 @@ impl Core {
             } else {
                 Ok(Vec::default())
             }
-        } else {  //Take one.
-            let mut size = 0;
-            let mut payload_vec = Vec::new();
+        } else {  //Take cap k>1
+            let digest_len = Digest::default().size();
+            let num_digests = max / digest_len;
 
-            for key in self.queue.keys() {
-                let payload = self.queue.get(&key).unwrap().clone();
-                size += payload.size();
-                payload_vec.push((key.clone(), payload));
-
-                debug!("total payload included size is {:?}", size);
-
-                if size >= max {
-                    break;
-                }
-
-            }
-
-            for (key, _) in &payload_vec {
-                self.queue.remove(key);
-            }
+            let payload_vec: Vec<(Digest, Payload)> = self.queue.drain(..num_digests).collect();
 
             debug!("num payloads is {:?}", payload_vec.len());
             
@@ -236,8 +221,11 @@ impl Core {
     async fn cleanup(&mut self, digests: Vec<Digest>, round: RoundNumber) {
         self.synchronizer.cleanup(round).await;
         for x in &digests {
-            self.queue.remove(x);
+            self.queue.retain(|(y, _)| *y != *x);
         }
+        /*for x in &digests {
+            self.queue.remove(x);
+        }*/
     }
 
     pub async fn run(&mut self) {
