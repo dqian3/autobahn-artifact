@@ -221,6 +221,8 @@ impl Core {
             for (key, _) in &payload_vec {
                 self.queue.remove(key);
             }
+
+            debug!("num payloads is {:?}", payload_vec.len());
             
             Ok(payload_vec)
           
