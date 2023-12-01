@@ -15,7 +15,7 @@ pub enum PayloadStatus {
 
 #[derive(Debug)]
 pub enum ConsensusMempoolMessage {
-    Get(usize, oneshot::Sender<(Digest, Payload)>),
+    Get(usize, oneshot::Sender<Vec<(Digest, Payload)>>),
     Verify(Box<Block>, oneshot::Sender<PayloadStatus>),
     Cleanup(Vec<Digest>, RoundNumber),
 }
@@ -29,7 +29,7 @@ impl MempoolDriver {
         Self { mempool_channel }
     }
 
-    pub async fn get(&mut self, max: usize) -> (Digest, Payload) {
+    pub async fn get(&mut self, max: usize) -> Vec<(Digest, Payload)> {
         let (sender, receiver) = oneshot::channel();
         let message = ConsensusMempoolMessage::Get(max, sender);
         self.mempool_channel  //Send to mempool
@@ -63,7 +63,24 @@ impl MempoolDriver {
     }
 
     pub async fn cleanup(&mut self, b0: &Block, b1: &Block, b2: &Block, block: &Block) {
-        let digests = vec![b0.digest.clone(), b1.digest.clone(), b2.digest.clone(), block.digest.clone()];
+        //let digests = vec![b0.digest.clone(), b1.digest.clone(), b2.digest.clone(), block.digest.clone()];
+        let mut digests = Vec::new();
+        for (dig, _) in b0.payload.iter() {
+            digests.push(dig.clone());
+        }
+
+        for (dig, _) in b1.payload.iter() {
+            digests.push(dig.clone());
+        }
+
+        for (dig, _) in b2.payload.iter() {
+            digests.push(dig.clone());
+        }
+
+        for (dig, _) in block.payload.iter() {
+            digests.push(dig.clone());
+        }
+
         let message = ConsensusMempoolMessage::Cleanup(digests, block.round);
         self.mempool_channel
             .send(message)

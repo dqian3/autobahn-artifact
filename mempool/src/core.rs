@@ -191,21 +191,34 @@ impl Core {
         Ok(())
     }
 
-    async fn get_payload(&mut self, max: usize) -> MempoolResult<(Digest, Payload)> {
+    async fn get_payload(&mut self, max: usize) -> MempoolResult<Vec<(Digest, Payload)>> {
         debug!("The queue size is {:?}", self.queue.len());
         if self.queue.is_empty() {
             if let Some(payload) = self.payload_maker.make().await {
                 let digest = payload.digest();
                 self.process_own_payload(&digest, &payload).await?;
-                Ok((digest, payload))
+                Ok(vec![(digest, payload)])
             } else {
-                Ok((Digest::default(), Payload::default()))
+                Ok(Vec::default())
             }
         } else {  //Take one.
-            let dig = self.queue.keys().next().unwrap().clone();
-            let payload = self.queue.get_mut(&dig).unwrap().clone();  //Can one somehow avoid this copy...
-            self.queue.remove(&dig);
-            Ok((dig, payload))
+            let mut size = 0;
+            let mut payload_vec = Vec::new();
+
+            for key in self.queue.keys() {
+                let payload = self.queue.get(&key).unwrap().clone();
+                size += payload.size();
+                if size >= max {
+                    break;
+                }
+                payload_vec.push((key.clone(), payload));
+            }
+
+            for (key, _) in &payload_vec {
+                self.queue.remove(key);
+            }
+            
+            Ok(payload_vec)
           
         }
     }

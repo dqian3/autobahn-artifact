@@ -70,8 +70,7 @@ pub struct Block {
     pub tc: Option<TC>,
     pub author: PublicKey,
     pub round: RoundNumber,
-    pub digest: Digest,
-    pub payload: Payload, 
+    pub payload: Vec<(Digest, Payload)>, 
     pub signature: Signature,
    
 }
@@ -82,8 +81,7 @@ impl Block {
         tc: Option<TC>,
         author: PublicKey,
         round: RoundNumber,
-        digest: Digest, //only contains one hash   //TODO: Remove this -- not really needed
-        payload: Payload, 
+        payload: Vec<(Digest, Payload)>, 
         mut signature_service: SignatureService,
     ) -> Self {
         let block = Self {
@@ -91,7 +89,6 @@ impl Block {
             tc,
             author,
             round,
-            digest,
             signature: Signature::default(),
             payload,
         };
@@ -116,10 +113,10 @@ impl Block {
         );
 
         //Check digest hashes match payload:
-        ensure!(
+        /*ensure!(
             self.digest == self.payload.digest(),
             ConsensusError::InvalidDigest()
-        );
+        );*/
         // for (i, x) in self.digest.iter().enumerate() {
         //     let mut hasher = Sha512::new();
         //     hasher.update(self.payload[i].transactions);
@@ -147,7 +144,7 @@ impl Hash for Block {
         hasher.update(self.author.0);
         hasher.update(self.round.to_le_bytes());
       
-        hasher.update(&self.digest);
+        //hasher.update(&self.digest);
         
         hasher.update(&self.qc.hash);
         Digest(hasher.finalize().as_slice()[..32].try_into().unwrap())
@@ -163,7 +160,7 @@ impl fmt::Debug for Block {
             self.author,
             self.round,
             self.qc,
-            self.digest,
+            self.payload.len(),
         )
     }
 }

@@ -150,14 +150,16 @@ impl Core {
 
         // Send all the newly committed blocks to the node's application layer.
         while let Some(block) = to_commit.pop_back() {
-            if block.digest != Digest::default() {
+            //if block.digest != Digest::default() {
                 info!("Committed {}", block);
 
+                for (digest, _) in block.payload.iter() {
                 #[cfg(feature = "benchmark")]
                 // NOTE: This log entry is used to compute performance.
-                info!("Committed B{}({})", block.round, base64::encode(block.digest));
+                info!("Committed B{}({})", block.round, base64::encode(digest));
+                }
                 
-            }
+            //}
             debug!("Committed {:?}", block);
             if let Err(e) = self.commit_channel.send(block).await {
                 warn!("Failed to send block through the commit channel: {}", e);
@@ -279,7 +281,7 @@ impl Core {
     #[async_recursion]
     async fn generate_proposal(&mut self, tc: Option<TC>) -> ConsensusResult<()> {
         // Make a new block.
-        let (digest, data) = self   //NOTE: It will have exactly 1 digest and 1 data payload
+        let payload = self   //NOTE: It will have exactly 1 digest and 1 data payload
             .mempool_driver
             .get(self.parameters.max_payload_size)
             .await;
@@ -288,20 +290,20 @@ impl Core {
             tc,
             self.name,
             self.round,
-            digest,
-            data,
+            payload,
             self.signature_service.clone(),
         )
         .await;
-        if block.digest != Digest::default() {
-            info!("Created {}", block);
+        //if block.digest != Digest::default() {
+        info!("Created {}", block);
 
-            #[cfg(feature = "benchmark")]
-            
-                // NOTE: This log entry is used to compute performance.
-                info!("Created B{}({})", block.round, base64::encode(block.digest));
-            
+        #[cfg(feature = "benchmark")]
+        for (digest, _) in block.payload.iter() {
+            // NOTE: This log entry is used to compute performance.
+            info!("Created B{}({})", block.round, base64::encode(digest));
         }
+        
+        //}
         debug!("Created {:?}", block);
 
         // Process our new block and broadcast it.
