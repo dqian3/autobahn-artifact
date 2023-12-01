@@ -203,11 +203,20 @@ impl Core {
                 Ok(Vec::default())
             }
         } else {  //Take cap k>1
-            let digest_len = Digest::default().size();
-            let num_digests = max / digest_len;
+            let mut size = 0;
+            let mut num_elements = 0;
+            let mut payload_vec = Vec::new();
 
-            let range = min(num_digests, self.queue.len());
-            let payload_vec: Vec<(Digest, Payload)> = self.queue.drain(..range).collect();
+            for (dig, payload) in self.queue.iter() {
+                size += payload.size();
+                payload_vec.push((dig.clone(), payload.clone()));
+                num_elements += 1;
+                if size >= max {
+                    break;
+                }
+            }
+
+            self.queue.drain(..num_elements);
 
             debug!("num payloads is {:?}", payload_vec.len());
             
