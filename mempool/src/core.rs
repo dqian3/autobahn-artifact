@@ -12,6 +12,7 @@ use log::info;
 use log::{error, warn, debug};
 use network::NetMessage;
 use serde::{Deserialize, Serialize};
+use std::cmp::min;
 use std::collections::{HashSet, HashMap, VecDeque};
 #[cfg(feature = "benchmark")]
 use std::convert::TryInto as _;
@@ -205,7 +206,8 @@ impl Core {
             let digest_len = Digest::default().size();
             let num_digests = max / digest_len;
 
-            let payload_vec: Vec<(Digest, Payload)> = self.queue.drain(..num_digests).collect();
+            let range = min(num_digests, self.queue.len());
+            let payload_vec: Vec<(Digest, Payload)> = self.queue.drain(..range).collect();
 
             debug!("num payloads is {:?}", payload_vec.len());
             
