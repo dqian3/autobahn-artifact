@@ -9,11 +9,14 @@ use crate::timer::Timer;
 use async_recursion::async_recursion;
 use crypto::Hash as _;
 use crypto::{Digest, PublicKey, SignatureService};
+use futures::{Future, StreamExt};
+use futures::stream::FuturesUnordered;
 use log::{debug, error, info, warn};
 use network::NetMessage;
 use serde::{Deserialize, Serialize};
 use std::cmp::max;
 use std::collections::VecDeque;
+use std::pin::Pin;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration};
@@ -53,6 +56,12 @@ pub struct Core {
     high_qc: QC,
     timer: Timer,
     aggregator: Aggregator,
+    
+    simulate_asynchrony: bool,
+    asynchrony_start: u64,
+    asynchrony_duration: u64,
+    during_simulated_asynchrony: bool,
+    async_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = ()> + Send>>>,
 }
 
 impl Core {
@@ -71,6 +80,10 @@ impl Core {
         commit_channel: Sender<Block>,
     ) -> Self {
         let aggregator = Aggregator::new(committee.clone());
+        let simulate_asynchrony = parameters.simulate_asynchrony;
+        let asynchrony_start = parameters.asynchrony_start;
+        let asynchrony_duration = parameters.asynchrony_duration;
+        
         let timer = Timer::new(parameters.timeout_delay);
         Self {
             name,
@@ -91,6 +104,11 @@ impl Core {
             high_qc: QC::genesis(),
             timer,
             aggregator,
+            simulate_asynchrony,
+            asynchrony_start,
+            asynchrony_duration,
+            async_timer_futures: FuturesUnordered::new(),
+            during_simulated_asynchrony: false,
         }
     }
 
@@ -280,8 +298,12 @@ impl Core {
 
     #[async_recursion]
     async fn generate_proposal(&mut self, tc: Option<TC>) -> ConsensusResult<()> {
+        if self.during_simulated_asynchrony {
+            debug!("Simulating asynchrony skipping sending a block in round {:?}, will trigger view change", self.round);
+            return Ok(())
+        }
         // Make a new block.
-        let payload = self   //NOTE: It will have exactly 1 digest and 1 data payload
+        let payload = self 
             .mempool_driver
             .get(self.parameters.max_payload_size)
             .await;
@@ -452,6 +474,15 @@ impl Core {
     }
 
     pub async fn run(&mut self) {
+        //Simulate asynchrony duration:
+        if self.simulate_asynchrony {
+            debug!("added async timers");
+            let async_start = Timer::new(self.asynchrony_start);
+            let async_end = Timer::new(self.asynchrony_start + self.asynchrony_duration);
+            self.async_timer_futures.push(Box::pin(async_start));
+            self.async_timer_futures.push(Box::pin(async_end));
+        }
+
         // Upon booting, generate the very first block (if we are the leader).
         // Also, schedule a timer in case we don't hear from the leader.
         self.timer.reset();
@@ -476,6 +507,7 @@ impl Core {
                     }
                 },
                 () = &mut self.timer => self.local_timeout_round().await,
+                Some(()) = self.async_timer_futures.next() => {self.during_simulated_asynchrony = !self.during_simulated_asynchrony; Ok(())},
                 else => break,
             };
             match result {
