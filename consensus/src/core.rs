@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::max;
 use std::collections::VecDeque;
 use std::pin::Pin;
+use std::time::Instant;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration};
@@ -62,6 +63,7 @@ pub struct Core {
     asynchrony_duration: u64,
     during_simulated_asynchrony: bool,
     async_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = ()> + Send>>>,
+    current_time: Instant,
 }
 
 impl Core {
@@ -109,6 +111,7 @@ impl Core {
             asynchrony_duration,
             async_timer_futures: FuturesUnordered::new(),
             during_simulated_asynchrony: false,
+            current_time: Instant::now(),
         }
     }
 
@@ -479,6 +482,7 @@ impl Core {
             debug!("added async timers");
             let async_start = Timer::new(self.asynchrony_start);
             let async_end = Timer::new(self.asynchrony_start + self.asynchrony_duration);
+            self.current_time = Instant::now();
             self.async_timer_futures.push(Box::pin(async_start));
             self.async_timer_futures.push(Box::pin(async_end));
         }
@@ -507,7 +511,13 @@ impl Core {
                     }
                 },
                 () = &mut self.timer => self.local_timeout_round().await,
-                Some(()) = self.async_timer_futures.next() => {self.during_simulated_asynchrony = !self.during_simulated_asynchrony; Ok(())},
+                Some(()) = self.async_timer_futures.next() => {
+                    self.during_simulated_asynchrony = !self.during_simulated_asynchrony; 
+                    debug!("Time elapsed is {:?}", self.current_time.elapsed()); 
+                    self.current_time = Instant::now();
+                    Ok(())
+                },
+
                 else => break,
             };
             match result {
