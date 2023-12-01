@@ -208,10 +208,14 @@ impl Core {
             for key in self.queue.keys() {
                 let payload = self.queue.get(&key).unwrap().clone();
                 size += payload.size();
+                payload_vec.push((key.clone(), payload));
+
+                debug!("total payload included size is {:?}", size);
+
                 if size >= max {
                     break;
                 }
-                payload_vec.push((key.clone(), payload));
+
             }
 
             for (key, _) in &payload_vec {
