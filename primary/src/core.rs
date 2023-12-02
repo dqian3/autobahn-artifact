@@ -137,6 +137,7 @@ pub struct Core {
     during_simulated_asynchrony: bool,
     async_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>,
     current_time: Instant,
+    async_delayed_prepare: Option<ConsensusMessage>,
 }
 
 impl Core {
@@ -235,6 +236,7 @@ impl Core {
                 during_simulated_asynchrony: false,
                 async_timer_futures: FuturesUnordered::new(),
                 current_time: Instant::now(),
+                async_delayed_prepare: None,
             }
             .run()
             .await;
@@ -859,14 +861,13 @@ impl Core {
     #[async_recursion]
     async fn send_consensus_req(&mut self, mut consensus_message: ConsensusMessage) -> DagResult<()> {
 
-        //TODO: First test a single view change. For slot 5 fail to propose anything
-        //TODO: Then, test whether winning proposal works: For slot 5 fail to send confirm; or fail to send commit
-        //TODO: If those work: Try failing to send for as long as a timer is active.
-
+        self.set_consensus_proposal(&mut consensus_message);
+       
         match &consensus_message {
             ConsensusMessage::Prepare {slot, view, tc, qc_ticket: _, proposals} => {
                 if self.during_simulated_asynchrony {
                     debug!("Simulating Asynchrony: skip sending Prepare for slot {} view {}. This will trigger a view change", slot, view);
+                    self.async_delayed_prepare = Some(consensus_message);
                     return Ok(());
                 }
                 // if *slot == 5 && *view == 1 {
@@ -889,8 +890,6 @@ impl Core {
         };
 
         debug!("Send req for Consensus message {}", consensus_message);
-
-        self.set_consensus_proposal(&mut consensus_message);
 
         let consensus_req = ConsensusRequest::new(self.name, consensus_message, &mut self.signature_service).await;
 
@@ -2154,6 +2153,13 @@ impl Core {
 
                         self.async_timer_futures.push(Box::pin(async_start));
                         self.async_timer_futures.push(Box::pin(async_end));
+
+                        //
+                        if self.async_delayed_prepare.is_some() {
+                            let _ = self.send_consensus_req(self.async_delayed_prepare.clone().unwrap()).await;
+                            self.async_delayed_prepare = None;
+                        }
+                        
                     }
                     Ok(())
                 },
