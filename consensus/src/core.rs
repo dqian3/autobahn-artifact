@@ -515,6 +515,14 @@ impl Core {
                     self.during_simulated_asynchrony = !self.during_simulated_asynchrony; 
                     debug!("Time elapsed is {:?}", self.current_time.elapsed()); 
                     self.current_time = Instant::now();
+
+                    if !self.during_simulated_asynchrony {
+                        let async_start = Timer::new(self.asynchrony_start);
+                        let async_end = Timer::new(self.asynchrony_start + self.asynchrony_duration);
+
+                        self.async_timer_futures.push(Box::pin(async_start));
+                        self.async_timer_futures.push(Box::pin(async_end));
+                    }
                     Ok(())
                 },
 
