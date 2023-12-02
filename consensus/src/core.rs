@@ -64,6 +64,7 @@ pub struct Core {
     during_simulated_asynchrony: bool,
     async_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = ()> + Send>>>,
     current_time: Instant,
+    async_last_tc: Option<TC>,
 }
 
 impl Core {
@@ -112,6 +113,7 @@ impl Core {
             async_timer_futures: FuturesUnordered::new(),
             during_simulated_asynchrony: false,
             current_time: Instant::now(),
+            async_last_tc: None,
         }
     }
 
@@ -303,6 +305,7 @@ impl Core {
     async fn generate_proposal(&mut self, tc: Option<TC>) -> ConsensusResult<()> {
         if self.during_simulated_asynchrony {
             debug!("Simulating asynchrony skipping sending a block in round {:?}, will trigger view change", self.round);
+            self.async_last_tc = tc;
             return Ok(())
         }
         // Make a new block.
@@ -522,6 +525,15 @@ impl Core {
 
                         self.async_timer_futures.push(Box::pin(async_start));
                         self.async_timer_futures.push(Box::pin(async_end));
+
+                        if self.async_last_tc.is_some() {
+                            let tc = self.async_last_tc.clone().unwrap();
+                            if self.round == tc.round + 1 { //still in that round
+                                    let _ = self.generate_proposal(Some(tc)).await;
+                            }
+                            self.async_last_tc = None;
+                            
+                        }
                     }
                     Ok(())
                 },
