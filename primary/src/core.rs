@@ -27,6 +27,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 //use std::task::Poll;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -134,7 +135,8 @@ pub struct Core {
     asynchrony_start: u64,
     asynchrony_duration: u64,
     during_simulated_asynchrony: bool,
-    async_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>
+    async_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>,
+    current_time: Instant,
 }
 
 impl Core {
@@ -232,6 +234,7 @@ impl Core {
                 asynchrony_duration,
                 during_simulated_asynchrony: false,
                 async_timer_futures: FuturesUnordered::new(),
+                current_time: Instant::now(),
             }
             .run()
             .await;
@@ -2025,6 +2028,7 @@ impl Core {
 
         //Simulate asynchrony duration:
         if self.simulate_asynchrony {
+            debug!("added async timers");
             let async_start = Timer::new(0, 0, self.asynchrony_start);
             let async_end = Timer::new(0, 0, self.asynchrony_start + self.asynchrony_duration);
             self.async_timer_futures.push(Box::pin(async_start));
@@ -2138,7 +2142,21 @@ impl Core {
                 //Fast path loopback for external consensus
                 Some(vote) = self.fast_timer_futures.next() => self.process_consensus_vote(vote, true).await,
 
-                Some((slot, view)) = self.async_timer_futures.next() => {self.during_simulated_asynchrony = !self.during_simulated_asynchrony; Ok(())},
+                Some((slot, view)) = self.async_timer_futures.next() => {
+                    self.during_simulated_asynchrony = !self.during_simulated_asynchrony; 
+
+                    debug!("Time elapsed is {:?}", self.current_time.elapsed()); 
+                    self.current_time = Instant::now();
+
+                    if !self.during_simulated_asynchrony {
+                        let async_start = Timer::new(0, 0, self.asynchrony_start);
+                        let async_end = Timer::new(0, 0, self.asynchrony_start + self.asynchrony_duration);
+
+                        self.async_timer_futures.push(Box::pin(async_start));
+                        self.async_timer_futures.push(Box::pin(async_end));
+                    }
+                    Ok(())
+                },
 
             };
             match result {
