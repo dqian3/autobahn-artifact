@@ -2156,7 +2156,14 @@ impl Core {
 
                         //
                         if self.async_delayed_prepare.is_some() {
-                            let _ = self.send_consensus_req(self.async_delayed_prepare.clone().unwrap()).await;
+                            let last_prop = self.async_delayed_prepare.clone().unwrap();
+                            let still_relevant = match &last_prop { //check whether we're still in a relevant view.
+                                ConsensusMessage::Prepare {slot, view, tc: _, qc_ticket: _, proposals: _} => view == self.views.get(slot).unwrap_or(&0),
+                                _ => false,
+                            };
+                            if still_relevant { //try sending it now.
+                                let _ = self.send_consensus_req(last_prop).await;
+                            }
                             self.async_delayed_prepare = None;
                         }
                         
