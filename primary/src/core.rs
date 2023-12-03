@@ -1538,7 +1538,7 @@ impl Core {
             } => {
                 debug!("Try to commit slot {}", slot);
                 // Start simulating async once slot 1 is committed
-                if self.simulate_asynchrony {
+                if self.simulate_asynchrony && *slot == 1 {
                     debug!("added async timers");
                     let async_start = Timer::new(0, 0, self.asynchrony_start);
                     let async_end = Timer::new(0, 0, self.asynchrony_start + self.asynchrony_duration);
