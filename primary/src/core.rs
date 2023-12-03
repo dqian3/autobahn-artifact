@@ -1537,6 +1537,15 @@ impl Core {
                 proposals,
             } => {
                 debug!("Try to commit slot {}", slot);
+                // Start simulating async once slot 1 is committed
+                if self.simulate_asynchrony {
+                    debug!("added async timers");
+                    let async_start = Timer::new(0, 0, self.asynchrony_start);
+                    let async_end = Timer::new(0, 0, self.asynchrony_start + self.asynchrony_duration);
+                    self.async_timer_futures.push(Box::pin(async_start));
+                    self.async_timer_futures.push(Box::pin(async_end));
+                }
+
                 //Stop timer for this slot/view //Note: Ideally stop all timers for this slot, but timers for older views are obsolete anyways.
                 self.timers.remove(&(*slot, *view));
                 //self.high_qcs.insert(*slot, commit_message.clone());
@@ -2026,13 +2035,13 @@ impl Core {
     pub async fn run(&mut self) {
 
         //Simulate asynchrony duration:
-        if self.simulate_asynchrony {
+        /*if self.simulate_asynchrony {
             debug!("added async timers");
             let async_start = Timer::new(0, 0, self.asynchrony_start);
             let async_end = Timer::new(0, 0, self.asynchrony_start + self.asynchrony_duration);
             self.async_timer_futures.push(Box::pin(async_start));
             self.async_timer_futures.push(Box::pin(async_end));
-        }
+        }*/
 
         // Initialize current proposals with the genesis tips
         self.current_proposal_tips = Header::genesis_proposals(&self.committee);
