@@ -151,6 +151,17 @@ impl Core {
             return Ok(());
         }
 
+        //Simulate asynchrony duration:
+        if self.simulate_asynchrony && block.round == 1 {
+            debug!("added async timers");
+            let async_start = Timer::new(self.asynchrony_start);
+            let async_end = Timer::new(self.asynchrony_start + self.asynchrony_duration);
+            self.current_time = Instant::now();
+            self.async_timer_futures.push(Box::pin(async_start));
+            self.async_timer_futures.push(Box::pin(async_end));
+        }
+
+
         let mut to_commit = VecDeque::new();
         to_commit.push_back(block.clone());
 
@@ -478,14 +489,14 @@ impl Core {
 
     pub async fn run(&mut self) {
         //Simulate asynchrony duration:
-        if self.simulate_asynchrony {
+        /*if self.simulate_asynchrony && self.round == 1 {
             debug!("added async timers");
             let async_start = Timer::new(self.asynchrony_start);
             let async_end = Timer::new(self.asynchrony_start + self.asynchrony_duration);
             self.current_time = Instant::now();
             self.async_timer_futures.push(Box::pin(async_start));
             self.async_timer_futures.push(Box::pin(async_end));
-        }
+        }*/
 
         // Upon booting, generate the very first block (if we are the leader).
         // Also, schedule a timer in case we don't hear from the leader.
