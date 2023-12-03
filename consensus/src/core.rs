@@ -154,7 +154,7 @@ impl Core {
         }
 
         //Simulate asynchrony duration:
-        if self.simulate_asynchrony && block.round == 1 {
+        if self.simulate_asynchrony && block.round == 2 {
             debug!("added async timers");
             let async_start = Timer::new(self.asynchrony_start);
             let async_end = Timer::new(self.asynchrony_start + self.asynchrony_duration);
