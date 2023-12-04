@@ -9,7 +9,7 @@ use crate::messages::{
     Certificate, ConsensusMessage, Header, Proposal, Timeout, Vote, TC, ConsensusType, QC, verify_confirm, verify_commit, CommitQC, transform_commitQC, ConsensusRequest, ConsensusVote,
 };
 use crate::primary::{Height, PrimaryMessage, Slot, View};
-use crate::synchronizer::Synchronizer;
+use crate::synchronizer::{Synchronizer, self};
 use crate::timer::{Timer, CarTimer, FastTimer};
 use async_recursion::async_recursion;
 use bytes::Bytes;
@@ -90,6 +90,7 @@ pub struct Core {
     consensus_cancel_handlers: HashMap<Slot, Vec<CancelHandler>>,
 
     current_proposal_tips: HashMap<PublicKey, Proposal>,
+    current_certified_tips: HashMap<PublicKey, Proposal>,
 
     consensus_instances: HashMap<(Slot, Digest), ConsensusMessage>,
     views: HashMap<Slot, View>,
@@ -202,6 +203,7 @@ impl Core {
                 consensus_cancel_handlers: HashMap::with_capacity(2 * gc_depth as usize),
                 already_proposed_slots: HashSet::new(),
                 current_proposal_tips: HashMap::with_capacity(2 * gc_depth as usize),
+                current_certified_tips: HashMap::with_capacity(2 * gc_depth as usize),
                 consensus_instances: HashMap::with_capacity(2 * gc_depth as usize),
                 views: HashMap::with_capacity(2 * gc_depth as usize),
                 timers: HashSet::with_capacity(2 * gc_depth as usize),
@@ -349,6 +351,10 @@ impl Core {
             return Ok(());
         }
 
+
+        
+
+
         // Check whether we can seamlessly vote for all consensus messages, if not reschedule
         if !self.is_consensus_ready(&header).await {
             // TODO: Keep track of stats of sync
@@ -367,14 +373,29 @@ impl Core {
         let bytes = bincode::serialize(&header).expect("Failed to serialize header");
         self.store.write(header.digest().to_vec(), bytes).await;
 
-        // If the header received is at a greater height then add it to our local tips and
-        // proposals
-        if header.height() > self.current_proposal_tips.get(&header.origin()).unwrap().height {
+        // If the header received is at a greater height then add it to our local tips and proposals
+        if self.use_optimistic_tips && header.height() > self.current_proposal_tips.get(&header.origin()).unwrap().height {
             self.current_proposal_tips.insert(
                 header.origin(),
                 Proposal {
                     header_digest: header.digest(),
                     height: header.height(),
+                },
+            );
+            //println!("updating tip");
+            debug!("updating tip");
+
+            // Since we received a new tip, check if any of our pending tickets are ready
+            self.try_prepare_waiting_slots().await?;
+        }
+
+        //TODO: Fix check coverage as well. (new proposals..)
+        if !self.use_optimistic_tips && header.parent_cert.height > self.current_certified_tips.get(&header.origin()).unwrap().height {
+            self.current_certified_tips.insert(
+                header.origin(),
+                Proposal {
+                    header_digest: header.parent_cert.header_digest.clone(),
+                    height: header.parent_cert.height,
                 },
             );
             //println!("updating tip");
@@ -842,7 +863,12 @@ impl Core {
                 if set_proposal {
                     debug!("UPDATING HEADER for slot {}", slot);
                     // Add new proposal tips
-                    *proposals = self.current_proposal_tips.clone();
+
+                    *proposals = match self.use_optimistic_tips {
+                        true =>  self.current_proposal_tips.clone(),
+                        false => self.current_certified_tips.clone(),
+                    };
+                   
                     // Leader tip proposal
                     proposals.insert(self.name, Proposal { header_digest: header.id.clone(), height: header.height });
 
@@ -942,54 +968,6 @@ impl Core {
         Ok(())
     }
 
-    //TODO: Fix this, does not work currently
-    async fn begin_slot_from_commit(&mut self, commit_message: &ConsensusMessage) -> DagResult<bool> {
-        match commit_message {
-            ConsensusMessage::Commit { slot, view, qc, proposals } => {
-                let new_proposals = self.current_proposal_tips.clone();
-
-                let next_leader = self.leader_elector.get_leader(slot + 1, 1);
-                
-               
-                if self.name != next_leader {
-                    return Ok(true)
-                }
-                
-                // If we are the leader of the next slot, view 1, and have already proposed in the next slot
-                // then don't process the prepare ticket, just return true
-                if self.already_proposed_slots.contains(&(slot + 1)) {
-                    return Ok(true)
-                }
-
-                // If there is enough coverage and we haven't already proposed in the next slot then create a new
-                // prepare message if we are the leader of view 1 in the next slot
-                
-               
-                if self.enough_coverage(&proposals, &new_proposals) {
-                    let new_prepare_instance = ConsensusMessage::Prepare {
-                        slot: slot + 1,
-                        view: 1,
-                        tc: None,
-                        qc_ticket: None, //TODO: Add ticket
-                        proposals: HashMap::new(), //new_proposals,
-                    };
-
-                    //println!("The new slot is {:?}", slot + 1);
-                    self.already_proposed_slots.insert(slot + 1);
-                    self.prepare_tickets.pop_front();
-
-                    self.tx_info
-                        .send(new_prepare_instance)
-                        .await
-                        .expect("failed to send info to proposer");
-                }
-                return Ok(true)
-              
-            },
-            _ => Ok(true),
-        }
-    }
-
     #[async_recursion]
     async fn try_prepare_waiting_slots(&mut self) -> DagResult<()> {
         //Could there even be multiple prepares? Bounding l <= 4 should make it so that each replica can only be the original leader for one slot? VC leaders are not blocked on coverage (they just propose current tips)
@@ -1013,8 +991,7 @@ impl Core {
     async fn is_prepare_ticket_ready(&mut self, prepare_message: &ConsensusMessage) -> DagResult<()> {
         match prepare_message {
             ConsensusMessage::Prepare { slot, view: _, tc: _, qc_ticket: _, proposals } => {
-                let new_proposals = self.current_proposal_tips.clone();
-
+        
                 let next_leader = self.leader_elector.get_leader(slot + 1, 1);
                 
                 // If not the next leader 
@@ -1068,7 +1045,8 @@ impl Core {
 
                 // If there is enough coverage and we haven't already proposed in the next slot then create a new
                 // prepare message if we are the leader of view 1 in the next slot
-                if self.enough_coverage(&proposals, &new_proposals) {
+                //let new_proposals = self.current_proposal_tips.clone();
+                if self.enough_coverage(&proposals) {//}, &new_proposals) {
                     debug!("have enough coverage to start slot {}", slot + 1);
 
                     let qc_ticket = match *slot + 1 > self.k {
@@ -1515,8 +1493,13 @@ impl Core {
     fn enough_coverage(
         &mut self,
         prepare_proposals: &HashMap<PublicKey, Proposal>,
-        current_proposals: &HashMap<PublicKey, Proposal>,
+        //current_proposals: &HashMap<PublicKey, Proposal>,
     ) -> bool {
+        let current_proposals = match self.use_optimistic_tips {
+            true => &self.current_proposal_tips, 
+            false => &self.current_certified_tips,
+        };
+
         // Checks whether there have been n-f new certs from the proposals from the ticket
         let new_tips: HashMap<&PublicKey, &Proposal> = current_proposals
             .iter()
@@ -2045,6 +2028,7 @@ impl Core {
 
         // Initialize current proposals with the genesis tips
         self.current_proposal_tips = Header::genesis_proposals(&self.committee);
+        self.current_certified_tips = Header::genesis_proposals(&self.committee);
         debug!("genesis tips are {:?}", self.current_proposal_tips);
 
         // Start the timeout for slot 1, view 1
