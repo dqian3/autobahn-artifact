@@ -267,6 +267,11 @@ impl Core {
         // Reset the votes aggregator.
         self.votes_aggregator = VotesAggregator::new();
 
+        match self.use_optimistic_tips { //Add early here, so that enough coverage will include leader tip.
+            true => self.current_proposal_tips.insert(header.origin(), Proposal {header_digest: header.digest(), height: header.height(),}),
+            false => self.current_certified_tips.insert(header.origin(), Proposal {header_digest: header.digest(), height: header.height(),}),
+        };
+
         // Augment consensus messages with latest prepares
         for consensus in header.consensus_messages.values_mut() {
             self.set_consensus_proposal(consensus);
