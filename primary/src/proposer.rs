@@ -199,6 +199,7 @@ impl Proposer {
                 }
 
                 debug!("New car proposed after {:?} ms", current_time.elapsed().as_millis());
+                debug!("is special is {:?}", self.is_special);
                 current_time = Instant::now();
                 
                 // Make a new header.
