@@ -226,7 +226,9 @@ impl Proposer {
                             debug!("prepare has digest: {}", info.digest());
                         },
                         ConsensusMessage::Confirm { slot: _, view: _, qc: _, proposals: _} => {
-                            self.is_special = true;
+                            if self.use_special_rule {
+                                self.is_special = true;
+                            }
                             self.num_active_instances +=1;
                         },
                         _ => {},
