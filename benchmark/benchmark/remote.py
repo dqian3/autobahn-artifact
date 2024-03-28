@@ -267,9 +267,36 @@ class Bench:
 
         # Wait for all transactions to be processed.
         duration = bench_parameters.duration
-        for _ in progress_bar(range(20), prefix=f'Running benchmark ({duration} sec):'):
+        for i in progress_bar(range(20), prefix=f'Running benchmark ({duration} sec):'):
+            tick_size = ceil(duration / 20)
+            if bench_parameters.simulate_partition and i*tick_size == bench_parameters.partition_start:
+                self._simulate_partition(bench_parameters, committee, faults)
+            
+            if bench_parameters.simulate_partition and i*tick_size == bench_parameters.partition_start + bench_parameters.partition_duration:
+                self._delete_partition(committee, faults)
+
             sleep(ceil(duration / 20))
         self.kill(hosts=hosts, delete_logs=False)
+
+    def _simulate_partition(self, bench_parameters, committee, faults):
+        partition_ips = []
+        for i, address in enumerate(committee.primary_addresses(faults)):
+            if len(partition_ips) < bench_parameters.partition_nodes:
+                partition_ips.append(Committee.ip(address))
+    
+        for i, address in enumerate(committee.primary_addresses(faults)):
+            host = Committee.ip(address)
+            for partition_ip in partition_ips:
+                cmd = 'sudo iptables -A OUTPUT ' + partition_ip + '-j DROP'
+                log_file = PathMaker.primary_log_file(i)
+                self._background_run(host, cmd, log_file)
+    
+    def _delete_partition(self, committee, faults):
+        for i, address in enumerate(committee.primary_addresses(faults)):
+            host = Committee.ip(address)
+            cmd = 'sudo iptables -F'
+            log_file = PathMaker.primary_log_file(i)
+            self._background_run(host, cmd, log_file)
 
     def _logs(self, committee, faults):
         # Delete local logs (if any).

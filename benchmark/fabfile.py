@@ -19,6 +19,10 @@ def local(ctx, debug=True):
         'rate': 50_000,
         'tx_size': 512,
         'duration': 10,
+        'simulate_partition': False,
+        'partition_start': 10_000,
+        'partition_duration': 30_000,
+        'partition_nodes': 1,
     }
     node_params = {
         'timeout_delay': 500,  # ms
