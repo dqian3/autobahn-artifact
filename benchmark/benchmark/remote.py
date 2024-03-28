@@ -14,7 +14,7 @@ from benchmark.config import Committee, Key, NodeParameters, BenchParameters, Co
 from benchmark.utils import BenchError, Print, PathMaker, progress_bar
 from benchmark.commands import CommandMaker
 from benchmark.logs import LogParser, ParseError
-from benchmark.instance import InstanceManager
+from benchmark.gcp_instance import InstanceManager
 
 
 class FabricError(Exception):

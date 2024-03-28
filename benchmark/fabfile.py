@@ -5,7 +5,7 @@ from benchmark.local import LocalBench
 from benchmark.logs import ParseError, LogParser
 from benchmark.utils import Print
 from benchmark.plot import Ploter, PlotError
-from benchmark.instance import InstanceManager
+from benchmark.gcp_instance import InstanceManager
 from benchmark.remote import Bench, BenchError
 
 
