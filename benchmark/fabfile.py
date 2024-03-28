@@ -18,33 +18,17 @@ def local(ctx, debug=True):
         'workers': 1,
         'rate': 50_000,
         'tx_size': 512,
-        'duration': 10,
-        'simulate_partition': False,
-        'partition_start': 10_000,
-        'partition_duration': 30_000,
-        'partition_nodes': 1,
+        'duration': 20,
     }
     node_params = {
         'timeout_delay': 500,  # ms
-        'header_size': 32,  # bytes
+        'header_size': 1_000,  # bytes
         'max_header_delay': 200,  # ms
         'gc_depth': 50,  # rounds
         'sync_retry_delay': 5_000,  # ms
         'sync_retry_nodes': 3,  # number of nodes
         'batch_size': 500_000,  # bytes
-        'max_batch_delay': 10,  # ms
-
-        'use_optimistic_tips': True,
-        'use_parallel_proposals': True,
-        'k': 4,
-        'use_fast_path': False,
-        'fast_path_timeout': 500,
-        'use_ride_share': False,
-        'car_timeout': 2000,
-
-        'simulate_asynchrony': False, 
-        'asynchrony_start': 2_000, #ms
-        'asynchrony_duration': 1_000 #ms
+        'max_batch_delay': 200  # ms
     }
     try:
         ret = LocalBench(bench_params, node_params).run(debug)
@@ -54,7 +38,7 @@ def local(ctx, debug=True):
 
 
 @task
-def create(ctx, nodes=6):
+def create(ctx, nodes=4):
     ''' Create a testbed'''
     try:
         InstanceManager.make().create_instances(nodes)
@@ -72,7 +56,7 @@ def destroy(ctx):
 
 
 @task
-def start(ctx, max=2):
+def start(ctx, max=4):
     ''' Start at most `max` machines per data center '''
     try:
         InstanceManager.make().start_instances(max)
@@ -113,16 +97,20 @@ def remote(ctx, debug=True):
     bench_params = {
         'faults': 0,
         'nodes': [4],
-        'workers': 4,
-        'co-locate': False,
-        'rate': [50_000],
+        'workers': 1,
+        'co-locate': True,
+        'rate': [10_000, 50_000, 100_000],
         'tx_size': 512,
-        'duration': 300,
+        'duration': 20,
         'runs': 1,
+        'simulate_partition': False,
+        'partition_start': 10_000,
+        'partition_duration': 30_000,
+        'partition_nodes': 1,
     }
     node_params = {
         'timeout_delay': 5_000,  # ms
-        'header_size': 1_000,  # bytes
+        'header_size': 32,  # bytes
         'max_header_delay': 200,  # ms
         'gc_depth': 50,  # rounds
         'sync_retry_delay': 5_000,  # ms
