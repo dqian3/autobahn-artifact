@@ -287,7 +287,7 @@ class Bench:
         for i, address in enumerate(committee.primary_addresses(faults)):
             host = Committee.ip(address)
             for partition_ip in partition_ips:
-                cmd = 'sudo iptables -A OUTPUT ' + partition_ip + '-j DROP'
+                cmd = 'sudo iptables -A OUTPUT -d ' + partition_ip + '-j DROP'
                 log_file = PathMaker.primary_log_file(i)
                 self._background_run(host, cmd, log_file)
     
