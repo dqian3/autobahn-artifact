@@ -1703,7 +1703,7 @@ impl Core {
 
 
     async fn local_timeout_round(&mut self, slot: Slot, view: View) -> DagResult<()> {
-        warn!("Timeout reached for slot {}, view {}", slot, view);
+        warn!("Timeout reached for slot {}, view {}. Leader is {}", slot, view, self.leader_elector.get_leader(slot, view));
         //println!("timeout was triggered");
 
         //If timer was cancelled, ignore  -- Note: technically redundant with commit check below, but currently we do not insert CommitQC's... TODO: Need to insert these so we can avoid joining view change and just reply.
