@@ -229,12 +229,11 @@ class BenchParameters:
             self.duration = int(json['duration'])
 
             self.runs = int(json['runs']) if 'runs' in json else 1
-            self.simulate_partition = 'simulate_partition' in json
+            self.simulate_partition = bool(json['simulate_partition'])
 
-            if self.simulate_partition:
-                self.partition_nodes = int(json['partition_nodes'])
-                self.partition_start = int(json['partition_start'])
-                self.partition_duration = int(json['partition_duration'])
+            self.partition_nodes = int(json['partition_nodes'])
+            self.partition_start = int(json['partition_start'])
+            self.partition_duration = int(json['partition_duration'])
         except KeyError as e:
             raise ConfigError(f'Malformed bench parameters: missing key {e}')
 

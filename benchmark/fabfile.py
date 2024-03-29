@@ -38,7 +38,7 @@ def local(ctx, debug=True):
 
 
 @task
-def create(ctx, nodes=4):
+def create(ctx, nodes=1):
     ''' Create a testbed'''
     try:
         InstanceManager.make().create_instances(nodes)
@@ -99,13 +99,14 @@ def remote(ctx, debug=True):
         'nodes': [4],
         'workers': 1,
         'co-locate': True,
-        'rate': [10_000, 50_000, 100_000],
+        'rate': [10_000],
         'tx_size': 512,
         'duration': 20,
         'runs': 1,
-        'simulate_partition': False,
-        'partition_start': 10_000,
-        'partition_duration': 30_000,
+
+        'simulate_partition': True,
+        'partition_start': 5,
+        'partition_duration': 5,
         'partition_nodes': 1,
     }
     node_params = {
@@ -116,7 +117,18 @@ def remote(ctx, debug=True):
         'sync_retry_delay': 5_000,  # ms
         'sync_retry_nodes': 3,  # number of nodes
         'batch_size': 500_000,  # bytes
-        'max_batch_delay': 200  # ms
+        'max_batch_delay': 200,  # ms
+        'use_optimistic_tips': True,
+        'use_parallel_proposals': True,
+        'k': 4,
+        'use_fast_path': False,
+        'fast_path_timeout': 500,
+        'use_ride_share': False,
+        'car_timeout': 2000,
+
+        'simulate_asynchrony': False,
+        'asynchrony_start': 2_000, #ms
+        'asynchrony_duration': 1_000 #ms
     }
     try:
         Bench(ctx).run(bench_params, node_params, debug)

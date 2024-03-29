@@ -308,11 +308,14 @@ class Bench:
         duration = bench_parameters.duration
         for i in progress_bar(range(20), prefix=f'Running benchmark ({duration} sec):'):
             tick_size = ceil(duration / 20)
+            print(tick_size, i, bench_parameters.partition_start, bench_parameters.simulate_partition)
             if bench_parameters.simulate_partition and i*tick_size == bench_parameters.partition_start:
+                print('simulating partition')
                 self._simulate_partition(bench_parameters, committee, faults)
             
             if bench_parameters.simulate_partition and i*tick_size == bench_parameters.partition_start + bench_parameters.partition_duration:
-                self._delete_partition(committee, faults)
+                print('deleting partition')
+                self._delete_partition(bench_parameters, committee, faults)
 
             sleep(ceil(duration / 20))
         self.kill(hosts=hosts, delete_logs=False)
@@ -320,22 +323,65 @@ class Bench:
     def _simulate_partition(self, bench_parameters, committee, faults):
         partition_ips = []
         for i, address in enumerate(committee.primary_addresses(faults)):
-            if len(partition_ips) < bench_parameters.partition_nodes:
-                partition_ips.append(Committee.ip(address))
+            if i < bench_parameters.partition_nodes:
+                print(i, address)
+                cmd = []
+                #cmd = ['sudo tc qdisc del dev ens4 root']
+                cmd.append('sudo tc qdisc add dev ens4 root handle 1: htb')
+                cmd.append('sudo tc class add dev ens4 parent 1: classid 1:1 htb rate 10gibps')
+                idx = 2
+                for j, addr in enumerate(committee.primary_addresses(faults)):
+                    if i == j:
+                        continue
+                    cmd.append('sudo tc class add dev ens4 parent 1:1 classid 1:' + str(idx) + ' htb rate 10gibps')
+                    cmd.append('sudo tc qdisc add dev ens4 handle ' + str(idx) + ': parent 1:' 
+                            + str(idx) + ' netem delay 5000ms')
+                    cmd.append('sudo tc filter add dev ens4 pref ' + str(idx) + ' protocol ip u32 match ip dst ' + 
+                            Committee.ip(addr) + ' flowid 1:' + str(idx))
+                    idx = idx + 1
+                ip = [Committee.ip(address)]
+                g = Group(*ip, user='neilgiridharan', connect_kwargs=self.connect)
+                g.run(' && '.join(cmd), hide=True) 
+        
+
+         
+        #hosts = committee.ips()
+        #cmd = ['sudo iptables -A OUTPUT -d ' + ip + ' -j DROP' for ip in partition_ips]
+        #cmd = ['sudo tc qdisc add dev ens4 root netem delay 5000ms']
+        
+        #g = Group(*partition_ips, user='neilgiridharan', connect_kwargs=self.connect)
+        #g.run(' && '.join(cmd), hide=True) 
+        
+        #for i, address in enumerate(committee.primary_addresses(faults)):
+        
+        #host = Committee.ip(address)
+        #for partition_ip in partition_ips:
+        #cmd = 'sudo iptables -A OUTPUT -d ' + partition_ip + '-j DROP'
+        
+        ##log_file = PathMaker.primary_log_file(i)
+        #self._background_run(host, cmd, log_file)
     
+    def _delete_partition(self, bench_parameters, committee, faults):
+        partition_ips = []
         for i, address in enumerate(committee.primary_addresses(faults)):
-            host = Committee.ip(address)
-            for partition_ip in partition_ips:
-                cmd = 'sudo iptables -A OUTPUT -d ' + partition_ip + '-j DROP'
-                log_file = PathMaker.primary_log_file(i)
-                self._background_run(host, cmd, log_file)
-    
-    def _delete_partition(self, committee, faults):
-        for i, address in enumerate(committee.primary_addresses(faults)):
-            host = Committee.ip(address)
-            cmd = 'sudo iptables -F'
-            log_file = PathMaker.primary_log_file(i)
-            self._background_run(host, cmd, log_file)
+            if i < bench_parameters.partition_nodes:
+                partition_ips = [Committee.ip(address)]
+                cmd = ['sudo tc qdisc del dev ens4 root']
+                g = Group(*partition_ips, user='neilgiridharan', connect_kwargs=self.connect)
+                g.run(' && '.join(cmd), hide=True) 
+
+       
+        #hosts = committee.ips()
+        #cmd = ['sudo iptables -F']
+        #cmd = ['sudo tc qdisc del dev ens4 root']
+        #g = Group(*partition_ips, user='neilgiridharan', connect_kwargs=self.connect)
+        #g.run(' && '.join(cmd), hide=True) 
+        
+        #for i, address in enumerate(committee.primary_addresses(faults)):
+        #    host = Committee.ip(address)
+        #    cmd = 'sudo iptables -F'
+        #    log_file = PathMaker.primary_log_file(i)
+        #    self._background_run(host, cmd, log_file)
 
     def _logs(self, committee, faults):
         # Delete local logs (if any).
