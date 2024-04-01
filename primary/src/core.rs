@@ -1555,7 +1555,7 @@ impl Core {
                     }
                 }
                 else{ //If slot + k has ticket ready (Prepare from s+k-1 + QC in s)
-                    if !self.timers.contains(&(slot + self.k, 1)) && self.views.contains_key(&(slot+self.k -1)) {
+                    if !self.timers.contains(&(slot + self.k, 1)) && self.views.contains_key(&(slot+self.k -1)) && !self.views.contains_key(&(slot+self.k)) {
                         if self.views.contains_key(&(slot+self.k)) {
                             debug!("should start timer for slot {}, view is {}", slot+self.k, self.views.get(&(slot+self.k)).unwrap());
                         }
