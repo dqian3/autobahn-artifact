@@ -1034,7 +1034,7 @@ impl Core {
     
 
                 if *slot + 1 > self.k {
-                    debug!("beyond init k");
+                    debug!("beyond init k for slot {}", *slot);
                     if !self.committed_slots.contains_key(&(slot + 1 - self.k)) {
                         debug!("too many instances open");
                         self.prepare_tickets.push_back(prepare_message.clone());
@@ -1548,7 +1548,7 @@ impl Core {
 
                 if self.k == 1 { //Start timer for next slot
                     if !self.timers.contains(&(slot + self.k, 1)) {
-                        debug!("start timer for slot {}", slot +1);
+                        debug!("start timer for slot {}", slot +self.k);
                         let timer = Timer::new(slot + self.k, 1, self.timeout_delay);
                         self.timer_futures.push(Box::pin(timer));
                         self.timers.insert((slot + self.k, 1));
@@ -1556,7 +1556,10 @@ impl Core {
                 }
                 else{ //If slot + k has ticket ready (Prepare from s+k-1 + QC in s)
                     if !self.timers.contains(&(slot + self.k, 1)) && self.views.contains_key(&(slot+self.k -1)) {
-                        debug!("start timer for slot {}", slot +1);
+                        if self.views.contains_key(&(slot+self.k)) {
+                            debug!("should start timer for slot {}, view is {}", slot+self.k, self.views.get(&(slot+self.k)).unwrap());
+                        }
+                        debug!("start timer for slot {}", slot +self.k);
                         let timer = Timer::new(slot + self.k, 1, self.timeout_delay);
                         self.timer_futures.push(Box::pin(timer));
                         self.timers.insert((slot + self.k, 1));
