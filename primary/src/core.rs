@@ -147,9 +147,8 @@ pub struct Core {
     during_simulated_partition: bool,
     partition_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>,
 
-    partition_delayed_consensus_msgs: Vec<ConsensusMessage>,
-    partition_delayed_headers: Vec<Header>,
-    partition_delayed_own_headers: Vec<Header>,
+    partition_public_keys: HashSet<PublicKey>,
+    partition_delayed_msgs: Vec<PrimaryMessage>,
 
 }
 
@@ -264,9 +263,8 @@ impl Core {
                 during_simulated_partition: false,
                 partition_timer_futures: FuturesUnordered::new(),
 
-                partition_delayed_consensus_msgs: Vec::new(),
-                partition_delayed_own_headers: Vec::new(),
-                partition_delayed_headers: Vec::new(),
+                partition_delayed_msgs: Vec::new(),
+                partition_public_keys: HashSet::new(),
             }
             .run()
             .await;
@@ -276,10 +274,6 @@ impl Core {
     async fn process_own_header(&mut self, mut header: Header) -> DagResult<()> {
         //println!("Received own header");
         debug!("Processing own header with {:?} consensus messages", header.consensus_messages.len());
-        if self.during_simulated_partition {
-            self.partition_delayed_own_headers.push(header.clone());
-            return Ok(())
-        }
         // for (dig, consensus) in &header.consensus_messages {
         //     match consensus { //TODO: Re-factor ConsensusMessages to all have slot/view, option for TC/QC, and a type.
         //         ConsensusMessage::Prepare {slot, view, tc: _, qc_ticket: _, proposals: _, } => {debug!("Prepare instance for slot {}", slot);},  
@@ -345,11 +339,6 @@ impl Core {
     async fn process_header(&mut self, header: Header, sync: bool) -> DagResult<()> {
         debug!("Processing Header:  {:?}", header);
         debug!("Processing the header with height {:?}", header.height);
-
-        if self.during_simulated_partition {
-            self.partition_delayed_headers.push(header.clone());
-            return Ok(())
-        }
 
         // Check the parent certificate. Ensure the certificate contains a quorum of votes and is
         // at the preivous height
@@ -943,33 +932,18 @@ impl Core {
                     self.async_delayed_prepare = Some(consensus_message);
                     return Ok(());
                 }
-                if self.during_simulated_partition {
-                    debug!("Simulating Partition: skip sending Prepare for slot {} view {}. This will trigger a view change", slot, view);
-                    self.partition_delayed_consensus_msgs.push(consensus_message);
-                    return Ok(());
-                }
                 // if *slot == 5 && *view == 1 {
                 //     debug!("skip sending Prepare for slot 5 view 1. Trigger view change");
                 //     return Ok(());
                 // }
             },
             ConsensusMessage::Confirm {slot, view, qc: _, proposals} => {
-                if self.during_simulated_partition {
-                    debug!("Simulating Partition: skip sending Confirm for slot {} view {}. This will trigger a view change", slot, view);
-                    self.partition_delayed_consensus_msgs.push(consensus_message);
-                    return Ok(());
-                }
                 // if *slot == 5 && *view == 1 {
                 //     debug!("skip sending Confirm for slot 5 view 1. Trigger view change");
                 //     return Ok(());
                 // }
             },
             ConsensusMessage::Commit {slot, view, qc: _, proposals} => {
-                if self.during_simulated_partition {
-                    debug!("Simulating Partition: skip sending Commit for slot {} view {}. This will trigger a view change", slot, view);
-                    self.partition_delayed_consensus_msgs.push(consensus_message);
-                    return Ok(());
-                }
                 // if *slot == 5 && *view <3  {
                 //     debug!("skip sending Commit for slot 5 view 1. Trigger view change");
                 //     return Ok(());
@@ -1329,8 +1303,6 @@ impl Core {
     }
 
     async fn process_consensus_request(&mut self, consensus_req: ConsensusRequest) -> DagResult<()> {
-    
-        
         let consensus_message = &consensus_req.message;
         debug!("received consensus request for slot");
 
@@ -2085,6 +2057,57 @@ impl Core {
         certificate.verify(&self.committee).map_err(DagError::from)
     }
 
+    pub async fn receive_primary_msg(&mut self, msg: PrimaryMessage, author: &PublicKey) -> DagResult<()> {
+        if self.during_simulated_partition && self.partition_public_keys.contains(author) {
+            self.partition_delayed_consensus_msgs.push(msg.clone());
+            Ok(())
+        } else {
+            self.receive_primary_msg_normal(msg)
+        }
+    }
+
+    pub async fn receive_primary_msg_normal(&mut self, message: PrimaryMessage) -> DagResult<()> {
+        match message {
+            PrimaryMessage::Header(header, sync) => {
+                match self.sanitize_header(&header) {
+                    Ok(()) => self.process_header(header, sync).await,
+                    error => error
+                }
+
+            },
+            PrimaryMessage::Vote(vote) => {
+                match self.sanitize_vote(&vote) {
+                    Ok(()) => {
+                        self.process_vote(vote, false).await
+                    },
+                    error => {
+                        error
+                    }
+                }
+            },
+            PrimaryMessage::Certificate(certificate) => {
+                match self.sanitize_certificate(&certificate) {
+                    Ok(()) => self.process_certificate(certificate).await, //self.receive_certificate(certificate).await,
+                    error => {
+                        error
+                    }
+                }
+            },
+            PrimaryMessage::Timeout(timeout) => self.handle_timeout(&timeout).await,
+            PrimaryMessage::TC(tc) => self.handle_tc(&tc).await,
+
+            // We receive a forwarded prepare or commit message from another replica
+            PrimaryMessage::ConsensusMessage(consensus_message) => self.process_forwarded_message(consensus_message).await,
+              
+        
+            // External Consensus implementation: Receive Consensus Requests (Prep/Confirm/Commit) or Votes (Prep-Vote/Confirm-Ack)
+            PrimaryMessage::ConsensusRequest(consensus_req) => self.process_consensus_request(consensus_req).await,
+            PrimaryMessage::ConsensusVote(consensus_vote) => self.process_consensus_vote(consensus_vote, false).await,
+            _ => panic!("Unexpected core message")
+        }
+
+    }
+
     // Main loop listening to incoming messages.
     pub async fn run(&mut self) {
 
@@ -2101,6 +2124,10 @@ impl Core {
         let mut keys: Vec<_> = self.committee.authorities.keys().cloned().collect();
         keys.sort();
         let index = keys.binary_search(&self.name).unwrap();
+        
+        for i in 0..index {
+            self.partition_public_keys.insert(keys[i]);
+        }
 
         if self.simulate_partition && (index as u64) < self.partition_nodes {
             let partition_start = Timer::new(0, 0, self.partition_start);
@@ -2147,44 +2174,23 @@ impl Core {
             let result = tokio::select! {
                 // We receive here messages from other primaries.
                 Some(message) = self.rx_primaries.recv() => {
-                    match message {
-                        PrimaryMessage::Header(header, sync) => {
-                            match self.sanitize_header(&header) {
-                                Ok(()) => self.process_header(header, sync).await,
-                                error => error
-                            }
-
-                        },
-                        PrimaryMessage::Vote(vote) => {
-                            match self.sanitize_vote(&vote) {
-                                Ok(()) => {
-                                    self.process_vote(vote, false).await
-                                },
-                                error => {
-                                    error
-                                }
-                            }
-                        },
-                        PrimaryMessage::Certificate(certificate) => {
-                            match self.sanitize_certificate(&certificate) {
-                                Ok(()) => self.process_certificate(certificate).await, //self.receive_certificate(certificate).await,
-                                error => {
-                                    error
-                                }
-                            }
-                        },
-                        PrimaryMessage::Timeout(timeout) => self.handle_timeout(&timeout).await,
-                        PrimaryMessage::TC(tc) => self.handle_tc(&tc).await,
+                    let author: PublicKey = match message {
+                        PrimaryMessage::Header(header, sync) => header.author,
+                        PrimaryMessage::Vote(vote) => vote.author,
+                        PrimaryMessage::Certificate(certificate) => certificate.author,
+                        PrimaryMessage::Timeout(timeout) => timeout.author,
+                        PrimaryMessage::TC(tc) => tc.author,
 
                         // We receive a forwarded prepare or commit message from another replica
-                        PrimaryMessage::ConsensusMessage(consensus_message) => self.process_forwarded_message(consensus_message).await,
+                        PrimaryMessage::ConsensusMessage(consensus_message) => consensus_message.author,
                           
                     
                         // External Consensus implementation: Receive Consensus Requests (Prep/Confirm/Commit) or Votes (Prep-Vote/Confirm-Ack)
-                        PrimaryMessage::ConsensusRequest(consensus_req) => self.process_consensus_request(consensus_req).await,
-                        PrimaryMessage::ConsensusVote(consensus_vote) => self.process_consensus_vote(consensus_vote, false).await,
+                        PrimaryMessage::ConsensusRequest(consensus_req) => consensus_req.author,
+                        PrimaryMessage::ConsensusVote(consensus_vote) => consensus_vote.author,
                         _ => panic!("Unexpected core message")
                     }
+                    self.receive_primary_msg(message, author)
                 },
 
                 // We also receive here our new headers created by the `Proposer`.
@@ -2252,17 +2258,8 @@ impl Core {
                     self.during_simulated_partition = !self.during_simulated_partition; 
 
                     if !self.during_simulated_partition {
-                        for msg in self.partition_delayed_consensus_msgs.clone() {
-                            let _ = self.send_consensus_req(msg).await;
-                        }
-
-                        for own_header in self.partition_delayed_own_headers.clone() {
-                            let _ = self.process_own_header(own_header).await;
-                        }
-
-                        for header in self.partition_delayed_headers.clone() {
-                            // Process the header locally.
-                            let _ = self.process_header(header, false).await;
+                        for msg in self.partition_delayed_msgs.clone() {
+                            let _ = self.receive_primary_msg_normal(msg).await;
                         }
                     }
                     Ok(())
