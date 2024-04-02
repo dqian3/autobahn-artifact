@@ -1813,28 +1813,26 @@ impl Core {
         .await;
         debug!("Created Timeout: {:?}", timeout);
 
-        if !self.during_simulated_partition {
-            // Broadcast the timeout message.
-            debug!("Broadcasting Timeout: {:?}", timeout);
-            let addresses = self
-                .committee
-                .others_primaries(&self.name)
-                .iter()
-                .map(|(_, x)| x.primary_to_primary)
-                .collect();
-            let message = bincode::serialize(&PrimaryMessage::Timeout(timeout.clone()))
-                .expect("Failed to serialize timeout message");
-            let handlers = self.network
-                .broadcast(addresses, Bytes::from(message))
-                .await;
+        
+        // Broadcast the timeout message.
+        debug!("Broadcasting Timeout: {:?}", timeout);
+        let addresses = self
+            .committee
+            .others_primaries(&self.name)
+            .iter()
+            .map(|(_, x)| x.primary_to_primary)
+            .collect();
+        let message = bincode::serialize(&PrimaryMessage::Timeout(timeout.clone()))
+            .expect("Failed to serialize timeout message");
+        let handlers = self.network
+            .broadcast(addresses, Bytes::from(message))
+            .await;
 
-            self.consensus_cancel_handlers
-                .entry(slot)
-                .or_insert_with(Vec::new)
-                .extend(handlers);
-        } else {
-            self.partition_delayed_primary_msgs.push(PrimaryMessage::Timeout(timeout.clone()));
-        }
+        self.consensus_cancel_handlers
+            .entry(slot)
+            .or_insert_with(Vec::new)
+            .extend(handlers);
+        
 
         
 
@@ -2104,7 +2102,7 @@ impl Core {
         keys.sort();
         let index = keys.binary_search(&self.name).unwrap();
 
-        if self.simulate_partition && index < self.partition_nodes {
+        if self.simulate_partition && (index as u64) < self.partition_nodes {
             let partition_start = Timer::new(0, 0, self.partition_start);
             let partition_end = Timer::new(0, 0, self.partition_start + self.partition_duration);
             self.during_simulated_partition = false;
@@ -2259,7 +2257,7 @@ impl Core {
                         }
 
                         for own_header in self.partition_delayed_own_headers.clone() {
-                            let _ = self.process_own_header(header).awwait;
+                            let _ = self.process_own_header(own_header).await;
                         }
 
                         for header in self.partition_delayed_headers.clone() {
