@@ -98,6 +98,11 @@ pub struct Parameters {
     pub simulate_asynchrony: bool,
     pub asynchrony_start: u64,
     pub asynchrony_duration: u64,
+
+    pub simulate_partition: bool,
+    pub partition_start: u64,
+    pub partition_duration: u64,
+    pub partition_nodes: u64,
 }
 
 impl Default for Parameters {
@@ -125,6 +130,12 @@ impl Default for Parameters {
             simulate_asynchrony: false,
             asynchrony_start: 20_000, //20 second in
             asynchrony_duration: 10_000, //10 seconds
+
+            // Partition simulation:
+            simulate_partition: false,
+            partition_nodes: 1,
+            partition_start: 10_000,
+            partition_duration: 2_000,
         }
     }
 }

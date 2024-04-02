@@ -141,14 +141,15 @@ pub struct Core {
     async_delayed_prepare: Option<ConsensusMessage>,
 
     simulate_partition: bool,
-    partition_nodes: u64,
     partition_start: u64,
     partition_duration: u64,
+    partition_nodes: u64,
     during_simulated_partition: bool,
     partition_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>,
-    current_partition_time: Instant,
+
     partition_delayed_consensus_msgs: Vec<ConsensusMessage>,
     partition_delayed_headers: Vec<Header>,
+    partition_delayed_own_headers: Vec<Header>,
 
 }
 
@@ -183,6 +184,11 @@ impl Core {
         simulate_asynchrony: bool,
         asynchrony_start: u64,
         asynchrony_duration: u64,
+
+        simulate_partition: bool,
+        partition_start: u64,
+        partition_duration: u64,
+        partition_nodes: u64,
     ) {
         tokio::spawn(async move {
             Self {
@@ -250,6 +256,17 @@ impl Core {
                 async_timer_futures: FuturesUnordered::new(),
                 current_time: Instant::now(),
                 async_delayed_prepare: None,
+
+                simulate_partition,
+                partition_start,
+                partition_duration,
+                partition_nodes,
+                during_simulated_partition: false,
+                partition_timer_futures: FuturesUnordered::new(),
+
+                partition_delayed_consensus_msgs: Vec::new(),
+                partition_delayed_own_headers: Vec::new(),
+                partition_delayed_headers: Vec::new(),
             }
             .run()
             .await;
@@ -259,6 +276,10 @@ impl Core {
     async fn process_own_header(&mut self, mut header: Header) -> DagResult<()> {
         //println!("Received own header");
         debug!("Processing own header with {:?} consensus messages", header.consensus_messages.len());
+        if self.during_simulated_partition {
+            self.partition_delayed_own_headers.push(header.clone());
+            return Ok(())
+        }
         // for (dig, consensus) in &header.consensus_messages {
         //     match consensus { //TODO: Re-factor ConsensusMessages to all have slot/view, option for TC/QC, and a type.
         //         ConsensusMessage::Prepare {slot, view, tc: _, qc_ticket: _, proposals: _, } => {debug!("Prepare instance for slot {}", slot);},  
@@ -299,25 +320,22 @@ impl Core {
             //self.consensus_instances.insert(dig.clone(), consensus.clone());
         }
 
-        if !self.during_simulated_partition {
-            // Broadcast the new header in a reliable manner.
-            let addresses = self
-                .committee
-                .others_primaries(&self.name)
-                .iter()
-                .map(|(_, x)| x.primary_to_primary)
-                .collect();
-            let bytes = bincode::serialize(&PrimaryMessage::Header(header.clone(), false))
-                .expect("Failed to serialize our own header");
-            let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
-            self.cancel_handlers
-                .entry(header.height)
-                .or_insert_with(Vec::new)
-                .extend(handlers);
-        } else {
-            self.partition_delayed_headers.push(header.clone());
-        }
-
+       
+        // Broadcast the new header in a reliable manner.
+        let addresses = self
+            .committee
+            .others_primaries(&self.name)
+            .iter()
+            .map(|(_, x)| x.primary_to_primary)
+            .collect();
+        let bytes = bincode::serialize(&PrimaryMessage::Header(header.clone(), false))
+            .expect("Failed to serialize our own header");
+        let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
+        self.cancel_handlers
+            .entry(header.height)
+            .or_insert_with(Vec::new)
+            .extend(handlers);
+        
         // Process the header.
         self.process_header(header, false).await
        
@@ -327,6 +345,11 @@ impl Core {
     async fn process_header(&mut self, header: Header, sync: bool) -> DagResult<()> {
         debug!("Processing Header:  {:?}", header);
         debug!("Processing the header with height {:?}", header.height);
+
+        if self.during_simulated_partition {
+            self.partition_delayed_headers.push(header.clone());
+            return Ok(())
+        }
 
         // Check the parent certificate. Ensure the certificate contains a quorum of votes and is
         // at the preivous height
@@ -857,23 +880,16 @@ impl Core {
                         //let new_consensus_message = ConsensusMessage::Confirm {slot: *slot, view: *view,  qc, proposals: new_proposals,};
 
                         // continue with next consensus phase
-                        if !self.during_simulated_partition {
-                            self.send_consensus_req(new_consensus_message).await?;
-                        } else {
-                            self.partition_delayed_consensus_msgs.push(new_consensus_message);
-                        }
+                        self.send_consensus_req(new_consensus_message).await?;
                     }
                     ConsensusMessage::Confirm {slot, view, qc: _,proposals,}
                     => {
                         debug!("Commit QC formed in slot {:?}", slot);
                         let new_consensus_message = ConsensusMessage::Commit {slot: *slot, view: *view, qc, proposals: proposals.clone(),};
 
-                        if !self.during_simulated_partition {
-                            // Send this new instance to the proposer
-                            self.send_consensus_req(new_consensus_message).await?;
-                        } else {
-                            self.partition_delayed_consensus_msgs.push(new_consensus_message);
-                        }
+                        // Send this new instance to the proposer
+                        self.send_consensus_req(new_consensus_message).await?;
+                        
                     }
                     ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals: _, } => {
                         panic!("Should never receive Vote for Commit")
@@ -2084,7 +2100,11 @@ impl Core {
         }*/
 
         // Simulate network partition
-        if self.simulate_partition {
+        let keys: Vec<_> = self.committee.authorities.keys().cloned().collect();
+        keys.sort();
+        let index = keys.binary_search(&self.name).unwrap();
+
+        if self.simulate_partition && index < self.partition_nodes {
             let partition_start = Timer::new(0, 0, self.partition_start);
             let partition_end = Timer::new(0, 0, self.partition_start + self.partition_duration);
             self.during_simulated_partition = false;
@@ -2238,21 +2258,11 @@ impl Core {
                             let _ = self.send_consensus_req(msg).await;
                         }
 
+                        for own_header in self.partition_delayed_own_headers.clone() {
+                            let _ = self.process_own_header(header).awwait;
+                        }
+
                         for header in self.partition_delayed_headers.clone() {
-                            // Broadcast the new header in a reliable manner.
-                            let addresses = self
-                                .committee
-                                .others_primaries(&self.name)
-                                .iter()
-                                .map(|(_, x)| x.primary_to_primary)
-                                .collect();
-                            let bytes = bincode::serialize(&PrimaryMessage::Header(header.clone(), false))
-                                .expect("Failed to serialize our own header");
-                            let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
-                            self.cancel_handlers
-                                .entry(header.height)
-                                .or_insert_with(Vec::new)
-                                .extend(handlers);
                             // Process the header locally.
                             let _ = self.process_header(header, false).await;
                         }
