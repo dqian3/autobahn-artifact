@@ -139,6 +139,17 @@ pub struct Core {
     async_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>,
     current_time: Instant,
     async_delayed_prepare: Option<ConsensusMessage>,
+
+    simulate_partition: bool,
+    partition_nodes: u64,
+    partition_start: u64,
+    partition_duration: u64,
+    during_simulated_partition: bool,
+    partition_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>,
+    current_partition_time: Instant,
+    partition_delayed_consensus_msgs: Vec<ConsensusMessage>,
+    partition_delayed_headers: Vec<Header>,
+
 }
 
 impl Core {
@@ -288,23 +299,28 @@ impl Core {
             //self.consensus_instances.insert(dig.clone(), consensus.clone());
         }
 
-        // Broadcast the new header in a reliable manner.
-        let addresses = self
-            .committee
-            .others_primaries(&self.name)
-            .iter()
-            .map(|(_, x)| x.primary_to_primary)
-            .collect();
-        let bytes = bincode::serialize(&PrimaryMessage::Header(header.clone(), false))
-            .expect("Failed to serialize our own header");
-        let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
-        self.cancel_handlers
-            .entry(header.height)
-            .or_insert_with(Vec::new)
-            .extend(handlers);
+        if !self.during_simulated_partition {
+            // Broadcast the new header in a reliable manner.
+            let addresses = self
+                .committee
+                .others_primaries(&self.name)
+                .iter()
+                .map(|(_, x)| x.primary_to_primary)
+                .collect();
+            let bytes = bincode::serialize(&PrimaryMessage::Header(header.clone(), false))
+                .expect("Failed to serialize our own header");
+            let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
+            self.cancel_handlers
+                .entry(header.height)
+                .or_insert_with(Vec::new)
+                .extend(handlers);
+        } else {
+            self.partition_delayed_headers.push(header.clone());
+        }
 
         // Process the header.
         self.process_header(header, false).await
+       
     }
 
     #[async_recursion]
@@ -672,12 +688,13 @@ impl Core {
                                 false => ConsensusMessage::Confirm {slot: *slot, view: *view,  qc, proposals: proposals.clone() },
                             };
                             //let new_consensus_message = ConsensusMessage::Confirm {slot: *slot, view: *view,  qc, proposals: new_proposals,};
-
+                            
                             // Send this new instance to the proposer
                             self.tx_info
                                 .send(new_consensus_message)
                                 .await
                                 .expect("Failed to send info");
+                            
                         }
                         ConsensusMessage::Confirm {slot, view, qc: _,proposals,}
                         => {
@@ -689,6 +706,7 @@ impl Core {
                                 .send(new_consensus_message)
                                 .await
                                 .expect("Failed to send info");
+                            
                         }
                         ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals: _, } => {}
                     };
@@ -839,15 +857,23 @@ impl Core {
                         //let new_consensus_message = ConsensusMessage::Confirm {slot: *slot, view: *view,  qc, proposals: new_proposals,};
 
                         // continue with next consensus phase
-                        self.send_consensus_req(new_consensus_message).await?;
+                        if !self.during_simulated_partition {
+                            self.send_consensus_req(new_consensus_message).await?;
+                        } else {
+                            self.partition_delayed_consensus_msgs.push(new_consensus_message);
+                        }
                     }
                     ConsensusMessage::Confirm {slot, view, qc: _,proposals,}
                     => {
                         debug!("Commit QC formed in slot {:?}", slot);
                         let new_consensus_message = ConsensusMessage::Commit {slot: *slot, view: *view, qc, proposals: proposals.clone(),};
 
-                        // continue with next consensus phase
-                        self.send_consensus_req(new_consensus_message).await?;
+                        if !self.during_simulated_partition {
+                            // Send this new instance to the proposer
+                            self.send_consensus_req(new_consensus_message).await?;
+                        } else {
+                            self.partition_delayed_consensus_msgs.push(new_consensus_message);
+                        }
                     }
                     ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals: _, } => {
                         panic!("Should never receive Vote for Commit")
@@ -901,18 +927,33 @@ impl Core {
                     self.async_delayed_prepare = Some(consensus_message);
                     return Ok(());
                 }
+                if self.during_simulated_partition {
+                    debug!("Simulating Partition: skip sending Prepare for slot {} view {}. This will trigger a view change", slot, view);
+                    self.partition_delayed_consensus_msgs.push(consensus_message);
+                    return Ok(());
+                }
                 // if *slot == 5 && *view == 1 {
                 //     debug!("skip sending Prepare for slot 5 view 1. Trigger view change");
                 //     return Ok(());
                 // }
             },
             ConsensusMessage::Confirm {slot, view, qc: _, proposals} => {
+                if self.during_simulated_partition {
+                    debug!("Simulating Partition: skip sending Confirm for slot {} view {}. This will trigger a view change", slot, view);
+                    self.partition_delayed_consensus_msgs.push(consensus_message);
+                    return Ok(());
+                }
                 // if *slot == 5 && *view == 1 {
                 //     debug!("skip sending Confirm for slot 5 view 1. Trigger view change");
                 //     return Ok(());
                 // }
             },
             ConsensusMessage::Commit {slot, view, qc: _, proposals} => {
+                if self.during_simulated_partition {
+                    debug!("Simulating Partition: skip sending Commit for slot {} view {}. This will trigger a view change", slot, view);
+                    self.partition_delayed_consensus_msgs.push(consensus_message);
+                    return Ok(());
+                }
                 // if *slot == 5 && *view <3  {
                 //     debug!("skip sending Commit for slot 5 view 1. Trigger view change");
                 //     return Ok(());
@@ -1383,19 +1424,21 @@ impl Core {
         } 
         else {
             debug!("Send consensus vote to replica {}", author);
-          
+
+            
             let address = self
-                    .committee
-                    .primary(&author)
-                    .expect("Author of valid header is not in the committee")
-                    .primary_to_primary;
-                let bytes = bincode::serialize(&PrimaryMessage::ConsensusVote(vote))
-                    .expect("Failed to serialize our own vote");
-                let handler = self.network.send(address, Bytes::from(bytes)).await;
-                self.consensus_cancel_handlers
-                    .entry(slot) 
-                    .or_insert_with(Vec::new)
-                    .push(handler);
+                .committee
+                .primary(&author)
+                .expect("Author of valid header is not in the committee")
+                .primary_to_primary;
+            let bytes = bincode::serialize(&PrimaryMessage::ConsensusVote(vote))
+                .expect("Failed to serialize our own vote");
+            let handler = self.network.send(address, Bytes::from(bytes)).await;
+            self.consensus_cancel_handlers
+                .entry(slot) 
+                .or_insert_with(Vec::new)
+                .push(handler);
+            
         }
        
         
@@ -1754,24 +1797,30 @@ impl Core {
         .await;
         debug!("Created Timeout: {:?}", timeout);
 
-        // Broadcast the timeout message.
-        debug!("Broadcasting Timeout: {:?}", timeout);
-        let addresses = self
-            .committee
-            .others_primaries(&self.name)
-            .iter()
-            .map(|(_, x)| x.primary_to_primary)
-            .collect();
-        let message = bincode::serialize(&PrimaryMessage::Timeout(timeout.clone()))
-            .expect("Failed to serialize timeout message");
-        let handlers = self.network
-            .broadcast(addresses, Bytes::from(message))
-            .await;
+        if !self.during_simulated_partition {
+            // Broadcast the timeout message.
+            debug!("Broadcasting Timeout: {:?}", timeout);
+            let addresses = self
+                .committee
+                .others_primaries(&self.name)
+                .iter()
+                .map(|(_, x)| x.primary_to_primary)
+                .collect();
+            let message = bincode::serialize(&PrimaryMessage::Timeout(timeout.clone()))
+                .expect("Failed to serialize timeout message");
+            let handlers = self.network
+                .broadcast(addresses, Bytes::from(message))
+                .await;
 
-        self.consensus_cancel_handlers
-            .entry(slot)
-            .or_insert_with(Vec::new)
-            .extend(handlers);
+            self.consensus_cancel_handlers
+                .entry(slot)
+                .or_insert_with(Vec::new)
+                .extend(handlers);
+        } else {
+            self.partition_delayed_primary_msgs.push(PrimaryMessage::Timeout(timeout.clone()));
+        }
+
+        
 
         //println!("Processed our own timeout");
         // Process our message.
@@ -2034,6 +2083,15 @@ impl Core {
             self.async_timer_futures.push(Box::pin(async_end));
         }*/
 
+        // Simulate network partition
+        if self.simulate_partition {
+            let partition_start = Timer::new(0, 0, self.partition_start);
+            let partition_end = Timer::new(0, 0, self.partition_start + self.partition_duration);
+            self.during_simulated_partition = false;
+            self.partition_timer_futures.push(Box::pin(partition_start));
+            self.partition_timer_futures.push(Box::pin(partition_end));
+        }
+
         // Initialize current proposals with the genesis tips
         self.current_proposal_tips = Header::genesis_proposals(&self.committee);
         self.current_certified_tips = Header::genesis_proposals(&self.committee);
@@ -2168,6 +2226,36 @@ impl Core {
                             self.async_delayed_prepare = None;
                         }
                         
+                    }
+                    Ok(())
+                },
+
+                Some((slot, view)) = self.partition_timer_futures.next() => {
+                    self.during_simulated_partition = !self.during_simulated_partition; 
+
+                    if !self.during_simulated_partition {
+                        for msg in self.partition_delayed_consensus_msgs.clone() {
+                            let _ = self.send_consensus_req(msg).await;
+                        }
+
+                        for header in self.partition_delayed_headers.clone() {
+                            // Broadcast the new header in a reliable manner.
+                            let addresses = self
+                                .committee
+                                .others_primaries(&self.name)
+                                .iter()
+                                .map(|(_, x)| x.primary_to_primary)
+                                .collect();
+                            let bytes = bincode::serialize(&PrimaryMessage::Header(header.clone(), false))
+                                .expect("Failed to serialize our own header");
+                            let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
+                            self.cancel_handlers
+                                .entry(header.height)
+                                .or_insert_with(Vec::new)
+                                .extend(handlers);
+                            // Process the header locally.
+                            let _ = self.process_header(header, false).await;
+                        }
                     }
                     Ok(())
                 },
