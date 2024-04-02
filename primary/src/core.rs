@@ -2098,7 +2098,7 @@ impl Core {
         }*/
 
         // Simulate network partition
-        let keys: Vec<_> = self.committee.authorities.keys().cloned().collect();
+        let mut keys: Vec<_> = self.committee.authorities.keys().cloned().collect();
         keys.sort();
         let index = keys.binary_search(&self.name).unwrap();
 
