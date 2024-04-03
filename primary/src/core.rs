@@ -148,7 +148,7 @@ pub struct Core {
     partition_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>,
 
     partition_public_keys: HashSet<PublicKey>,
-    partition_delayed_msgs: Vec<PrimaryMessage>,
+    partition_delayed_msgs: Vec<(PrimaryMessage, u64, Option<PublicKey>)>,
 
 }
 
@@ -313,10 +313,11 @@ impl Core {
             };
             //self.consensus_instances.insert(dig.clone(), consensus.clone());
         }
+        
 
        
         // Broadcast the new header in a reliable manner.
-        let addresses = self
+        /*let addresses = self
             .committee
             .others_primaries(&self.name)
             .iter()
@@ -328,7 +329,9 @@ impl Core {
         self.cancel_handlers
             .entry(header.height)
             .or_insert_with(Vec::new)
-            .extend(handlers);
+            .extend(handlers);*/
+        
+        self.send_msg(PrimaryMessage::Header(header.clone(), false), header.height, None).await;
         
         // Process the header.
         self.process_header(header, false).await
@@ -481,7 +484,7 @@ impl Core {
                     .await
                     .expect("Failed to process our own vote");
             } else {
-                let address = self
+                /*let address = self
                     .committee
                     .primary(&header.author)
                     .expect("Author of valid header is not in the committee")
@@ -492,7 +495,9 @@ impl Core {
                 self.cancel_handlers
                     .entry(header.height())
                     .or_insert_with(Vec::new)
-                    .push(handler);
+                    .push(handler);*/
+
+                self.send_msg(PrimaryMessage::Vote(vote), header.height(), Some(header.author)).await;
             }
         }
         Ok(())
@@ -956,7 +961,7 @@ impl Core {
         let consensus_req = ConsensusRequest::new(self.name, consensus_message, &mut self.signature_service).await;
 
         //send to all others
-        let addresses = self
+        /*let addresses = self
             .committee
             .others_primaries(&self.name)
             .iter()
@@ -968,7 +973,9 @@ impl Core {
         self.cancel_handlers
             .entry(self.current_header.height())
             .or_insert_with(Vec::new)
-            .extend(handlers);
+            .extend(handlers);*/
+
+        self.send_msg(PrimaryMessage::ConsensusRequest(consensus_req.clone()), self.current_header.height(), None).await;
 
         //process oneself
         self.process_consensus_request(consensus_req).await?;
@@ -1047,7 +1054,8 @@ impl Core {
                             .or_insert_with(Vec::new)
                             .push(handler);
                         //println!("forwarding to the leader");
-                    
+                        
+                        self.send_msg(PrimaryMessage::ConsensusMessage(prepare_message.clone()), self.current_header.height(), Some(next_leader)).await;
                     }
                     return Ok(())
                 }
@@ -1414,7 +1422,7 @@ impl Core {
             debug!("Send consensus vote to replica {}", author);
 
             
-            let address = self
+            /*let address = self
                 .committee
                 .primary(&author)
                 .expect("Author of valid header is not in the committee")
@@ -1425,7 +1433,9 @@ impl Core {
             self.consensus_cancel_handlers
                 .entry(slot) 
                 .or_insert_with(Vec::new)
-                .push(handler);
+                .push(handler);*/
+
+            self.send_msg(PrimaryMessage::ConsensusVote(vote), slot, Some(author)).await;
             
         }
        
@@ -1788,7 +1798,7 @@ impl Core {
         
         // Broadcast the timeout message.
         debug!("Broadcasting Timeout: {:?}", timeout);
-        let addresses = self
+        /*let addresses = self
             .committee
             .others_primaries(&self.name)
             .iter()
@@ -1803,9 +1813,9 @@ impl Core {
         self.consensus_cancel_handlers
             .entry(slot)
             .or_insert_with(Vec::new)
-            .extend(handlers);
+            .extend(handlers);*/
         
-
+        self.send_msg(PrimaryMessage::Timeout(timeout.clone()), slot, None);
         
 
         //println!("Processed our own timeout");
@@ -2057,55 +2067,47 @@ impl Core {
         certificate.verify(&self.committee).map_err(DagError::from)
     }
 
-    pub async fn receive_primary_msg(&mut self, msg: PrimaryMessage, author: &PublicKey) -> DagResult<()> {
-        if self.during_simulated_partition && self.partition_public_keys.contains(author) {
-            self.partition_delayed_consensus_msgs.push(msg.clone());
-            Ok(())
+
+    pub async fn send_msg(&mut self, message: PrimaryMessage, height: u64, author: Option<PublicKey>) {
+        if self.during_simulated_partition {
+            self.partition_delayed_msgs.push((message, height, author));
         } else {
-            self.receive_primary_msg_normal(msg)
+            self.send_msg_normal(message, height, author).await;
         }
     }
 
-    pub async fn receive_primary_msg_normal(&mut self, message: PrimaryMessage) -> DagResult<()> {
-        match message {
-            PrimaryMessage::Header(header, sync) => {
-                match self.sanitize_header(&header) {
-                    Ok(()) => self.process_header(header, sync).await,
-                    error => error
-                }
-
-            },
-            PrimaryMessage::Vote(vote) => {
-                match self.sanitize_vote(&vote) {
-                    Ok(()) => {
-                        self.process_vote(vote, false).await
-                    },
-                    error => {
-                        error
-                    }
-                }
-            },
-            PrimaryMessage::Certificate(certificate) => {
-                match self.sanitize_certificate(&certificate) {
-                    Ok(()) => self.process_certificate(certificate).await, //self.receive_certificate(certificate).await,
-                    error => {
-                        error
-                    }
-                }
-            },
-            PrimaryMessage::Timeout(timeout) => self.handle_timeout(&timeout).await,
-            PrimaryMessage::TC(tc) => self.handle_tc(&tc).await,
-
-            // We receive a forwarded prepare or commit message from another replica
-            PrimaryMessage::ConsensusMessage(consensus_message) => self.process_forwarded_message(consensus_message).await,
-              
-        
-            // External Consensus implementation: Receive Consensus Requests (Prep/Confirm/Commit) or Votes (Prep-Vote/Confirm-Ack)
-            PrimaryMessage::ConsensusRequest(consensus_req) => self.process_consensus_request(consensus_req).await,
-            PrimaryMessage::ConsensusVote(consensus_vote) => self.process_consensus_vote(consensus_vote, false).await,
-            _ => panic!("Unexpected core message")
+    pub async fn send_msg_normal(&mut self, message: PrimaryMessage, height: u64, author: Option<PublicKey>) {
+        match author {
+            Some(author) => {
+                let address = self
+                    .committee
+                    .primary(&author)
+                    .expect("Author of valid header is not in the committee")
+                    .primary_to_primary;
+                let bytes = bincode::serialize(&message).expect("Failed to serialize message");
+                let handler = self.network.send(address, Bytes::from(bytes)).await;
+                self.cancel_handlers
+                    .entry(height)
+                    .or_insert_with(Vec::new)
+                    .push(handler);
+            }
+            None => {
+                let addresses = self
+                    .committee
+                    .others_primaries(&self.name)
+                    .iter()
+                    .filter(|(pk, _)| !self.partition_public_keys.contains(pk))
+                    .map(|(_, x)| x.primary_to_primary)
+                    .collect();
+                let bytes = bincode::serialize(&message).expect("Failed to serialize message");
+                let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
+                self.cancel_handlers
+                    .entry(height)
+                    .or_insert_with(Vec::new)
+                    .extend(handlers);
+            }
         }
-
+        
     }
 
     // Main loop listening to incoming messages.
@@ -2174,23 +2176,44 @@ impl Core {
             let result = tokio::select! {
                 // We receive here messages from other primaries.
                 Some(message) = self.rx_primaries.recv() => {
-                    let author: PublicKey = match message {
-                        PrimaryMessage::Header(header, sync) => header.author,
-                        PrimaryMessage::Vote(vote) => vote.author,
-                        PrimaryMessage::Certificate(certificate) => certificate.author,
-                        PrimaryMessage::Timeout(timeout) => timeout.author,
-                        PrimaryMessage::TC(tc) => tc.author,
-
+                    match message {
+                        PrimaryMessage::Header(header, sync) => {
+                            match self.sanitize_header(&header) {
+                                Ok(()) => self.process_header(header, sync).await,
+                                error => error
+                            }
+            
+                        },
+                        PrimaryMessage::Vote(vote) => {
+                            match self.sanitize_vote(&vote) {
+                                Ok(()) => {
+                                    self.process_vote(vote, false).await
+                                },
+                                error => {
+                                    error
+                                }
+                            }
+                        },
+                        PrimaryMessage::Certificate(certificate) => {
+                            match self.sanitize_certificate(&certificate) {
+                                Ok(()) => self.process_certificate(certificate).await, //self.receive_certificate(certificate).await,
+                                error => {
+                                    error
+                                }
+                            }
+                        },
+                        PrimaryMessage::Timeout(timeout) => self.handle_timeout(&timeout).await,
+                        PrimaryMessage::TC(tc) => self.handle_tc(&tc).await,
+            
                         // We receive a forwarded prepare or commit message from another replica
-                        PrimaryMessage::ConsensusMessage(consensus_message) => consensus_message.author,
+                        PrimaryMessage::ConsensusMessage(consensus_message) => self.process_forwarded_message(consensus_message).await,
                           
                     
                         // External Consensus implementation: Receive Consensus Requests (Prep/Confirm/Commit) or Votes (Prep-Vote/Confirm-Ack)
-                        PrimaryMessage::ConsensusRequest(consensus_req) => consensus_req.author,
-                        PrimaryMessage::ConsensusVote(consensus_vote) => consensus_vote.author,
+                        PrimaryMessage::ConsensusRequest(consensus_req) => self.process_consensus_request(consensus_req).await,
+                        PrimaryMessage::ConsensusVote(consensus_vote) => self.process_consensus_vote(consensus_vote, false).await,
                         _ => panic!("Unexpected core message")
                     }
-                    self.receive_primary_msg(message, author)
                 },
 
                 // We also receive here our new headers created by the `Proposer`.
@@ -2258,8 +2281,8 @@ impl Core {
                     self.during_simulated_partition = !self.during_simulated_partition; 
 
                     if !self.during_simulated_partition {
-                        for msg in self.partition_delayed_msgs.clone() {
-                            let _ = self.receive_primary_msg_normal(msg).await;
+                        for (msg, height, author) in self.partition_delayed_msgs.clone() {
+                            let _ = self.send_msg_normal(msg, height, author).await;
                         }
                     }
                     Ok(())

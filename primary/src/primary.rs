@@ -39,7 +39,7 @@ pub type View = u64;
 // The slot (sequence) number of consensus
 pub type Slot = u64;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum PrimaryMessage {
     Header(Header, bool),
     Vote(Vote),
