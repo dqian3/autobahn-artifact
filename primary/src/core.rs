@@ -2174,20 +2174,14 @@ impl Core {
             keys.sort();
             let index = keys.binary_search(&self.name).unwrap();
 
-            let mut start=0;
-            let mut end = 0;
-
-            if index < self.partition_nodes as usize {
-                start = 0;
-                end = self.partition_nodes as usize;
-            } else {
-                start = self.partition_nodes as usize;
-                end = keys.len();
+            let num_keys = 1;
+            for i in 0..keys.len() {
+                if num_keys < self.partition_nodes && i != index {
+                    self.partition_public_keys.insert(keys[i]);
+                }
             }
 
-            for i in start..end {
-                self.partition_public_keys.insert(keys[i]);
-            }
+            debug!("partition pks are {:?}", self.partition_public_keys);
             
             let partition_start = Timer::new(0, 0, self.partition_start);
             let partition_end = Timer::new(0, 0, self.partition_start + self.partition_duration);
