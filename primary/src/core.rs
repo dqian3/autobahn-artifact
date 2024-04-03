@@ -1815,7 +1815,7 @@ impl Core {
             .or_insert_with(Vec::new)
             .extend(handlers);*/
         
-        self.send_msg(PrimaryMessage::Timeout(timeout.clone()), slot, None, true);
+        self.send_msg(PrimaryMessage::Timeout(timeout.clone()), slot, None, true).await;
         
 
         //println!("Processed our own timeout");
