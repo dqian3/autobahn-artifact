@@ -2070,7 +2070,35 @@ impl Core {
 
     pub async fn send_msg(&mut self, message: PrimaryMessage, height: u64, author: Option<PublicKey>) {
         if self.during_simulated_partition {
-            self.partition_delayed_msgs.push((message, height, author));
+            match author {
+                Some(author) => {
+                    if self.partition_public_keys.contains(&author) {
+                        // The receiver is in our partition, so we can send the message directly
+                        self.send_msg_normal(message, height, Some(author));
+                    } else {
+                        // The receiver is not in our partition, so we buffer for later
+                        self.partition_delayed_msgs.push((message, height, Some(author)));
+                    }
+                }
+                None => {
+                    // Send the message to all nodes in our side of the partition
+                    let addresses = self
+                        .committee
+                        .others_primaries(&self.name)
+                        .iter()
+                        .filter(|(pk, _)| self.partition_public_keys.contains(pk))
+                        .map(|(_, x)| x.primary_to_primary)
+                        .collect();
+                    let bytes = bincode::serialize(&message).expect("Failed to serialize message");
+                    let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
+                    self.cancel_handlers
+                        .entry(height)
+                        .or_insert_with(Vec::new)
+                        .extend(handlers);
+                    // Buffer the message for the other side of the partition
+                    self.partition_delayed_msgs.push((message, height, None));
+                }
+            }
         } else {
             self.send_msg_normal(message, height, author).await;
         }
@@ -2123,17 +2151,29 @@ impl Core {
         }*/
 
         // Simulate network partition
-        let mut keys: Vec<_> = self.committee.authorities.keys().cloned().collect();
-        keys.sort();
-        let index = keys.binary_search(&self.name).unwrap();
-        
-        for i in 0..index {
-            self.partition_public_keys.insert(keys[i]);
-        }
+        if self.simulate_partition {
+            let mut keys: Vec<_> = self.committee.authorities.keys().cloned().collect();
+            keys.sort();
+            let index = keys.binary_search(&self.name).unwrap();
 
-        if self.simulate_partition && (index as u64) < self.partition_nodes {
+            let mut start=0;
+            let mut end = 0;
+
+            if index < self.partition_nodes as usize {
+                start = 0;
+                end = self.partition_nodes as usize;
+            } else {
+                start = self.partition_nodes as usize;
+                end = keys.len();
+            }
+
+            for i in start..end {
+                self.partition_public_keys.insert(keys[i]);
+            }
+            
             let partition_start = Timer::new(0, 0, self.partition_start);
             let partition_end = Timer::new(0, 0, self.partition_start + self.partition_duration);
+            
             self.during_simulated_partition = false;
             self.partition_timer_futures.push(Box::pin(partition_start));
             self.partition_timer_futures.push(Box::pin(partition_end));
