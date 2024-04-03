@@ -2084,27 +2084,30 @@ impl Core {
                 }
                 None => {
                     // Send the message to all nodes in our side of the partition
-                    let addresses = self
-                        .committee
-                        .others_primaries(&self.name)
-                        .iter()
-                        .filter(|(pk, _)| self.partition_public_keys.contains(pk))
-                        .map(|(_, x)| x.primary_to_primary)
-                        .collect();
-                    let bytes = bincode::serialize(&message).expect("Failed to serialize message");
-                    let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
-                    if consensus_handler {
-                        self.consensus_cancel_handlers
-                            .entry(height)
-                            .or_insert_with(Vec::new)
-                            .extend(handlers);
-                    } else {
-                        self.cancel_handlers
-                            .entry(height)
-                            .or_insert_with(Vec::new)
-                            .extend(handlers);
+                    if self.partition_public_keys.len() > 1 {
+                        let addresses = self
+                            .committee
+                            .others_primaries(&self.name)
+                            .iter()
+                            .filter(|(pk, _)| self.partition_public_keys.contains(pk))
+                            .map(|(_, x)| x.primary_to_primary)
+                            .collect();
+                        let bytes = bincode::serialize(&message).expect("Failed to serialize message");
+                        let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
+                        if consensus_handler {
+                            self.consensus_cancel_handlers
+                                .entry(height)
+                                .or_insert_with(Vec::new)
+                                .extend(handlers);
+                        } else {
+                            self.cancel_handlers
+                                .entry(height)
+                                .or_insert_with(Vec::new)
+                                .extend(handlers);
+                        }
+                        debug!("broadcast message during partition, sent to non-partitioned nodes");
                     }
-                    debug!("broadcast message during partition, sent to non-partitioned nodes");
+                    
                     // Buffer the message for the other side of the partition
                     self.partition_delayed_msgs.push((message, height, None, consensus_handler));
                 }
