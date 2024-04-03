@@ -2074,9 +2074,11 @@ impl Core {
                 Some(author) => {
                     if self.partition_public_keys.contains(&author) {
                         // The receiver is in our partition, so we can send the message directly
+                        debug!("single message during partition, sent normally");
                         self.send_msg_normal(message, height, Some(author));
                     } else {
                         // The receiver is not in our partition, so we buffer for later
+                        debug!("single message during partition, buffered");
                         self.partition_delayed_msgs.push((message, height, Some(author)));
                     }
                 }
@@ -2095,11 +2097,13 @@ impl Core {
                         .entry(height)
                         .or_insert_with(Vec::new)
                         .extend(handlers);
+                    debug!("broadcast message during partition, sent to non-partitioned nodes");
                     // Buffer the message for the other side of the partition
                     self.partition_delayed_msgs.push((message, height, None));
                 }
             }
         } else {
+            debug!("message sent noramally");
             self.send_msg_normal(message, height, author).await;
         }
     }
