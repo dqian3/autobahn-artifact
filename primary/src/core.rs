@@ -1824,7 +1824,7 @@ impl Core {
     }
 
     async fn handle_timeout(&mut self, timeout: &Timeout) -> DagResult<()> {
-        debug!("Processing timeout {:?}", timeout);
+        debug!("Processing timeout {:?} for slot {}, view {}", timeout, timeout.slot, timeout.view);
 
         // TODO: If already committed then don't need to verify, just forward commit
 
@@ -1838,13 +1838,19 @@ impl Core {
             _ => {}
         };
 
+        debug!("past timeout old view check");
+
         if self.committed_slots.contains_key(&timeout.slot) {
             //TODO: Forward CommitQC instead.
             return Ok(());
         }
 
+        debug!("past timeout commit check");
+
         // Ensure the timeout is well formed.
         timeout.verify(&self.committee)?;
+
+        debug!("past timeout verify check");
 
         // If we haven't seen a timeout for this slot, view, then create a new TC maker for it.
         if self.tc_makers.get(&(timeout.slot, timeout.view)).is_none() {
@@ -1859,6 +1865,7 @@ impl Core {
             .unwrap();
 
         //println!("got tc maker");
+        debug!("got tc maker");
 
         // Add the new vote to our aggregator and see if we have a quorum.
         if let Some(tc) = tc_maker.append(timeout.clone(), &self.committee)? {
