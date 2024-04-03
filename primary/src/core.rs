@@ -149,7 +149,6 @@ pub struct Core {
 
     partition_public_keys: HashSet<PublicKey>,
     partition_delayed_msgs: Vec<(PrimaryMessage, u64, Option<PublicKey>, bool)>,
-
 }
 
 impl Core {
@@ -1709,7 +1708,7 @@ impl Core {
                 // Process any forwarded commit messages
                 // NOTE: Used "dummy header" for second argument for now, header doesn't matter since proposal syncing
                 // does not block processing the header, only prepare messages do
-                self.process_commit_message(consensus_message, &self.current_header.clone());
+                self.process_commit_message(consensus_message, &self.current_header.clone()).await?;
             },
             _ => {}
         }
@@ -2082,7 +2081,7 @@ impl Core {
                     if self.partition_public_keys.contains(&author) {
                         // The receiver is in our partition, so we can send the message directly
                         debug!("single message during partition, sent normally");
-                        self.send_msg_normal(message, height, Some(author), consensus_handler).await;
+                        self.send_msg_normal(message, height, Some(author), consensus_handler, false).await;
                     } else {
                         // The receiver is not in our partition, so we buffer for later
                         debug!("single message during partition, buffered");
@@ -2121,11 +2120,11 @@ impl Core {
             }
         } else {
             debug!("message sent noramally");
-            self.send_msg_normal(message, height, author, consensus_handler).await;
+            self.send_msg_normal(message, height, author, consensus_handler, true).await;
         }
     }
 
-    pub async fn send_msg_normal(&mut self, message: PrimaryMessage, height: u64, author: Option<PublicKey>, consensus_handler: bool) {
+    pub async fn send_msg_normal(&mut self, message: PrimaryMessage, height: u64, author: Option<PublicKey>, consensus_handler: bool, all_pks: bool) {
         match author {
             Some(author) => {
                 let address = self
@@ -2148,13 +2147,24 @@ impl Core {
                 }
             }
             None => {
-                let addresses = self
-                    .committee
-                    .others_primaries(&self.name)
-                    .iter()
-                    .filter(|(pk, _)| !self.partition_public_keys.contains(pk))
-                    .map(|(_, x)| x.primary_to_primary)
-                    .collect();
+                let addresses: Vec<_>;
+                if all_pks {
+                    addresses = self
+                        .committee
+                        .others_primaries(&self.name)
+                        .iter()
+                        .map(|(_, x)| x.primary_to_primary)
+                        .collect();
+                } else {
+                    addresses = self
+                        .committee
+                        .others_primaries(&self.name)
+                        .iter()
+                        .filter(|(pk, _)| !self.partition_public_keys.contains(pk))
+                        .map(|(_, x)| x.primary_to_primary)
+                        .collect();
+                }
+
                 let bytes = bincode::serialize(&message).expect("Failed to serialize message");
                 let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
                 if consensus_handler {
@@ -2360,7 +2370,7 @@ impl Core {
 
                     if !self.during_simulated_partition {
                         for (msg, height, author, consensus_handler) in self.partition_delayed_msgs.clone() {
-                            let _ = self.send_msg_normal(msg, height, author, consensus_handler).await;
+                            let _ = self.send_msg_normal(msg, height, author, consensus_handler, false).await;
                         }
                     }
                     Ok(())
