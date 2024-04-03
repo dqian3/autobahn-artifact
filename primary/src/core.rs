@@ -2093,10 +2093,17 @@ impl Core {
                         .collect();
                     let bytes = bincode::serialize(&message).expect("Failed to serialize message");
                     let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
-                    self.cancel_handlers
-                        .entry(height)
-                        .or_insert_with(Vec::new)
-                        .extend(handlers);
+                    if consensus_handler {
+                        self.consensus_cancel_handlers
+                            .entry(height)
+                            .or_insert_with(Vec::new)
+                            .extend(handlers);
+                    } else {
+                        self.cancel_handlers
+                            .entry(height)
+                            .or_insert_with(Vec::new)
+                            .extend(handlers);
+                    }
                     debug!("broadcast message during partition, sent to non-partitioned nodes");
                     // Buffer the message for the other side of the partition
                     self.partition_delayed_msgs.push((message, height, None, consensus_handler));
