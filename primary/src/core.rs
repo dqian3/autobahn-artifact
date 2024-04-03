@@ -2075,7 +2075,7 @@ impl Core {
                     if self.partition_public_keys.contains(&author) {
                         // The receiver is in our partition, so we can send the message directly
                         debug!("single message during partition, sent normally");
-                        self.send_msg_normal(message, height, Some(author), consensus_handler);
+                        self.send_msg_normal(message, height, Some(author), consensus_handler).await;
                     } else {
                         // The receiver is not in our partition, so we buffer for later
                         debug!("single message during partition, buffered");
@@ -2174,11 +2174,20 @@ impl Core {
             keys.sort();
             let index = keys.binary_search(&self.name).unwrap();
 
-            let num_keys = 1;
-            for i in 0..keys.len() {
-                if num_keys < self.partition_nodes && i != index {
-                    self.partition_public_keys.insert(keys[i]);
-                }
+            let mut start: usize = 0;
+            let mut end: usize = 0;
+        
+            if index > self.partition_nodes as usize - 1 {
+                start = self.partition_nodes as usize;
+                end = keys.len();
+               
+            } else {
+                start = 0;
+                end = self.partition_nodes as usize;
+            }
+
+            for i in start..end {
+                self.partition_public_keys.insert(keys[i]);
             }
 
             debug!("partition pks are {:?}", self.partition_public_keys);
