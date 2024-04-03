@@ -148,7 +148,7 @@ pub struct Core {
     partition_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>,
 
     partition_public_keys: HashSet<PublicKey>,
-    partition_delayed_msgs: Vec<(PrimaryMessage, u64, Option<PublicKey>)>,
+    partition_delayed_msgs: Vec<(PrimaryMessage, u64, Option<PublicKey>, bool)>,
 
 }
 
@@ -331,7 +331,7 @@ impl Core {
             .or_insert_with(Vec::new)
             .extend(handlers);*/
         
-        self.send_msg(PrimaryMessage::Header(header.clone(), false), header.height, None).await;
+        self.send_msg(PrimaryMessage::Header(header.clone(), false), header.height, None, false).await;
         
         // Process the header.
         self.process_header(header, false).await
@@ -497,7 +497,7 @@ impl Core {
                     .or_insert_with(Vec::new)
                     .push(handler);*/
 
-                self.send_msg(PrimaryMessage::Vote(vote), header.height(), Some(header.author)).await;
+                self.send_msg(PrimaryMessage::Vote(vote), header.height(), Some(header.author), false).await;
             }
         }
         Ok(())
@@ -975,7 +975,7 @@ impl Core {
             .or_insert_with(Vec::new)
             .extend(handlers);*/
 
-        self.send_msg(PrimaryMessage::ConsensusRequest(consensus_req.clone()), self.current_header.height(), None).await;
+        self.send_msg(PrimaryMessage::ConsensusRequest(consensus_req.clone()), self.current_header.height(), None, false).await;
 
         //process oneself
         self.process_consensus_request(consensus_req).await?;
@@ -1055,7 +1055,7 @@ impl Core {
                             .push(handler);
                         //println!("forwarding to the leader");
                         
-                        self.send_msg(PrimaryMessage::ConsensusMessage(prepare_message.clone()), self.current_header.height(), Some(next_leader)).await;
+                        self.send_msg(PrimaryMessage::ConsensusMessage(prepare_message.clone()), self.current_header.height(), Some(next_leader), false).await;
                     }
                     return Ok(())
                 }
@@ -1435,7 +1435,7 @@ impl Core {
                 .or_insert_with(Vec::new)
                 .push(handler);*/
 
-            self.send_msg(PrimaryMessage::ConsensusVote(vote), slot, Some(author)).await;
+            self.send_msg(PrimaryMessage::ConsensusVote(vote), slot, Some(author), true).await;
             
         }
        
@@ -1815,7 +1815,7 @@ impl Core {
             .or_insert_with(Vec::new)
             .extend(handlers);*/
         
-        self.send_msg(PrimaryMessage::Timeout(timeout.clone()), slot, None);
+        self.send_msg(PrimaryMessage::Timeout(timeout.clone()), slot, None, true);
         
 
         //println!("Processed our own timeout");
@@ -2068,18 +2068,18 @@ impl Core {
     }
 
 
-    pub async fn send_msg(&mut self, message: PrimaryMessage, height: u64, author: Option<PublicKey>) {
+    pub async fn send_msg(&mut self, message: PrimaryMessage, height: u64, author: Option<PublicKey>, consensus_handler: bool) {
         if self.during_simulated_partition {
             match author {
                 Some(author) => {
                     if self.partition_public_keys.contains(&author) {
                         // The receiver is in our partition, so we can send the message directly
                         debug!("single message during partition, sent normally");
-                        self.send_msg_normal(message, height, Some(author));
+                        self.send_msg_normal(message, height, Some(author), consensus_handler);
                     } else {
                         // The receiver is not in our partition, so we buffer for later
                         debug!("single message during partition, buffered");
-                        self.partition_delayed_msgs.push((message, height, Some(author)));
+                        self.partition_delayed_msgs.push((message, height, Some(author), consensus_handler));
                     }
                 }
                 None => {
@@ -2099,16 +2099,16 @@ impl Core {
                         .extend(handlers);
                     debug!("broadcast message during partition, sent to non-partitioned nodes");
                     // Buffer the message for the other side of the partition
-                    self.partition_delayed_msgs.push((message, height, None));
+                    self.partition_delayed_msgs.push((message, height, None, consensus_handler));
                 }
             }
         } else {
             debug!("message sent noramally");
-            self.send_msg_normal(message, height, author).await;
+            self.send_msg_normal(message, height, author, consensus_handler).await;
         }
     }
 
-    pub async fn send_msg_normal(&mut self, message: PrimaryMessage, height: u64, author: Option<PublicKey>) {
+    pub async fn send_msg_normal(&mut self, message: PrimaryMessage, height: u64, author: Option<PublicKey>, consensus_handler: bool) {
         match author {
             Some(author) => {
                 let address = self
@@ -2118,10 +2118,17 @@ impl Core {
                     .primary_to_primary;
                 let bytes = bincode::serialize(&message).expect("Failed to serialize message");
                 let handler = self.network.send(address, Bytes::from(bytes)).await;
-                self.cancel_handlers
-                    .entry(height)
-                    .or_insert_with(Vec::new)
-                    .push(handler);
+                if consensus_handler {
+                    self.consensus_cancel_handlers
+                        .entry(height)
+                        .or_insert_with(Vec::new)
+                        .push(handler);
+                } else {
+                    self.cancel_handlers
+                        .entry(height)
+                        .or_insert_with(Vec::new)
+                        .push(handler);
+                }
             }
             None => {
                 let addresses = self
@@ -2133,10 +2140,17 @@ impl Core {
                     .collect();
                 let bytes = bincode::serialize(&message).expect("Failed to serialize message");
                 let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
-                self.cancel_handlers
-                    .entry(height)
-                    .or_insert_with(Vec::new)
-                    .extend(handlers);
+                if consensus_handler {
+                    self.consensus_cancel_handlers
+                        .entry(height)
+                        .or_insert_with(Vec::new)
+                        .extend(handlers);
+                } else {
+                    self.cancel_handlers
+                        .entry(height)
+                        .or_insert_with(Vec::new)
+                        .extend(handlers);
+                }
             }
         }
         
@@ -2325,8 +2339,8 @@ impl Core {
                     self.during_simulated_partition = !self.during_simulated_partition; 
 
                     if !self.during_simulated_partition {
-                        for (msg, height, author) in self.partition_delayed_msgs.clone() {
-                            let _ = self.send_msg_normal(msg, height, author).await;
+                        for (msg, height, author, consensus_handler) in self.partition_delayed_msgs.clone() {
+                            let _ = self.send_msg_normal(msg, height, author, consensus_handler).await;
                         }
                     }
                     Ok(())
