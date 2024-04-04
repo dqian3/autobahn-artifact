@@ -41,8 +41,8 @@ impl SemiParallelRRLeaderElector {
         keys.sort();
         //let index = 2;
         let index = view + slot;
-        keys[index as usize % self.committee.size()]
-        //keys[1]
+        //keys[index as usize % self.committee.size()]
+        keys[1]
     }
 }
 
