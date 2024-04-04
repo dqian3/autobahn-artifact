@@ -2617,6 +2617,7 @@ impl Core {
                     } 
 
                     if !self.during_simulated_partition {
+                        debug!("partition over, last committed slot is {}", self.last_committed_slot);
                         for (msg, height, author, consensus_handler) in self.partition_delayed_msgs.clone() {
                             debug!("sending messages to other side of partition");
                             match author {
