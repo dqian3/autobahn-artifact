@@ -1482,6 +1482,7 @@ impl Core {
                 for (pk, proposal) in proposals {
                     debug!("prepare slot {:?}, proposal height {:?}", slot, proposal.height);
                 }
+                debug!("during simulated partition is {:?} for slot {:?}", self.during_simulated_asynchrony, slot);
                 debug!("prepare vote in slot {:?}", slot);
 
                 // Ensure that we don't vote for another prepare in this slot, view
