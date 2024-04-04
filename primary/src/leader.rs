@@ -42,9 +42,9 @@ impl SemiParallelRRLeaderElector {
         //let index = 2;
         let mut index = view + slot;
         // RR but skip partitioned node
-        if index as usize % self.committee.size() == 0 {
+        /*if index as usize % self.committee.size() == 0 {
             index += 1;
-        }
+        }*/
         keys[index as usize % self.committee.size()]
         //keys[1]
     }
