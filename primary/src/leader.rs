@@ -40,9 +40,13 @@ impl SemiParallelRRLeaderElector {
         // TODO: Uncomment, this is strictly commented out for testing
         keys.sort();
         //let index = 2;
-        let index = view + slot;
-        //keys[index as usize % self.committee.size()]
-        keys[1]
+        let mut index = view + slot;
+        // RR but skip partitioned node
+        if index as usize % self.committee.size() == 0 {
+            index += 1;
+        }
+        keys[index as usize % self.committee.size()]
+        //keys[1]
     }
 }
 
