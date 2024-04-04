@@ -2114,7 +2114,7 @@ impl Core {
             .filter(|(pk, _)| (our_partition && self.partition_public_keys.contains(pk)) || (!our_partition && !self.partition_public_keys.contains(pk)))
             .map(|(_, x)| x.primary_to_primary)
             .collect();
-                
+        debug!("addresses for partition are are {:?}, our partition is {}", addresses, our_partition);        
 
         let bytes = bincode::serialize(message).expect("Failed to serialize message");
         let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
