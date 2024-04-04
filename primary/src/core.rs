@@ -251,11 +251,12 @@ impl Core {
         simulate_asynchrony: bool,
         //asynchrony_start: u64,
         //asynchrony_duration: u64,
-        asynchrony_type: VecDeque<u8>,
+        // Temp comment out
+        /*asynchrony_type: VecDeque<u8>,
         asynchrony_start: VecDeque<u64>,
         asynchrony_duration: VecDeque<u64>,
         affected_nodes: VecDeque<u64>, 
-        egress_penalty: u64,
+        egress_penalty: u64,*/
     ) {
         tokio::spawn(async move {
             Self {
@@ -335,10 +336,14 @@ impl Core {
                 // partition_public_keys: HashSet::new(),
 
                 simulate_asynchrony,
-                asynchrony_type: asynchrony_type.iter().map(|v| uint_to_enum(*v)).collect(),
+                asynchrony_type: VecDeque::new(),
+                asynchrony_start: VecDeque::new(),
+                asynchrony_duration: VecDeque::new(),
+                affected_nodes: VecDeque::new(),
+                /*asynchrony_type: asynchrony_type.iter().map(|v| uint_to_enum(*v)).collect(),
                 asynchrony_start,
                 asynchrony_duration,
-                affected_nodes, 
+                affected_nodes,*/
                 during_simulated_asynchrony: false, 
                 current_effect_type: AsyncEffectType::Off,
                 current_num_affected_nodes: 0,
@@ -351,7 +356,8 @@ impl Core {
                 partition_public_keys: HashSet::new(),
                 partition_delayed_msgs: Vec::new(),
                 //For egress
-                egress_penalty,
+                //egress_penalty,
+                egress_penalty: 0,
                 delayed_messages: VecDeque::new(), 
                 egress_timer_futures: FuturesUnordered::new(),
             }
