@@ -2368,7 +2368,11 @@ impl Core {
                 },
 
                 Some((slot, view)) = self.partition_timer_futures.next() => {
-                    self.during_simulated_partition = !self.during_simulated_partition; 
+                    self.during_simulated_partition = !self.during_simulated_partition;
+
+                    if self.during_simulated_partition {
+                        debug!("partition started with last committed slot of {}", self.last_committed_slot);
+                    } 
 
                     if !self.during_simulated_partition {
                         for (msg, height, author, consensus_handler) in self.partition_delayed_msgs.clone() {
