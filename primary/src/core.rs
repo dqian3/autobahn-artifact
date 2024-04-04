@@ -2376,7 +2376,10 @@ impl Core {
                     if !self.during_simulated_partition {
                         for (msg, height, author, consensus_handler) in self.partition_delayed_msgs.clone() {
                             debug!("sending messages to other side of partition");
-                            self.send_msg_partition(&msg, height, consensus_handler, false).await;
+                            match author {
+                                Some(author) => self.send_msg_normal(msg, height, Some(author), consensus_handler).await,
+                                None => self.send_msg_partition(&msg, height, consensus_handler, false).await,
+                            }
                         }
                     }
                     Ok(())
