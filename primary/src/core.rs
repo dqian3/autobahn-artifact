@@ -2091,13 +2091,14 @@ impl Core {
                 None => {
                     // Send the message to all nodes in our side of the partition
                     if self.partition_public_keys.len() > 1 {
-                        let addresses = self
+                        let addresses: Vec<_> = self
                             .committee
                             .others_primaries(&self.name)
                             .iter()
                             .filter(|(pk, _)| self.partition_public_keys.contains(pk))
                             .map(|(_, x)| x.primary_to_primary)
                             .collect();
+                        debug!("addresses sent during partition are {:?}, len is {}", addresses, addresses.len());
                         let bytes = bincode::serialize(&message).expect("Failed to serialize message");
                         let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
                         if consensus_handler {
