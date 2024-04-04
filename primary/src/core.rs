@@ -2082,7 +2082,7 @@ impl Core {
                     if self.partition_public_keys.contains(&author) {
                         // The receiver is in our partition, so we can send the message directly
                         debug!("single message during partition, sent normally");
-                        self.send_msg_normal(message, height, Some(author), consensus_handler, false).await;
+                        self.send_msg_normal(message, height, Some(author), consensus_handler).await;
                     } else {
                         // The receiver is not in our partition, so we buffer for later
                         debug!("single message during partition, buffered");
@@ -2092,28 +2092,8 @@ impl Core {
                 None => {
                     // Send the message to all nodes in our side of the partition
                     if self.partition_public_keys.len() > 1 {
-                        let addresses: Vec<_> = self
-                            .committee
-                            .others_primaries(&self.name)
-                            .iter()
-                            .filter(|(pk, _)| self.partition_public_keys.contains(pk))
-                            .map(|(_, x)| x.primary_to_primary)
-                            .collect();
-                        debug!("addresses sent during partition are {:?}, len is {}", addresses, addresses.len());
-                        let bytes = bincode::serialize(&message).expect("Failed to serialize message");
-                        let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
-                        if consensus_handler {
-                            self.consensus_cancel_handlers
-                                .entry(height)
-                                .or_insert_with(Vec::new)
-                                .extend(handlers);
-                        } else {
-                            self.cancel_handlers
-                                .entry(height)
-                                .or_insert_with(Vec::new)
-                                .extend(handlers);
-                        }
-                        debug!("broadcast message during partition, sent to non-partitioned nodes");
+                        self.send_msg_partition(&message, height, consensus_handler, true);
+                        debug!("broadcast message during partition, sent to nodes in our partition");
                     }
                     
                     // Buffer the message for the other side of the partition
@@ -2122,11 +2102,37 @@ impl Core {
             }
         } else {
             debug!("message sent noramally");
-            self.send_msg_normal(message, height, author, consensus_handler, true).await;
+            self.send_msg_normal(message, height, author, consensus_handler).await;
         }
     }
 
-    pub async fn send_msg_normal(&mut self, message: PrimaryMessage, height: u64, author: Option<PublicKey>, consensus_handler: bool, all_pks: bool) {
+    pub async fn send_msg_partition(&mut self, message: &PrimaryMessage, height: u64, consensus_handler: bool, our_partition: bool) {
+        let addresses = self
+            .committee
+            .others_primaries(&self.name)
+            .iter()
+            .filter(|(pk, _)| (our_partition && self.partition_public_keys.contains(pk)) || (!our_partition && !self.partition_public_keys.contains(pk)))
+            .map(|(_, x)| x.primary_to_primary)
+            .collect();
+                
+
+        let bytes = bincode::serialize(message).expect("Failed to serialize message");
+        let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
+        if consensus_handler {
+            self.consensus_cancel_handlers
+                .entry(height)
+                .or_insert_with(Vec::new)
+                .extend(handlers);
+        } else {
+            self.cancel_handlers
+                .entry(height)
+                .or_insert_with(Vec::new)
+                .extend(handlers);
+        }   
+        
+    }
+
+    pub async fn send_msg_normal(&mut self, message: PrimaryMessage, height: u64, author: Option<PublicKey>, consensus_handler: bool) {
         match author {
             Some(author) => {
                 let address = self
@@ -2149,23 +2155,12 @@ impl Core {
                 }
             }
             None => {
-                let addresses: Vec<_>;
-                if all_pks {
-                    addresses = self
-                        .committee
-                        .others_primaries(&self.name)
-                        .iter()
-                        .map(|(_, x)| x.primary_to_primary)
-                        .collect();
-                } else {
-                    addresses = self
-                        .committee
-                        .others_primaries(&self.name)
-                        .iter()
-                        .filter(|(pk, _)| !self.partition_public_keys.contains(pk))
-                        .map(|(_, x)| x.primary_to_primary)
-                        .collect();
-                }
+                let addresses = self
+                    .committee
+                    .others_primaries(&self.name)
+                    .iter()
+                    .map(|(_, x)| x.primary_to_primary)
+                    .collect();
 
                 let bytes = bincode::serialize(&message).expect("Failed to serialize message");
                 let handlers = self.network.broadcast(addresses, Bytes::from(bytes)).await;
@@ -2203,18 +2198,22 @@ impl Core {
             keys.sort();
             let index = keys.binary_search(&self.name).unwrap();
 
+            // Figure out which partition we are in, partition_nodes indicates when the left partition ends
             let mut start: usize = 0;
             let mut end: usize = 0;
         
+            // We are in the right partition
             if index > self.partition_nodes as usize - 1 {
                 start = self.partition_nodes as usize;
                 end = keys.len();
                
             } else {
+                // We are in the left partition
                 start = 0;
                 end = self.partition_nodes as usize;
             }
 
+            // These are the nodes in our side of the partition
             for i in start..end {
                 self.partition_public_keys.insert(keys[i]);
             }
@@ -2376,7 +2375,8 @@ impl Core {
 
                     if !self.during_simulated_partition {
                         for (msg, height, author, consensus_handler) in self.partition_delayed_msgs.clone() {
-                            let _ = self.send_msg_normal(msg, height, author, consensus_handler, false).await;
+                            debug!("sending messages to other side of partition");
+                            self.send_msg_partition(&msg, height, consensus_handler, false).await;
                         }
                     }
                     Ok(())

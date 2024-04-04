@@ -39,8 +39,8 @@ impl SemiParallelRRLeaderElector {
         let mut keys: Vec<_> = self.committee.authorities.keys().cloned().collect();
         // TODO: Uncomment, this is strictly commented out for testing
         keys.sort();
-        let index = 2;
-        //let index = view + slot;
+        //let index = 2;
+        let index = view + slot;
         keys[index as usize % self.committee.size()]
         //keys[1]
     }
