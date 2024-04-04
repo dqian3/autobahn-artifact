@@ -105,12 +105,12 @@ pub struct Parameters {
     pub partition_nodes: u64,
 
     pub simulate_asynchrony: bool, //Simulating an async event
-    pub asynchrony_type: VecDeque<u8>, //Type of effects: 0 for delay full async duration, 1 for partition, 2 for  failure, 3 for egress delay. Will start #type many blips.
+    /*pub asynchrony_type: VecDeque<u8>, //Type of effects: 0 for delay full async duration, 1 for partition, 2 for  failure, 3 for egress delay. Will start #type many blips.
     pub asynchrony_start: VecDeque<u64>,     //Start of async period   //offset from current time (in seconds) when to start next async effect
     pub asynchrony_duration: VecDeque<u64>,  //Duration of async period
     pub affected_nodes: VecDeque<u64>, ////first k nodes experience specified async behavior
 
-    pub egress_penalty: u64, //ms of delay
+    pub egress_penalty: u64, //ms of delay*/
 }
 
 impl Default for Parameters {
@@ -147,12 +147,12 @@ impl Default for Parameters {
 
              //Async simulation:
             simulate_asynchrony: false,
-            asynchrony_type: vec![0].into(), 
+            /*asynchrony_type: vec![0].into(), 
             asynchrony_start: vec![20_000].into(), //20 second in
             asynchrony_duration: vec![10_000].into(), //10 seconds
             affected_nodes: vec![0].into(),
             
-            egress_penalty: 0,
+            egress_penalty: 0,*/
         }
     }
 }
