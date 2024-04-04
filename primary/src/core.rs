@@ -1694,10 +1694,7 @@ impl Core {
                     }
                 }
                 else{ //If slot + k has ticket ready (Prepare from s+k-1 + QC in s)
-                    if !self.timers.contains(&(slot + self.k, 1)) && self.views.contains_key(&(slot+self.k -1)) && !self.views.contains_key(&(slot+self.k)) {
-                        if self.views.contains_key(&(slot+self.k)) {
-                            debug!("should start timer for slot {}, view is {}", slot+self.k, self.views.get(&(slot+self.k)).unwrap());
-                        }
+                    if !self.timers.contains(&(slot + self.k, 1)) && self.views.contains_key(&(slot+self.k -1)) {
                         debug!("start timer for slot {}", slot +self.k);
                         let timer = Timer::new(slot + self.k, 1, self.timeout_delay);
                         self.timer_futures.push(Box::pin(timer));
