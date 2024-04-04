@@ -3,7 +3,7 @@ use crypto::{generate_production_keypair, PublicKey, SecretKey, Hash};
 use log::info;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{vec_deque, BTreeMap, HashMap, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::BufWriter;
 use std::io::Write as _;
@@ -95,14 +95,22 @@ pub struct Parameters {
     pub car_timeout: u64,
 
     //asynchrony simulation:
-    pub simulate_asynchrony: bool,
-    pub asynchrony_start: u64,
-    pub asynchrony_duration: u64,
+    // pub simulate_asynchrony: bool,
+    // pub asynchrony_start: u64,
+    // pub asynchrony_duration: u64,
 
     pub simulate_partition: bool,
     pub partition_start: u64,
     pub partition_duration: u64,
     pub partition_nodes: u64,
+
+    pub simulate_asynchrony: bool, //Simulating an async event
+    pub asynchrony_type: VecDeque<u8>, //Type of effects: 0 for delay full async duration, 1 for partition, 2 for  failure, 3 for egress delay. Will start #type many blips.
+    pub asynchrony_start: VecDeque<u64>,     //Start of async period   //offset from current time (in seconds) when to start next async effect
+    pub asynchrony_duration: VecDeque<u64>,  //Duration of async period
+    pub affected_nodes: VecDeque<u64>, ////first k nodes experience specified async behavior
+
+    pub egress_penalty: u64, //ms of delay
 }
 
 impl Default for Parameters {
@@ -127,15 +135,24 @@ impl Default for Parameters {
             car_timeout: 2000,
 
             //Async simulation:
-            simulate_asynchrony: false,
-            asynchrony_start: 20_000, //20 second in
-            asynchrony_duration: 10_000, //10 seconds
+            // simulate_asynchrony: false,
+            // asynchrony_start: 20_000, //20 second in
+            // asynchrony_duration: 10_000, //10 seconds
 
             // Partition simulation:
             simulate_partition: false,
             partition_nodes: 1,
             partition_start: 10_000,
             partition_duration: 2_000,
+
+             //Async simulation:
+            simulate_asynchrony: false,
+            asynchrony_type: vec![0].into(), 
+            asynchrony_start: vec![20_000].into(), //20 second in
+            asynchrony_duration: vec![10_000].into(), //10 seconds
+            affected_nodes: vec![0].into(),
+            
+            egress_penalty: 0,
         }
     }
 }

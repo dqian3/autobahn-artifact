@@ -127,8 +127,11 @@ def remote(ctx, debug=True):
         'car_timeout': 2000,
 
         'simulate_asynchrony': False,
-        'asynchrony_start': 2_000, #ms
-        'asynchrony_duration': 1_000 #ms
+        'asynchrony_type': [0, 1],
+        'asynchrony_start': [2_000, 3_000], #ms
+        'asynchrony_duration': [1_000, 500], #ms
+        'affected_nodes': [0, 0],
+        'egress_penalty': 0, #ms
     }
     try:
         Bench(ctx).run(bench_params, node_params, debug)
