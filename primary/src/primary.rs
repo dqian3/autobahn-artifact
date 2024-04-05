@@ -212,11 +212,11 @@ impl Primary {
             parameters.partition_nodes,
 
             parameters.simulate_asynchrony,
-            /*parameters.asynchrony_type,
+            parameters.asynchrony_type,
             parameters.asynchrony_start,
             parameters.asynchrony_duration,
             parameters.affected_nodes,
-            parameters.egress_penalty,*/
+            parameters.egress_penalty,
         );
 
         Committer::spawn(committee.clone(), store.clone(), parameters.gc_depth, rx_mempool, rx_committer, rx_commit, tx_output, synchronizer);
