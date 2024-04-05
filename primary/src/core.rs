@@ -1572,6 +1572,8 @@ impl Core {
                         let timer = Timer::new(slot + 1, 1, self.timeout_delay);
                         self.timer_futures.push(Box::pin(timer));
                         self.timers.insert((slot + 1, 1));
+                    } else {
+                        debug!("buffered prepare ticket for slot {}", slot + 1);
                     }
                 }
 
@@ -1699,6 +1701,8 @@ impl Core {
                         let timer = Timer::new(slot + self.k, 1, self.timeout_delay);
                         self.timer_futures.push(Box::pin(timer));
                         self.timers.insert((slot + self.k, 1));
+                    } else {
+                        debug!("did not start timer for slot {}, not timer contains is {}, views contains is {}", slot + self.k, !self.timers.contains(&(slot + self.k, 1)), self.views.contains_key(&(slot+self.k -1)));
                     }
                 }
 
