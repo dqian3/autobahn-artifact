@@ -199,6 +199,7 @@ pub struct Core {
     during_simulated_asynchrony: bool,  //Currently in async period?
     current_effect_type: AsyncEffectType, //Currently active effect.
     current_num_affected_nodes: u64,
+    current_async_end: Instant,
     async_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>, //Used to turn on/off period  //Note: (slot, view) are not needed, it's just to re-use existing Timer
     
     current_time: Instant,
@@ -359,6 +360,7 @@ impl Core {
                 egress_delay_queue: DelayQueue::new(),
                 delayed_messages: VecDeque::new(), 
                 egress_timer_futures: FuturesUnordered::new(),
+                current_async_end: Instant::now(),
             }
             .run()
             .await;
@@ -1668,12 +1670,52 @@ impl Core {
                 // Start simulating async once slot 1 is committed
                 if self.simulate_asynchrony && *slot == 1 {
                     debug!("added async timers");
-                    let start_offset = self.asynchrony_start.pop_front().unwrap();
+                    /*let start_offset = self.asynchrony_start.pop_front().unwrap();
                     let end_offset = start_offset +  self.asynchrony_duration.pop_front().unwrap();
                     let async_start = Timer::new(0, 0, start_offset);
                     let async_end = Timer::new(0, 0, end_offset);
+                    self.current_async_end = Instant::now().checked_add(end_offset).unwrap();
                     self.async_timer_futures.push(Box::pin(async_start));
-                    self.async_timer_futures.push(Box::pin(async_end));
+                    self.async_timer_futures.push(Box::pin(async_end));*/
+
+                    for i in 0..len(self.asynchrony_start) {
+                        let start_offset = self.asynchrony_start[i];
+                        let end_offset = start_offset +  self.asynchrony_duration[i];
+                        
+                        let async_start = Timer::new(0, 0, start_offset);
+                        let async_end = Timer::new(0, 0, end_offset);
+
+                        self.async_timer_futures.push(Box::pin(async_start));
+                        self.async_timer_futures.push(Box::pin(async_end));
+
+                        if self.asynchrony_type[i] == AsyncEffectType::Partition {
+                            let mut keys: Vec<_> = self.committee.authorities.keys().cloned().collect();
+                            keys.sort();
+                            let index = keys.binary_search(&self.name).unwrap();
+
+                            // Figure out which partition we are in, partition_nodes indicates when the left partition ends
+                            let mut start: usize = 0;
+                            let mut end: usize = 0;
+                        
+                            // We are in the right partition
+                            if index > self.partition_nodes as usize - 1 {
+                                start = self.partition_nodes as usize;
+                                end = keys.len();
+                            
+                            } else {
+                                // We are in the left partition
+                                start = 0;
+                                end = self.partition_nodes as usize;
+                            }
+
+                            // These are the nodes in our side of the partition
+                            for i in start..end {
+                                self.partition_public_keys.insert(keys[i]);
+                            }
+
+                            debug!("partition pks are {:?}", self.partition_public_keys);
+                        }
+                    }
                 }
 
                 //Stop timer for this slot/view //Note: Ideally stop all timers for this slot, but timers for older views are obsolete anyways.
@@ -2230,7 +2272,7 @@ impl Core {
                 }
             }
             AsyncEffectType::Egress => {
-                self.egress_delay_queue.insert((message, height, author, consensus_handler), Duration::from_millis(self.egress_penalty));
+                self.egress_delay_queue.insert((message, height, author, consensus_handler), self.current_async_end);
             }
 
             _ => {
@@ -2432,7 +2474,7 @@ impl Core {
         }*/
 
         // Simulate network partition
-        if self.simulate_partition {
+        /*if self.simulate_partition {
             let mut keys: Vec<_> = self.committee.authorities.keys().cloned().collect();
             keys.sort();
             let index = keys.binary_search(&self.name).unwrap();
@@ -2465,7 +2507,7 @@ impl Core {
             self.during_simulated_partition = false;
             self.partition_timer_futures.push(Box::pin(partition_start));
             self.partition_timer_futures.push(Box::pin(partition_end));
-        }
+        }*/
 
         // Initialize current proposals with the genesis tips
         self.current_proposal_tips = Header::genesis_proposals(&self.committee);
@@ -2581,6 +2623,10 @@ impl Core {
                     debug!("Time elapsed is {:?}", self.current_time.elapsed()); 
                     self.current_time = Instant::now();
 
+                    if self.during_simulated_asynchrony {
+                        self.current_effect_type = self.asynchrony_type.pop_front().unwrap();
+                    }
+
                     if !self.during_simulated_asynchrony {
 
                         if self.current_effect_type == AsyncEffectType::TempBlip {
@@ -2621,7 +2667,7 @@ impl Core {
                         }
                       
                         //Start another async event if available
-                        if !self.asynchrony_start.is_empty() {
+                        /*if !self.asynchrony_start.is_empty() {
                             self.current_effect_type = self.asynchrony_type.pop_front().unwrap();
                             let start_offset = self.asynchrony_start.pop_front().unwrap();
                             let end_offset = start_offset +  self.asynchrony_duration.pop_front().unwrap();
@@ -2631,7 +2677,7 @@ impl Core {
     
                             self.async_timer_futures.push(Box::pin(async_start));
                             self.async_timer_futures.push(Box::pin(async_end));
-                        }
+                        }*/
                     
                         
                     }
