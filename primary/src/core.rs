@@ -1440,11 +1440,12 @@ impl Core {
 
         debug!("try to verify");
         let mut valid = true;
-        //if consensus_req.author != self.name {
+        if consensus_req.author != self.name {
             consensus_req.verify(&self.committee)?; 
             debug!("check validity");
-            valid = self.is_valid(&consensus_message).await;
-        //}
+        }
+
+        valid = self.is_valid(&consensus_message).await;
 
         if !valid {
             return Ok(());
