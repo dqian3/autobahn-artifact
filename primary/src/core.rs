@@ -1440,11 +1440,11 @@ impl Core {
 
         debug!("try to verify");
         let mut valid = true;
-        if consensus_req.author != self.name {
+        //if consensus_req.author != self.name {
             consensus_req.verify(&self.committee)?; 
             debug!("check validity");
             valid = self.is_valid(&consensus_message).await;
-        }
+        //}
 
         if !valid {
             return Ok(());
@@ -1573,7 +1573,8 @@ impl Core {
                         self.timer_futures.push(Box::pin(timer));
                         self.timers.insert((slot + 1, 1));
                     } else {
-                        debug!("buffered prepare ticket for slot {}", slot + 1);
+                        debug!("buffered prepare ticket for slot {}, not commit contains is {}, not timer contains is {}, commit contains key is {}", slot + 1,
+                            !self.committed_slots.contains_key(&(slot+1)), !self.timers.contains(&(slot + 1, 1)), self.committed_slots.contains_key(&(slot+1 - self.k)));
                     }
                 }
 
