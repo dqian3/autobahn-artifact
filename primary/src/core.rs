@@ -28,12 +28,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+//use std::time::{Duration, Instant};
 //use std::task::Poll;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
 use std::cmp::max;
-//use tokio::time::{sleep, Duration, Instant};
+use tokio::time::{sleep, Duration, Instant};
 
 //use crate::messages_consensus::{QC, TC};
 #[cfg(test)]
@@ -1678,7 +1678,7 @@ impl Core {
                     self.async_timer_futures.push(Box::pin(async_start));
                     self.async_timer_futures.push(Box::pin(async_end));*/
 
-                    for i in 0..len(self.asynchrony_start) {
+                    for i in 0..self.asynchrony_start.len() {
                         let start_offset = self.asynchrony_start[i];
                         let end_offset = start_offset +  self.asynchrony_duration[i];
                         
@@ -2272,7 +2272,7 @@ impl Core {
                 }
             }
             AsyncEffectType::Egress => {
-                self.egress_delay_queue.insert((message, height, author, consensus_handler), self.current_async_end);
+                self.egress_delay_queue.insert_at((message, height, author, consensus_handler), self.current_async_end);
             }
 
             _ => {
@@ -2625,6 +2625,8 @@ impl Core {
 
                     if self.during_simulated_asynchrony {
                         self.current_effect_type = self.asynchrony_type.pop_front().unwrap();
+                        self.current_async_end = self.current_time.checked_add(Duration::from_millis(self.asynchrony_duration.pop_front().unwrap())).unwrap();
+                        debug!("asynchrony ends at time {:?}", self.current_async_end);
                     }
 
                     if !self.during_simulated_asynchrony {
