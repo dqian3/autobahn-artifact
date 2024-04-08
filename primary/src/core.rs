@@ -2672,6 +2672,9 @@ impl Core {
                                 self.send_msg_normal(msg, height, author, consensus_handler).await;
                             }
                         }
+
+                        // Turn off the async effect type
+                        self.current_effect_type = AsyncEffectType::Off;
                       
                         //Start another async event if available
                         /*if !self.asynchrony_start.is_empty() {
