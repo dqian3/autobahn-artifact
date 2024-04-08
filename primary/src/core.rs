@@ -40,7 +40,7 @@ use tokio::time::{sleep, Duration, Instant};
 #[path = "tests/core_tests.rs"]
 pub mod core_tests;
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, std::fmt::Debug)]
 pub enum AsyncEffectType {
     Off = 0,
     TempBlip = 1, //Send nothing for x seconds, and then release all messages
@@ -2624,6 +2624,7 @@ impl Core {
                     self.current_time = Instant::now();
 
                     if self.during_simulated_asynchrony {
+                        debug!("asynchrony type is {:?}", self.asynchrony_type);
                         self.current_effect_type = self.asynchrony_type.pop_front().unwrap();
                         self.current_async_end = self.current_time.checked_add(Duration::from_millis(self.asynchrony_duration.pop_front().unwrap())).unwrap();
                         debug!("asynchrony ends at time {:?}", self.current_async_end);
