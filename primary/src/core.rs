@@ -201,7 +201,8 @@ pub struct Core {
     current_num_affected_nodes: u64,
     current_async_end: Instant,
     async_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>, //Used to turn on/off period  //Note: (slot, view) are not needed, it's just to re-use existing Timer
-    
+    already_set_timers: bool,
+
     current_time: Instant,
     //For full delay
     async_delayed_prepare: Option<ConsensusMessage>,
@@ -319,6 +320,7 @@ impl Core {
                 car_timeout,
                 car_timer_futures: FuturesUnordered::new(),
                 fast_timer_futures: FuturesUnordered::new(),
+                already_set_timers: false,
 
                 //simulate_asynchrony,
                 // asynchrony_start,
@@ -1668,7 +1670,7 @@ impl Core {
             } => {
                 debug!("Try to commit slot {}", slot);
                 // Start simulating async once slot 1 is committed
-                if self.simulate_asynchrony && *slot == 1 {
+                if self.simulate_asynchrony && *slot == 1 && !self.already_set_timers {
                     debug!("added async timers");
                     /*let start_offset = self.asynchrony_start.pop_front().unwrap();
                     let end_offset = start_offset +  self.asynchrony_duration.pop_front().unwrap();
@@ -1677,7 +1679,8 @@ impl Core {
                     self.current_async_end = Instant::now().checked_add(end_offset).unwrap();
                     self.async_timer_futures.push(Box::pin(async_start));
                     self.async_timer_futures.push(Box::pin(async_end));*/
-
+                    
+                    self.already_set_timers = true;
                     debug!("asynchrony start is {:?}", self.asynchrony_start);
                     for i in 0..self.asynchrony_start.len() {
                         let start_offset = self.asynchrony_start[i];
