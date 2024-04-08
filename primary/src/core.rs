@@ -1678,6 +1678,7 @@ impl Core {
                     self.async_timer_futures.push(Box::pin(async_start));
                     self.async_timer_futures.push(Box::pin(async_end));*/
 
+                    debug!("asynchrony start is {:?}", self.asynchrony_start);
                     for i in 0..self.asynchrony_start.len() {
                         let start_offset = self.asynchrony_start[i];
                         let end_offset = start_offset +  self.asynchrony_duration[i];
@@ -1709,8 +1710,8 @@ impl Core {
                             }
 
                             // These are the nodes in our side of the partition
-                            for i in start..end {
-                                self.partition_public_keys.insert(keys[i]);
+                            for j in start..end {
+                                self.partition_public_keys.insert(keys[j]);
                             }
 
                             debug!("partition pks are {:?}", self.partition_public_keys);
