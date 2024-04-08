@@ -1698,14 +1698,14 @@ impl Core {
                             let mut end: usize = 0;
                         
                             // We are in the right partition
-                            if index > self.partition_nodes as usize - 1 {
-                                start = self.partition_nodes as usize;
+                            if index > self.affected_nodes[i] as usize - 1 {
+                                start = self.affected_nodes[i] as usize;
                                 end = keys.len();
                             
                             } else {
                                 // We are in the left partition
                                 start = 0;
-                                end = self.partition_nodes as usize;
+                                end = self.affected_nodes[i] as usize;
                             }
 
                             // These are the nodes in our side of the partition
