@@ -201,9 +201,9 @@ impl Synchronizer {
                     optimistic_key.push(1);
                     debug!("synchronizer optimistic key is {:?}", optimistic_key);
                     debug!("synchronizer optimistic key length is {:?}", optimistic_key.len());
-                    match self.store.read(optimistic_key.clone()).await? {
+                    match self.store.read(optimistic_key).await? {
                         Some(dummy_value) => {
-                            debug!("success readiny optimistic key {:?}", optimistic_key);
+                            debug!("success readiny optimistic key");
                         },
                         None => missing.push((*pk, proposal.clone())),
                     }
