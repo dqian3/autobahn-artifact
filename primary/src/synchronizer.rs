@@ -124,7 +124,7 @@ impl Synchronizer {
                             proposals_vector.push(bincode::deserialize(&header)?);
                             //println!("after adding to proposal vector");
                         },
-                        None => missing.push(proposal.clone()),
+                        None => missing.push((*pk, proposal.clone())),
                     }
                 }
             },
@@ -139,7 +139,7 @@ impl Synchronizer {
 
                     match self.store.read(proposal.header_digest.to_vec()).await? {
                         Some(header) => proposals_vector.push(bincode::deserialize(&header)?),
-                        None => missing.push(proposal.clone()),
+                        None => missing.push((*pk, proposal.clone())),
                     }
                 }
             },
@@ -155,7 +155,7 @@ impl Synchronizer {
 
                     match self.store.read(proposal.header_digest.to_vec()).await? {
                         Some(header) => proposals_vector.push(bincode::deserialize(&header)?),
-                        None => missing.push(proposal.clone()),
+                        None => missing.push((*pk, proposal.clone())),
                     }
                 }
             },
@@ -287,7 +287,6 @@ impl Synchronizer {
             }
         }
     }
-
 
     pub async fn get_header(&mut self, header_digest: Digest) -> DagResult<Option<Header>> {
         match self.store.read(header_digest.to_vec()).await? {

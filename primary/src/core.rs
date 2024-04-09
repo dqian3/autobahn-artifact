@@ -215,7 +215,9 @@ pub struct Core {
     delayed_messages: VecDeque<(u128, PrimaryMessage, u64, Option<PublicKey>, bool)>, //(wake-time, msg, height, author, consensus/car path)
     egress_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>, //Use this timer to wake next delayed message.
     //                                                                                             //Use Instant::now().elapsed().as_milis() to get current time to compute wake-time
-    
+    pending_optimistic_tips: HashMap<Digest, Header>,
+    pending_prepare_msgs: VecDeque<ConsensusMessage>,
+    pending_optimistic_tip_hashes: HashSet<Digest>,
 
 }
 
@@ -363,6 +365,9 @@ impl Core {
                 delayed_messages: VecDeque::new(), 
                 egress_timer_futures: FuturesUnordered::new(),
                 current_async_end: Instant::now(),
+                pending_optimistic_tips: HashMap::new(),
+                pending_prepare_msgs: VecDeque::new(),
+                pending_optimistic_tip_hashes: HashSet::new(),
             }
             .run()
             .await;
@@ -599,6 +604,14 @@ impl Core {
             }
         }
         Ok(())
+    }
+
+    fn try_prepare_queue(&mut self, header: &Header) {
+       if self.use_optimistic_tips {
+            if self.pending_optimistic_tip_hashes.contains(&header.digest()) {
+                self.pending_optimistic_tips.insert(header.digest(), header.clone());
+            }
+       }
     }
 
     fn check_cast_vote(&self, header: &Header) -> bool {
@@ -1471,10 +1484,28 @@ impl Core {
             ConsensusMessage::Prepare { slot, view: _, tc: _, qc_ticket: _, proposals,} 
             => {
                 debug!("processing prepare in slot {:?} with proposal {:?}", slot, proposals);
-                if self.synchronizer.get_proposals(&consensus_message, &header).await.unwrap().is_empty() {
-                    debug!("proposals of prepare in slot {:?} with proposal {:?} are not ready", slot, proposals);
-                    return Ok(());
+                
+                if self.use_optimistic_tips {
+                    let is_ready = proposals.iter().all(|(_, proposal)| self.pending_optimistic_tips.contains_key(&proposal.header_digest));
+                
+                    if !is_ready {
+                        debug!("proposals of prepare in slot {:?} with proposal {:?} are not ready", slot, proposals);
+                        // Add the prepare message to the pending queue
+                        self.pending_prepare_msgs.push_back(consensus_message.clone());
+                        return Ok(());
+                    }
+
+                    // Optimistic tips exist, remove and process them
+                    for (_, proposal) in proposals {
+                        let proposal_header = self.pending_optimistic_tips.remove(&proposal.header_digest);
+                        if let Some(head) = proposal_header {
+                            self.process_header(head, false).await?;
+                        }
+                    }
                 }
+                
+                // Start syncing on the proposals if we haven't already
+                self.synchronizer.get_proposals(&consensus_message, &header).await?;
                 self.process_prepare_message(&consensus_message, consensus_votes.as_mut()).await;
             },
             ConsensusMessage::Confirm {
@@ -1816,7 +1847,7 @@ impl Core {
         //println!("reprocessing a header/commit message");
         debug!("Can reprocess a header/commit message");
         match &consensus_message {
-            ConsensusMessage::Prepare { slot, view, tc: _, qc_ticket: _, proposals: _ } => {
+            ConsensusMessage::Prepare { slot, view, tc: _, qc_ticket: _, proposals } => {
                 if self.use_ride_share {
                     // Now that proposals are ready we can reprocess the header
                     self.process_header(header, false).await?;
@@ -1825,7 +1856,9 @@ impl Core {
                     if self.last_voted_consensus.contains(&(*slot, *view)){ //Don't prepare twice
                         return Ok(());
                     }
-                    self.process_consensus_message(consensus_message, header.author).await? 
+
+                    self.process_consensus_message(consensus_message, header.author).await?
+                    
                 }
             },
             ConsensusMessage::Confirm { slot: _, view: _, qc: _, proposals: _ } => {

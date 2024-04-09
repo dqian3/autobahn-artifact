@@ -29,7 +29,7 @@ const TIMER_RESOLUTION: u64 = 1_000;
 #[derive(Debug)]
 pub enum WaiterMessage {
     SyncBatches(HashMap<Digest, WorkerId>, Header, bool),
-    SyncProposals(Vec<Proposal>, ConsensusMessage, Header),
+    SyncProposals(Vec<(PublicKey, Proposal)>, ConsensusMessage, Header),
     // SyncProposalsC(Vec<Proposal>, ConsensusMessage), //Consensus is independent of header.
     // SyncProposalsCAsync(Vec<Proposal>), //Consensus is independent of header.
     SyncParent(Digest, Header),
@@ -68,6 +68,10 @@ pub struct HeaderWaiter {
     parent_requests: HashMap<Digest, (Height, u128)>,
     //same, but for special parents
     header_requests: HashMap<Digest, (Height, u128)>,
+    // whether fast sync is enabled
+    use_fast_sync: bool,
+    // Keeps track of the latest heights for each lane, which is necessary for fast sync
+    last_fast_sync_heights: HashMap<PublicKey, Height>,
     /// Keeps the digests of the all tx batches for which we sent a sync request,
     /// similarly to `header_requests`.
     batch_requests: HashMap<Digest, Height>,
@@ -93,7 +97,7 @@ impl HeaderWaiter {
         tokio::spawn(async move {
             Self {
                 name,
-                committee,
+                committee: committee.clone(),
                 store,
                 consensus_round,
                 gc_depth,
@@ -106,6 +110,8 @@ impl HeaderWaiter {
                 parent_requests: HashMap::new(),
                 header_requests: HashMap::new(),
                 batch_requests: HashMap::new(),
+                use_fast_sync: false,
+                last_fast_sync_heights: committee.authorities.keys().map(|x| (*x, 1)).collect(),
                 pending: HashMap::new(),
             }
             .run()
@@ -257,27 +263,51 @@ impl HeaderWaiter {
                             let fut = Self::waiter(wait_for, header, rx_cancel);
                             waiting.push(fut);
 
-                            // Ensure we didn't already sent a sync request for these parents.
-                            // Optimistically send the sync request to the node that created the certificate.
-                            // If this fails (after a timeout), we broadcast the sync request.
                             let now = SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .expect("Failed to measure time")
                                 .as_millis();
-                            let mut requires_sync = Vec::new();
-                            self.parent_requests.entry(missing.clone()).or_insert_with(|| {
-                                requires_sync.push(missing);
-                                (height, now)
-                            });
-                            if !requires_sync.is_empty() {
-                                let address = self.committee
-                                    .primary(&author)
-                                    .expect("Author of valid header not in the committee")
-                                    .primary_to_primary;
-                                let message = PrimaryMessage::HeadersRequest(requires_sync, self.name);
-                                let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                                self.network.send(address, Bytes::from(bytes)).await;
-                            }
+
+                            // Check whether we should send a fast sync request to the network to avoid duplicate sync requests
+                            if self.use_fast_sync {
+                                let last_height = *self.last_fast_sync_heights.get(&author).unwrap_or(&1);
+                                
+                                // Only send a fast sync request if the height is greater than the last synced height
+                                if height > last_height {
+                                    let mut requires_sync = Vec::new();
+                                    self.last_fast_sync_heights.insert(author, height);
+                                    self.parent_requests.entry(missing.clone()).or_insert_with(|| {
+                                        requires_sync.push((missing.clone(), last_height));
+                                        (height, now)
+                                    });
+                                    let address = self.committee
+                                        .primary(&author)
+                                        .expect("Author of valid header not in the committee")
+                                        .primary_to_primary;
+                                    // Lower bound to stop syncing is last height
+                                    let message = PrimaryMessage::FastSyncHeadersRequest(requires_sync, self.name);
+                                    let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
+                                    self.network.send(address, Bytes::from(bytes)).await;
+                                }
+                            } else {
+                                // Ensure we didn't already sent a sync request for these parents.
+                                // Optimistically send the sync request to the node that created the certificate.
+                                // If this fails (after a timeout), we broadcast the sync request.
+                                let mut requires_sync = Vec::new();
+                                self.parent_requests.entry(missing.clone()).or_insert_with(|| {
+                                    requires_sync.push(missing);
+                                    (height, now)
+                                });
+                                if !requires_sync.is_empty() {
+                                    let address = self.committee
+                                        .primary(&author)
+                                        .expect("Author of valid header not in the committee")
+                                        .primary_to_primary;
+                                    let message = PrimaryMessage::HeadersRequest(requires_sync, self.name);
+                                    let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
+                                    self.network.send(address, Bytes::from(bytes)).await;
+                                }
+                            }                            
                         }
 
 
@@ -298,7 +328,7 @@ impl HeaderWaiter {
                             let wait_for = missing
                                 .iter()
                                 .cloned()
-                                .map(|x| (x.header_digest.to_vec(), self.store.clone()))
+                                .map(|(_, x)| (x.header_digest.to_vec(), self.store.clone()))
                                 .collect();
                             let (tx_cancel, rx_cancel) = channel(1);
                             self.pending.insert(id, (height, tx_cancel));
@@ -306,29 +336,59 @@ impl HeaderWaiter {
                             //println!("created proposal waiter");
                             proposal_waiting.push(fut);
 
-                            // Ensure we didn't already sent a sync request for these parents.
-                            // Optimistically send the sync request to the node that created the certificate.
-                            // If this fails (after a timeout), we broadcast the sync request.
                             let now = SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .expect("Failed to measure time")
                                 .as_millis();
-                            let mut requires_sync = Vec::new();
-                            for missing in missing {
-                                self.parent_requests.entry(missing.header_digest.clone()).or_insert_with(|| {
-                                    requires_sync.push(missing.header_digest);
-                                    (missing.height, now)
-                                });
-                            }
-                            if !requires_sync.is_empty() {
-                                let address = self.committee
-                                    .primary(&author)
-                                    .expect("Author of valid header not in the committee")
-                                    .primary_to_primary;
-                                let message = PrimaryMessage::HeadersRequest(requires_sync, self.name);
-                                let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                                self.network.send(address, Bytes::from(bytes)).await;
-                            }
+
+                            // Check whether we should send a fast sync request to the network to avoid duplicate sync requests
+                            if self.use_fast_sync {
+                                let mut requires_sync = Vec::new();
+                                
+                                for (pk, proposal) in missing {
+                                    let last_height = *self.last_fast_sync_heights.get(&pk).unwrap_or(&1);
+                                    // Only send a fast sync request if the height is greater than the last synced height
+                                    if height > last_height {
+                                        self.last_fast_sync_heights.insert(pk, height);
+                                        self.parent_requests.entry(proposal.header_digest.clone()).or_insert_with(|| {
+                                            requires_sync.push((proposal.header_digest, last_height));
+                                            (height, now)
+                                        });
+                                    }
+                                }
+
+                                if !requires_sync.is_empty() {
+                                    let address = self.committee
+                                        .primary(&author)
+                                        .expect("Author of valid header not in the committee")
+                                        .primary_to_primary;
+                                    let message = PrimaryMessage::FastSyncHeadersRequest(requires_sync, self.name);
+                                    let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
+                                    self.network.send(address, Bytes::from(bytes)).await;
+                                }
+                            } else {
+                                // Ensure we didn't already sent a sync request for these parents.
+                                // Optimistically send the sync request to the node that created the certificate.
+                                // If this fails (after a timeout), we broadcast the sync request.
+                                
+                                let mut requires_sync = Vec::new();
+                                for (_, missing) in missing {
+                                    self.parent_requests.entry(missing.header_digest.clone()).or_insert_with(|| {
+                                        requires_sync.push(missing.header_digest);
+                                        (missing.height, now)
+                                    });
+                                }
+
+                                if !requires_sync.is_empty() {
+                                    let address = self.committee
+                                        .primary(&author)
+                                        .expect("Author of valid header not in the committee")
+                                        .primary_to_primary;
+                                    let message = PrimaryMessage::HeadersRequest(requires_sync, self.name);
+                                    let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
+                                    self.network.send(address, Bytes::from(bytes)).await;
+                                }
+                            }                            
                         }
                     }
                 },

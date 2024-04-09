@@ -51,6 +51,7 @@ pub enum PrimaryMessage {
     ConsensusVote(ConsensusVote),
     CertificatesRequest(Vec<Digest>, /* requestor */ PublicKey),
     HeadersRequest(Vec<Digest>, /* requestor */ PublicKey),
+    FastSyncHeadersRequest(Vec<(Digest, Height)>, /* requestor */ PublicKey),
     ProposalHeadersRequest(Proposal, Height, /* requestor */ PublicKey),
 }
 
@@ -105,6 +106,7 @@ impl Primary {
         let (tx_header_waiter_instances, rx_header_waiter_instances) = channel(CHANNEL_CAPACITY);
         let (tx_commit, rx_commit) = channel(CHANNEL_CAPACITY);
         let (_tx_mempool, rx_mempool) = channel(CHANNEL_CAPACITY);
+        let (tx_fast_sync_header_requests, rx_fast_sync_header_requests) = channel(CHANNEL_CAPACITY);
 
 
         // Write the parameters to the logs.
@@ -128,6 +130,7 @@ impl Primary {
                 tx_primary_messages,
                 tx_cert_requests,
                 tx_header_requests,
+                tx_fast_sync_header_requests,
             },
         );
         info!(
@@ -273,7 +276,7 @@ impl Primary {
         );
 
         // The `Helper` is dedicated to reply to certificates requests from other primaries.
-        Helper::spawn(committee.clone(), store, rx_cert_requests, rx_header_requests);
+        Helper::spawn(committee.clone(), store, rx_cert_requests, rx_header_requests, rx_fast_sync_header_requests);
 
         // NOTE: This log entry is used to compute performance.
         info!(
@@ -294,6 +297,7 @@ struct PrimaryReceiverHandler {
     tx_primary_messages: Sender<PrimaryMessage>,
     tx_cert_requests: Sender<(Vec<Digest>, PublicKey)>,
     tx_header_requests: Sender<(Vec<Digest>, PublicKey)>,
+    tx_fast_sync_header_requests: Sender<(Vec<(Digest, Height)>, PublicKey)>,
 }
 
 #[async_trait]
@@ -311,6 +315,11 @@ impl MessageHandler for PrimaryReceiverHandler {
                 .expect("Failed to send primary message"),
             PrimaryMessage::HeadersRequest(missing, requestor) => self
                 .tx_header_requests
+                .send((missing, requestor))
+                .await
+                .expect("Failed to send primary message"),
+            PrimaryMessage::FastSyncHeadersRequest(missing, requestor) => self
+                .tx_fast_sync_header_requests
                 .send((missing, requestor))
                 .await
                 .expect("Failed to send primary message"),

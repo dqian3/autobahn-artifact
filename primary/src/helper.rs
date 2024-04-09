@@ -1,8 +1,8 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
-use crate::primary::PrimaryMessage;
+use crate::{primary::PrimaryMessage, Header, Height};
 use bytes::Bytes;
 use config::Committee;
-use crypto::{Digest, PublicKey};
+use crypto::{Digest, Hash, PublicKey};
 use log::{error, warn};
 use network::SimpleSender;
 use store::Store;
@@ -19,6 +19,8 @@ pub struct Helper {
 
     /// Input channel to receive certificates requests.
     rx_primaries_headers: Receiver<(Vec<Digest>, PublicKey)>,
+    /// Input channel to receive fast sync header requests.
+    rx_primaries_fast_sync_headers: Receiver<(Vec<(Digest, Height)>, PublicKey)>,
     /// A network sender to reply to the sync requests.
     network: SimpleSender,
 }
@@ -29,6 +31,7 @@ impl Helper {
         store: Store,
         rx_primaries_certs: Receiver<(Vec<Digest>, PublicKey)>,
         rx_primaries_headers: Receiver<(Vec<Digest>, PublicKey)>,
+        rx_primaries_fast_sync_headers: Receiver<(Vec<(Digest, Height)>, PublicKey)>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -36,6 +39,7 @@ impl Helper {
                 store,
                 rx_primaries_certs,
                 rx_primaries_headers,
+                rx_primaries_fast_sync_headers,
                 network: SimpleSender::new(),
             }
             .run()
@@ -102,6 +106,49 @@ impl Helper {
                         }
                     }
                     
+                },
+                Some((missing, origin)) = self.rx_primaries_fast_sync_headers.recv() => {
+                    // TODO [issue #195]: Do some accounting to prevent bad nodes from monopolizing our resources.
+        
+                    // get the requestors address.
+                    let address = match self.committee.primary(&origin) {
+                        Ok(x) => x.primary_to_primary,
+                        Err(e) => {
+                            warn!("Unexpected certificate request: {}", e);
+                            continue;
+                        }
+                    };
+
+                    for (digest, lower_bound) in missing {
+                        // Reply to the request (the best we can).
+                        match self.store.read(digest.to_vec()).await {
+                            Ok(Some(data)) => {
+                                //TODO: Remove this deserialization-serialization in the critical path.
+                                let header: Header = bincode::deserialize(&data)
+                                    .expect("Failed to deserialize our own certificate");
+                                let mut parent_digest = header.parent_cert.digest();
+                                let mut height = header.height() - 1;
+
+                                let bytes = bincode::serialize(&PrimaryMessage::Header(header, true))  //sync = true
+                                    .expect("Failed to serialize our own certificate");
+                                self.network.send(address, Bytes::from(bytes)).await;
+                                
+                                // Since we have the header in the store, we must have all of its ancestors
+                                // Send sync replies for all ancestors until we reach the lower bound
+                                while height > lower_bound {
+                                    let serialized_data = self.store.read(parent_digest.to_vec()).await.expect("should have ancestors").unwrap();
+                                    let current_header: Header = bincode::deserialize(&serialized_data).expect("Failed to deserialize our own header");
+                                    parent_digest = current_header.parent_cert.digest();
+                                    let bytes = bincode::serialize(&PrimaryMessage::Header(current_header, true))  //sync = true
+                                        .expect("Failed to serialize our own header");
+                                    self.network.send(address, Bytes::from(bytes)).await;
+                                    height -= 1;
+                                }                                                           
+                            }
+                            Ok(None) => (),
+                            Err(e) => error!("{}", e),
+                        }
+                    }
                 },
             };
         }
