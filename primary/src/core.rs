@@ -469,6 +469,7 @@ impl Core {
             debug!("Wrote optimistic tip to store");
             let mut optimistic_key = header.digest().to_vec();
             optimistic_key.push(1);
+            debug!("process header optimistic key is {:?}", optimistic_key);
             let dummy_vec: Vec<u8> = vec![1];
             self.store.write(optimistic_key, dummy_vec);
         }
