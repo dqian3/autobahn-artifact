@@ -168,7 +168,7 @@ impl HeaderWaiter {
     ) -> DagResult<Option<(ConsensusMessage, Header)>> {
         let waiting: Vec<_> = missing
             .iter_mut()
-            .map(|(x, y)| y.notify_read({ let mut opt_key = x.to_vec(); opt_key.push(1); opt_key }))
+            .map(|(x, y)| y.notify_read(x.to_vec()))
             .collect();
         tokio::select! {
             result = try_join_all(waiting) => {
@@ -346,24 +346,34 @@ impl HeaderWaiter {
                                 continue;
                             }
 
-                            // Add the header to the waiter pool. The waiter will return it to us
-                            // when all its parents are in the store.
-                            let wait_for = missing
-                                .iter()
-                                .cloned()
-                                .map(|(_, x)| (x.header_digest.to_vec(), self.store.clone()))
-                                .collect();
-                            let (tx_cancel, rx_cancel) = channel(1);
-                            self.pending.insert(id, (height, tx_cancel));
+                            
                             
                             // If optimistic tips enabled and it's a prepare message, use the optimistic tip waiter
                             match consensus_message {
                                 ConsensusMessage::Prepare { slot, view: _, tc: _, qc_ticket: _, proposals: _,} => {
                                     if self.use_optimistic_tips {
-                                        let fut = Self::optimistic_tip_waiter(wait_for, (consensus_message, header), rx_cancel);
+                                        // Add the header to the waiter pool. The waiter will return it to us
+                                        // when all its parents are in the store.
+                                        let wait_for_opt = missing
+                                            .iter()
+                                            .cloned()
+                                            .map(|(_, x)| ({let mut opt_key = x.header_digest.to_vec(); opt_key.push(1); debug!("opt key is {:?}", opt_key); opt_key}, self.store.clone()))
+                                            .collect();
+                                        let (tx_cancel, rx_cancel) = channel(1);
+                                        self.pending.insert(id, (height, tx_cancel));
+                                        let fut = Self::optimistic_tip_waiter(wait_for_opt, (consensus_message, header), rx_cancel);
                                         debug!("adding waiter for optimistic tip");
                                         prepare_proposal_waiting.push(fut);
                                     } else {
+                                        // Add the header to the waiter pool. The waiter will return it to us
+                                        // when all its parents are in the store.
+                                        let wait_for = missing
+                                            .iter()
+                                            .cloned()
+                                            .map(|(_, x)| (x.header_digest.to_vec(), self.store.clone()))
+                                            .collect();
+                                        let (tx_cancel, rx_cancel) = channel(1);
+                                        self.pending.insert(id, (height, tx_cancel));
                                         let fut = Self::proposal_waiter(wait_for, (consensus_message, header), rx_cancel);
                                         //println!("created proposal waiter");
                                         debug!("normal proposal waiter");
@@ -371,6 +381,15 @@ impl HeaderWaiter {
                                     }
                                 },
                                 _ => {
+                                    // Add the header to the waiter pool. The waiter will return it to us
+                                    // when all its parents are in the store.
+                                    let wait_for = missing
+                                        .iter()
+                                        .cloned()
+                                        .map(|(_, x)| (x.header_digest.to_vec(), self.store.clone()))
+                                        .collect();
+                                    let (tx_cancel, rx_cancel) = channel(1);
+                                    self.pending.insert(id, (height, tx_cancel));
                                     let fut = Self::proposal_waiter(wait_for, (consensus_message, header), rx_cancel);
                                     debug!("normal proposal waiter");
                                     //println!("created proposal waiter");
