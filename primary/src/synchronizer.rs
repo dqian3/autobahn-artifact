@@ -177,6 +177,53 @@ impl Synchronizer {
         Ok(Vec::new())
     }
 
+    /// Returns the proposals of a consensus message if we have them all. If at least one parent is missing,
+    /// we return an empty vector, synchronize with other nodes, and re-schedule processing
+    /// of the header for when we will have all the parents.
+    pub async fn optimistic_tips_ready(&mut self, consensus_message: &ConsensusMessage, delivered_header: &Header) -> DagResult<bool> { 
+        let mut missing = Vec::new();
+        //println!("getting proposals");
+
+        match consensus_message {
+            ConsensusMessage::Prepare { slot: _, view: _, tc: _, qc_ticket: _, proposals } => {
+                for (pk, proposal) in proposals {
+                    //println!("proposal inside prepare");
+
+                    if proposal.header_digest == self.genesis_headers.get(&pk).unwrap().digest() {
+                        continue;
+                    }
+
+                    if proposal.header_digest == delivered_header.digest() {
+                        continue;
+                    }
+
+                    let mut optimistic_key = proposal.header_digest.to_vec();
+                    optimistic_key.push(1);
+                    match self.store.read(optimistic_key).await? {
+                        Some(dummy_value) => {},
+                        None => missing.push((*pk, proposal.clone())),
+                    }
+                }
+            },
+            _ => {},
+        }
+
+        if missing.is_empty() {
+            //println!("Have all proposals");
+            debug!("have all proposals and their ancestors");
+            return Ok(true);
+        }
+
+        //println!("sending to header waiter");
+        debug!("Triggering sync for optimistic tips");
+        debug!("missing tips are {:?}", missing);
+        self.tx_header_waiter
+            .send(WaiterMessage::SyncProposals(missing, consensus_message.clone(), delivered_header.clone()))
+            .await
+            .expect("Failed to send sync parents request");
+        Ok(false)
+    }
+
     // pub async fn sync_proposals(&mut self, consensus_message: &ConsensusMessage) -> DagResult<bool> {
     //     let mut missing = Vec::new();
     //     //println!("synchronizing on proposals");

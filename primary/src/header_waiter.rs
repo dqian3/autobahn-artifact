@@ -70,6 +70,8 @@ pub struct HeaderWaiter {
     header_requests: HashMap<Digest, (Height, u128)>,
     // whether fast sync is enabled
     use_fast_sync: bool,
+    // whether optimistic tips is enabled
+    use_optimistic_tips: bool,
     // Keeps track of the latest heights for each lane, which is necessary for fast sync
     last_fast_sync_heights: HashMap<PublicKey, Height>,
     /// Keeps the digests of the all tx batches for which we sent a sync request,
@@ -111,6 +113,7 @@ impl HeaderWaiter {
                 header_requests: HashMap::new(),
                 batch_requests: HashMap::new(),
                 use_fast_sync: false,
+                use_optimistic_tips: true,
                 last_fast_sync_heights: committee.authorities.keys().map(|x| (*x, 1)).collect(),
                 pending: HashMap::new(),
             }
@@ -156,10 +159,28 @@ impl HeaderWaiter {
         }
     }
 
+    async fn optimistic_tip_waiter(
+        mut missing: Vec<(Vec<u8>, Store)>,
+        deliver: (ConsensusMessage, Header),
+        mut handler: Receiver<()>,
+    ) -> DagResult<Option<(ConsensusMessage, Header)>> {
+        let waiting: Vec<_> = missing
+            .iter_mut()
+            .map(|(x, y)| y.notify_read({ let mut opt_key = x.to_vec(); opt_key.push(1); opt_key }))
+            .collect();
+        tokio::select! {
+            result = try_join_all(waiting) => {
+                result.map(|_| Some(deliver)).map_err(DagError::from)
+            }
+            _ = handler.recv() => Ok(None),
+        }
+    }
+
     /// Main loop listening to the `Synchronizer` messages.
     async fn run(&mut self) {
         let mut waiting = FuturesUnordered::new();
         let mut proposal_waiting = FuturesUnordered::new();
+        let mut prepare_proposal_waiting = FuturesUnordered::new();
 
         let timer = sleep(Duration::from_millis(TIMER_RESOLUTION));
         tokio::pin!(timer);
@@ -332,10 +353,26 @@ impl HeaderWaiter {
                                 .collect();
                             let (tx_cancel, rx_cancel) = channel(1);
                             self.pending.insert(id, (height, tx_cancel));
-                            let fut = Self::proposal_waiter(wait_for, (consensus_message, header), rx_cancel);
-                            //println!("created proposal waiter");
-                            proposal_waiting.push(fut);
-
+                            
+                            // If optimistic tips enabled and it's a prepare message, use the optimistic tip waiter
+                            match consensus_message {
+                                ConsensusMessage::Prepare { slot, view: _, tc: _, qc_ticket: _, proposals: _,} => {
+                                    if self.use_optimistic_tips {
+                                        let fut = Self::optimistic_tip_waiter(wait_for, (consensus_message, header), rx_cancel);
+                                        prepare_proposal_waiting.push(fut);
+                                    } else {
+                                        let fut = Self::proposal_waiter(wait_for, (consensus_message, header), rx_cancel);
+                                        //println!("created proposal waiter");
+                                        proposal_waiting.push(fut);
+                                    }
+                                },
+                                _ => {
+                                    let fut = Self::proposal_waiter(wait_for, (consensus_message, header), rx_cancel);
+                                    //println!("created proposal waiter");
+                                    proposal_waiting.push(fut);
+                                }
+                            }
+                            
                             let now = SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .expect("Failed to measure time")
@@ -432,6 +469,20 @@ impl HeaderWaiter {
                             let _ = self.parent_requests.remove(&prop.header_digest);
                         }
                      
+                        self.tx_consensus_loopback.send(deliver).await.expect("Failed to send header");
+                    },
+                    Ok(None) => {
+                        // This request has been canceled.
+                    },
+                    Err(e) => {
+                        error!("{}", e);
+                        panic!("Storage failure: killing node.");
+                    }
+                },
+
+                Some(result) = prepare_proposal_waiting.next() => match result {
+                    Ok(Some(deliver)) => {
+                        //println!("finished syncing");
                         self.tx_consensus_loopback.send(deliver).await.expect("Failed to send header");
                     },
                     Ok(None) => {
