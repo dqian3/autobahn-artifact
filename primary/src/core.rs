@@ -472,14 +472,14 @@ impl Core {
             debug!("optimistic tip length vector is {}", optimistic_key.len());
             debug!("process header optimistic key is {:?}", optimistic_key);
             let dummy_vec: Vec<u8> = vec![1];
-            self.store.write(optimistic_key.clone(), dummy_vec).await;
+            self.store.write(optimistic_key, dummy_vec).await;
 
-            match self.store.read(optimistic_key.clone()).await? {
+            /*match self.store.read(optimistic_key.clone()).await? {
                 Some(dummy_value) => {
                     debug!("can read our written optimistic key {:?}, dummy val is {:?}", optimistic_key, dummy_value);
                 },
                 None => { debug!("cannot read our own optimistic key {:?}", optimistic_key); },
-            }
+            }*/
         }
 
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
