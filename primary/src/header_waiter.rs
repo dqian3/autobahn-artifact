@@ -297,6 +297,7 @@ impl HeaderWaiter {
                                 
                                 // Only send a fast sync request if the height is greater than the last synced height
                                 if height > last_height {
+                                    debug!("send a fast sync parent request with height {}, last height {}", height, last_height);
                                     let mut requires_sync = Vec::new();
                                     self.last_fast_sync_heights.insert(author, height);
                                     self.parent_requests.entry(missing.clone()).or_insert_with(|| {
@@ -410,6 +411,7 @@ impl HeaderWaiter {
                                     let last_height = *self.last_fast_sync_heights.get(&pk).unwrap_or(&1);
                                     // Only send a fast sync request if the height is greater than the last synced height
                                     if height > last_height {
+                                        debug!("send a fast sync proposal request with height {}, last height {}", height, last_height);
                                         self.last_fast_sync_heights.insert(pk, height);
                                         self.parent_requests.entry(proposal.header_digest.clone()).or_insert_with(|| {
                                             requires_sync.push((proposal.header_digest, last_height));

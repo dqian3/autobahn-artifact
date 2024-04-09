@@ -124,6 +124,7 @@ impl Helper {
                         match self.store.read(digest.to_vec()).await {
                             Ok(Some(data)) => {
                                 //TODO: Remove this deserialization-serialization in the critical path.
+                                debug!("fast sync request handled success");
                                 let header: Header = bincode::deserialize(&data)
                                     .expect("Failed to deserialize our own certificate");
                                 let mut parent_digest = header.parent_cert.digest();
