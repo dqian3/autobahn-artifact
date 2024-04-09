@@ -200,6 +200,7 @@ impl Synchronizer {
                     let mut optimistic_key = proposal.header_digest.to_vec();
                     optimistic_key.push(1);
                     debug!("synchronizer optimistic key is {:?}", optimistic_key);
+                    debug!("synchronizer optimistic key length is {:?}", optimistic_key.len());
                     match self.store.read(optimistic_key).await? {
                         Some(dummy_value) => {},
                         None => missing.push((*pk, proposal.clone())),

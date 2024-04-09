@@ -469,6 +469,7 @@ impl Core {
             debug!("Wrote optimistic tip to store");
             let mut optimistic_key = header.digest().to_vec();
             optimistic_key.push(1);
+            debug!("optimistic tip length vector is {}", optimistic_key.len());
             debug!("process header optimistic key is {:?}", optimistic_key);
             let dummy_vec: Vec<u8> = vec![1];
             self.store.write(optimistic_key, dummy_vec);
@@ -1490,7 +1491,7 @@ impl Core {
                 }
                 
                 // Start syncing on the proposals if we haven't already
-                self.synchronizer.get_proposals(&consensus_message, &header).await?;
+                //self.synchronizer.get_proposals(&consensus_message, &header).await?;
                 self.process_prepare_message(&consensus_message, consensus_votes.as_mut()).await;
             },
             ConsensusMessage::Confirm {
