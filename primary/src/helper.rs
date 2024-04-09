@@ -3,7 +3,7 @@ use crate::{primary::PrimaryMessage, Header, Height};
 use bytes::Bytes;
 use config::Committee;
 use crypto::{Digest, Hash, PublicKey};
-use log::{error, warn};
+use log::{error, warn, debug};
 use network::SimpleSender;
 use store::Store;
 use tokio::sync::mpsc::Receiver;
