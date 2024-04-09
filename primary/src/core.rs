@@ -464,20 +464,21 @@ impl Core {
         debug!("Past header parent cert stake check");
         //println!("After second ensure");
 
+        // Write this header as an optimistic tip
+        if self.use_optimistic_tips {
+            debug!("Wrote optimistic tip to store");
+            let mut optimistic_key = header.digest().to_vec();
+            optimistic_key.push(1);
+            let dummy_vec: Vec<u8> = vec![1];
+            self.store.write(optimistic_key, dummy_vec);
+        }
+
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
         // reschedule processing of this header once we have it.
         if self.synchronizer.missing_payload(&header, sync).await? {
             //println!("Missing payload");
             debug!("Processing of {} suspended: missing payload", header);
             return Ok(());
-        }
-
-        // Write this header as an optimistic tip
-        if self.use_optimistic_tips {
-            let mut optimistic_key = header.digest().to_vec();
-            optimistic_key.push(1);
-            let dummy_vec: Vec<u8> = vec![1];
-            self.store.write(optimistic_key, dummy_vec);
         }
         
         // By FIFO should have parent of this header (and recursively all ancestors), reschedule for processing if we don't
