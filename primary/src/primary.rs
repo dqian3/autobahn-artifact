@@ -251,6 +251,8 @@ impl Primary {
             /* rx_synchronizer */ rx_sync_headers,
             /* tx_core */ tx_headers_loopback,
             tx_header_waiter_instances,
+            parameters.use_fast_sync,
+            parameters.use_optimistic_tips,
         );
 
         // The `CertificateWaiter` waits to receive all the ancestors of a certificate before looping it back to the

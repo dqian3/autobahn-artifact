@@ -95,6 +95,8 @@ impl HeaderWaiter {
         rx_synchronizer: Receiver<WaiterMessage>,
         tx_core: Sender<Header>,
         tx_consensus_loopback: Sender<(ConsensusMessage, Header)>,
+        use_fast_sync: bool,
+        use_optimistic_tips: bool,
     ) {
         tokio::spawn(async move {
             Self {
@@ -112,8 +114,8 @@ impl HeaderWaiter {
                 parent_requests: HashMap::new(),
                 header_requests: HashMap::new(),
                 batch_requests: HashMap::new(),
-                use_fast_sync: false,
-                use_optimistic_tips: true,
+                use_fast_sync,
+                use_optimistic_tips,
                 last_fast_sync_heights: committee.authorities.keys().map(|x| (*x, 1)).collect(),
                 pending: HashMap::new(),
             }
@@ -359,15 +361,18 @@ impl HeaderWaiter {
                                 ConsensusMessage::Prepare { slot, view: _, tc: _, qc_ticket: _, proposals: _,} => {
                                     if self.use_optimistic_tips {
                                         let fut = Self::optimistic_tip_waiter(wait_for, (consensus_message, header), rx_cancel);
+                                        debug!("adding waiter for optimistic tip");
                                         prepare_proposal_waiting.push(fut);
                                     } else {
                                         let fut = Self::proposal_waiter(wait_for, (consensus_message, header), rx_cancel);
                                         //println!("created proposal waiter");
+                                        debug!("normal proposal waiter");
                                         proposal_waiting.push(fut);
                                     }
                                 },
                                 _ => {
                                     let fut = Self::proposal_waiter(wait_for, (consensus_message, header), rx_cancel);
+                                    debug!("normal proposal waiter");
                                     //println!("created proposal waiter");
                                     proposal_waiting.push(fut);
                                 }
@@ -483,6 +488,7 @@ impl HeaderWaiter {
                 Some(result) = prepare_proposal_waiting.next() => match result {
                     Ok(Some(deliver)) => {
                         //println!("finished syncing");
+                        debug!("wake up prepare optimistic tips");
                         self.tx_consensus_loopback.send(deliver).await.expect("Failed to send header");
                     },
                     Ok(None) => {

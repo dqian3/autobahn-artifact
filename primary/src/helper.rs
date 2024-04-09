@@ -136,6 +136,7 @@ impl Helper {
                                 // Since we have the header in the store, we must have all of its ancestors
                                 // Send sync replies for all ancestors until we reach the lower bound
                                 while height > lower_bound {
+                                    debug!("height is {}, lower bound is {}", height, lower_bound);
                                     let serialized_data = self.store.read(parent_digest.to_vec()).await.expect("should have ancestors").unwrap();
                                     let current_header: Header = bincode::deserialize(&serialized_data).expect("Failed to deserialize our own header");
                                     parent_digest = current_header.parent_cert.digest();

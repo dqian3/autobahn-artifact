@@ -1481,7 +1481,10 @@ impl Core {
                 
                 // Optimistic tips not ready, reschedule for processing
                 if self.use_optimistic_tips && !self.synchronizer.optimistic_tips_ready(&consensus_message, &header).await? {
+                    debug!("optimistic tips not ready");
                     return Ok(())
+                } else {
+                    debug!("optimistic tips are ready");
                 }
                 
                 // Start syncing on the proposals if we haven't already

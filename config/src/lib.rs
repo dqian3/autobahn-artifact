@@ -111,6 +111,7 @@ pub struct Parameters {
     pub affected_nodes: VecDeque<u64>, ////first k nodes experience specified async behavior
 
     pub egress_penalty: u64, //ms of delay
+    pub use_fast_sync: bool,
 }
 
 impl Default for Parameters {
@@ -153,6 +154,7 @@ impl Default for Parameters {
             affected_nodes: vec![0].into(),
             
             egress_penalty: 0,
+            use_fast_sync: false,
         }
     }
 }
