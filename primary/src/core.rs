@@ -472,7 +472,7 @@ impl Core {
             debug!("optimistic tip length vector is {}", optimistic_key.len());
             debug!("process header optimistic key is {:?}", optimistic_key);
             let dummy_vec: Vec<u8> = vec![1];
-            self.store.write(optimistic_key, dummy_vec);
+            self.store.write(optimistic_key, dummy_vec).await;
         }
 
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then

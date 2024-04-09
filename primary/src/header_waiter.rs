@@ -492,7 +492,8 @@ impl HeaderWaiter {
                         for (_, prop) in possibly_missing.iter() {
                             let _ = self.parent_requests.remove(&prop.header_digest);
                         }
-                     
+                        
+                        debug!("wake up normal proposals");
                         self.tx_consensus_loopback.send(deliver).await.expect("Failed to send header");
                     },
                     Ok(None) => {
