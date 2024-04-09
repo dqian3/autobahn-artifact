@@ -277,6 +277,8 @@ impl HeaderWaiter {
                                 continue;
                             }
 
+                            debug!("use fast sync is {}", self.use_fast_sync);
+
                             // Add the header to the waiter pool. The waiter will return it to us
                             // when all its parents are in the store.
                             let mut wait_for = Vec::new();
@@ -347,7 +349,7 @@ impl HeaderWaiter {
                                 continue;
                             }
 
-                            
+                            debug!("use fast sync is {}", self.use_fast_sync);
                             
                             // If optimistic tips enabled and it's a prepare message, use the optimistic tip waiter
                             match consensus_message {
