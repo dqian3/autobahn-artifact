@@ -454,7 +454,7 @@ impl HeaderWaiter {
                         for x in header.payload.keys() {
                             let _ = self.batch_requests.remove(x);
                         }
-                        let _ = self.parent_requests.remove(&header.digest());
+                        let _ = self.parent_requests.remove(&header.parent_cert.header_digest);
 
                         self.tx_core.send(header).await.expect("Failed to send header");
                     },
