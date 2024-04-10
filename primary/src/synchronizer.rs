@@ -227,6 +227,7 @@ impl Synchronizer {
     /// of the header for when we will have all the parents.
     pub async fn optimistic_tips_ready(&mut self, consensus_message: &ConsensusMessage, delivered_header: &Header) -> DagResult<bool> { 
         let mut missing = Vec::new();
+        let mut missing_proposals = false;
         //println!("getting proposals");
 
         match consensus_message {
@@ -250,14 +251,27 @@ impl Synchronizer {
                         Some(dummy_value) => {
                             debug!("success readiny optimistic key");
                         },
-                        None => missing.push((*pk, proposal.clone(), 1)), /* 1 is a dummy lower bound for opt tips */
+                        
+                        None => {
+                            missing_proposals = true;
+                            if self.use_fast_sync  {
+                                let lower_bound = self.last_fast_sync_heights.get(pk).unwrap().clone();
+                                debug!("optimistic tip lower bound is {}", lower_bound);
+                                if proposal.height - 1 > lower_bound {
+                                    missing.push((*pk, proposal.clone(), lower_bound));
+                                }
+                                self.last_fast_sync_heights.insert(*pk, proposal.height - 1);
+                            } else {
+                                missing.push((*pk, proposal.clone(), 1));
+                            }
+                        },
                     }
                 }
             },
             _ => {},
         }
 
-        if missing.is_empty() {
+        if missing.is_empty() && !missing_proposals {
             //println!("Have all proposals");
             debug!("have all proposals and their ancestors");
             return Ok(true);
@@ -266,10 +280,13 @@ impl Synchronizer {
         //println!("sending to header waiter");
         debug!("Triggering sync for optimistic tips");
         debug!("missing tips are {:?}", missing);
-        self.tx_header_waiter
-            .send(WaiterMessage::SyncProposals(missing, consensus_message.clone(), delivered_header.clone()))
-            .await
-            .expect("Failed to send sync parents request");
+        if missing.is_empty() {
+            self.tx_header_waiter
+                .send(WaiterMessage::SyncProposals(missing, consensus_message.clone(), delivered_header.clone()))
+                .await
+                .expect("Failed to send sync parents request");
+        }
+        
         Ok(false)
     }
 

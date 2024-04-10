@@ -403,7 +403,7 @@ impl HeaderWaiter {
                                 let mut requires_sync = Vec::new();
                                 
                                 for (pk, proposal, lower_bound) in missing {
-                                    debug!("send a fast sync proposal request with height {}, lower bound {}", height, lower_bound);
+                                    debug!("send a fast sync proposal request with height {}, lower bound {}", proposal.height, lower_bound);
                                         
                                     self.parent_requests.entry(proposal.header_digest.clone()).or_insert_with(|| {
                                         requires_sync.push((proposal.header_digest, lower_bound));
