@@ -2313,7 +2313,15 @@ impl Core {
                 }
             }
             AsyncEffectType::Egress => {
-                self.egress_delay_queue.insert_at((message, height, author, consensus_handler), self.current_egress_end);
+                let curr = Instant::now().elapsed().as_millis();
+                let wake_time = curr + self.egress_penalty as u128;
+                self.delayed_messages.push_back((wake_time, message, height, author, consensus_handler));
+
+                if self.egress_timer_futures.is_empty() {
+                    //start timer
+                    let next_wake = Timer::new(0, 0, self.egress_penalty);
+                    self.egress_timer_futures.push(Box::pin(next_wake));
+                }
             }
 
             _ => {
@@ -2709,10 +2717,10 @@ impl Core {
                         //Egress delay
                         if self.current_effect_type == AsyncEffectType::Egress {
                             //Send all.
-                            /*for (_, msg, height, author, consensus_handler) in self.delayed_messages.clone() { //TODO: Can one move out all of them without cloning?
+                            for (_, msg, height, author, consensus_handler) in self.delayed_messages.clone() { //TODO: Can one move out all of them without cloning?
                                 debug!("sending delayed message");
                                 self.send_msg_normal(msg, height, author, consensus_handler).await;
-                            }*/
+                            }
                             
                         }
 
