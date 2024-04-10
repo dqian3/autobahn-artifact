@@ -215,6 +215,7 @@ pub struct Core {
     delayed_messages: VecDeque<(u128, PrimaryMessage, u64, Option<PublicKey>, bool)>, //(wake-time, msg, height, author, consensus/car path)
     egress_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>, //Use this timer to wake next delayed message.
     //                                                                                             //Use Instant::now().elapsed().as_milis() to get current time to compute wake-time
+    current_egress_end: Instant,
 }
 
 impl Core {
@@ -361,6 +362,7 @@ impl Core {
                 delayed_messages: VecDeque::new(), 
                 egress_timer_futures: FuturesUnordered::new(),
                 current_async_end: Instant::now(),
+                current_egress_end: Instant::now(),
             }
             .run()
             .await;
@@ -2311,7 +2313,9 @@ impl Core {
                 }
             }
             AsyncEffectType::Egress => {
-                self.egress_delay_queue.insert_at((message, height, author, consensus_handler), self.current_async_end);
+                if Instant::now().lt(&self.current_egress_end) {
+                    self.egress_delay_queue.insert_at((message, height, author, consensus_handler), self.current_egress_end);
+                }
             }
 
             _ => {
@@ -2667,6 +2671,11 @@ impl Core {
                         self.current_effect_type = self.asynchrony_type.pop_front().unwrap();
                         self.current_async_end = self.current_time.checked_add(Duration::from_millis(self.asynchrony_duration.pop_front().unwrap())).unwrap();
                         debug!("asynchrony ends at time {:?}", self.current_async_end);
+
+                        if self.current_effect_type == AsyncEffectType::Egress {
+                            self.current_egress_end = self.current_time.checked_add(Duration::from_millis(self.egress_penalty)).unwrap();
+                            debug!("egress ends at time {:?}", self.current_egress_end);
+                        }
                     }
 
                     if !self.during_simulated_asynchrony {
@@ -2734,6 +2743,10 @@ impl Core {
                     debug!("sending delayed message");
                     let (message, height, author, consensus_handler) = item.into_inner();
                     self.send_msg_normal(message, height, author, consensus_handler).await;
+                    debug!("egress delay queue size is {}", self.egress_delay_queue.len());
+                    if self.egress_delay_queue.is_empty() {
+                        self.current_egress_end = Instant::now().checked_add(Duration::from_millis(self.egress_penalty)).unwrap();
+                    }
                     Ok(())
                 },
 
