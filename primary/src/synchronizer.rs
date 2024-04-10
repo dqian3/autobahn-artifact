@@ -257,9 +257,7 @@ impl Synchronizer {
                             if self.use_fast_sync  {
                                 let lower_bound = self.last_fast_sync_heights.get(pk).unwrap().clone();
                                 debug!("optimistic tip lower bound is {}", lower_bound);
-                                if proposal.height - 1 > lower_bound {
-                                    missing.push((*pk, proposal.clone(), lower_bound));
-                                }
+                                missing.push((*pk, proposal.clone(), lower_bound));
                                 self.last_fast_sync_heights.insert(*pk, proposal.height - 1);
                             } else {
                                 missing.push((*pk, proposal.clone(), 1));
