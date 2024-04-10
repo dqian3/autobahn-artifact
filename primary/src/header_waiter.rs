@@ -485,6 +485,7 @@ impl HeaderWaiter {
                             ConsensusMessage::Commit {view: _, slot: _, qc: _, proposals} => {possibly_missing = proposals},
                         }
                         for (_, prop) in possibly_missing.iter() {
+                            debug!("removing prop digest {:?}", prop.header_digest);
                             let _ = self.parent_requests.remove(&prop.header_digest);
                         }
                         
