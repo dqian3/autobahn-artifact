@@ -127,9 +127,10 @@ impl Helper {
                                 debug!("fast sync request handled success");
                                 let header: Header = bincode::deserialize(&data)
                                     .expect("Failed to deserialize our own certificate");
-                                let mut parent_digest = header.parent_cert.digest();
+                                
                                 let mut height = header.height() - 1;
-
+                                let mut parent_digest = header.parent_cert.header_digest.clone();
+                                
                                 let bytes = bincode::serialize(&PrimaryMessage::Header(header, true))  //sync = true
                                     .expect("Failed to serialize our own certificate");
                                 self.network.send(address, Bytes::from(bytes)).await;
@@ -140,7 +141,7 @@ impl Helper {
                                     debug!("height is {}, lower bound is {}", height, lower_bound);
                                     let serialized_data = self.store.read(parent_digest.to_vec()).await.expect("should have ancestors").unwrap();
                                     let current_header: Header = bincode::deserialize(&serialized_data).expect("Failed to deserialize our own header");
-                                    parent_digest = current_header.parent_cert.digest();
+                                    parent_digest = current_header.parent_cert.header_digest.clone();
                                     let bytes = bincode::serialize(&PrimaryMessage::Header(current_header, true))  //sync = true
                                         .expect("Failed to serialize our own header");
                                     self.network.send(address, Bytes::from(bytes)).await;
