@@ -2313,9 +2313,7 @@ impl Core {
                 }
             }
             AsyncEffectType::Egress => {
-                if Instant::now().lt(&self.current_egress_end) {
-                    self.egress_delay_queue.insert_at((message, height, author, consensus_handler), self.current_egress_end);
-                }
+                self.egress_delay_queue.insert_at((message, height, author, consensus_handler), self.current_egress_end);
             }
 
             _ => {
@@ -2673,7 +2671,7 @@ impl Core {
                         debug!("asynchrony ends at time {:?}", self.current_async_end);
 
                         if self.current_effect_type == AsyncEffectType::Egress {
-                            self.current_egress_end = self.current_time.checked_add(Duration::from_millis(self.egress_penalty)).unwrap();
+                            self.current_egress_end = Instant::now().checked_add(Duration::from_millis(self.egress_penalty)).unwrap();
                             debug!("egress ends at time {:?}", self.current_egress_end);
                         }
                     }
