@@ -215,7 +215,7 @@ pub struct Core {
     delayed_messages: VecDeque<(u128, PrimaryMessage, u64, Option<PublicKey>, bool)>, //(wake-time, msg, height, author, consensus/car path)
     egress_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>, //Use this timer to wake next delayed message.
     //                                                                                             //Use Instant::now().elapsed().as_milis() to get current time to compute wake-time
-
+    egress_is_affected: bool,
 }
 
 impl Core {
@@ -362,6 +362,7 @@ impl Core {
                 delayed_messages: VecDeque::new(), 
                 egress_timer_futures: FuturesUnordered::new(),
                 current_async_end: Instant::now(),
+                egress_is_affected: false,
             }
             .run()
             .await;
@@ -1742,6 +1743,13 @@ impl Core {
                             }
 
                             debug!("partition pks are {:?}", self.partition_public_keys);
+                        } else if self.asynchrony_type[i] == AsyncEffectType::Egress {
+                            let mut keys: Vec<_> = self.committee.authorities.keys().cloned().collect();
+                            keys.sort();
+                            let index = keys.binary_search(&self.name).unwrap();
+                            if index < self.affected_nodes[i] as usize {
+                                self.egress_is_affected = true;
+                            }
                         }
                     }
                 }
@@ -2302,7 +2310,9 @@ impl Core {
                 }
             }
             AsyncEffectType::Egress => {
-                self.egress_delay_queue.insert_at((message, height, author, consensus_handler), self.current_async_end);
+                if self.egress_is_affected {
+                    self.egress_delay_queue.insert_at((message, height, author, consensus_handler), self.current_async_end);
+                }
             }
 
             _ => {
@@ -2693,9 +2703,11 @@ impl Core {
                         //Egress delay
                         if self.current_effect_type == AsyncEffectType::Egress {
                             //Send all.
-                            for (_, msg, height, author, consensus_handler) in self.delayed_messages.clone() { //TODO: Can one move out all of them without cloning?
-                                debug!("sending delayed message");
-                                self.send_msg_normal(msg, height, author, consensus_handler).await;
+                            if self.egress_is_affected {
+                                for (_, msg, height, author, consensus_handler) in self.delayed_messages.clone() { //TODO: Can one move out all of them without cloning?
+                                    debug!("sending delayed message");
+                                    self.send_msg_normal(msg, height, author, consensus_handler).await;
+                                }
                             }
                         }
 
