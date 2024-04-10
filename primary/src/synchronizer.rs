@@ -260,7 +260,6 @@ impl Synchronizer {
                                 if proposal.height - 1 > lower_bound {
                                     missing.push((*pk, proposal.clone(), lower_bound));
                                 }
-                                missing.push((*pk, proposal.clone(), lower_bound));
                                 self.last_fast_sync_heights.insert(*pk, proposal.height - 1);
                             } else {
                                 missing.push((*pk, proposal.clone(), 1));
