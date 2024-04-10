@@ -216,6 +216,8 @@ pub struct Core {
     egress_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>, //Use this timer to wake next delayed message.
     //                                                                                             //Use Instant::now().elapsed().as_milis() to get current time to compute wake-time
     current_egress_end: Instant,
+    egress_timer: Timer,
+    egress_delayed_msgs: VecDeque<(PrimaryMessage, u64, Option<PublicKey>, bool)>,
 }
 
 impl Core {
@@ -363,6 +365,8 @@ impl Core {
                 egress_timer_futures: FuturesUnordered::new(),
                 current_async_end: Instant::now(),
                 current_egress_end: Instant::now(),
+                egress_timer: Timer::new(0, 0, egress_penalty),
+                egress_delayed_msgs: VecDeque::new(),
             }
             .run()
             .await;
@@ -2313,7 +2317,7 @@ impl Core {
                 }
             }
             AsyncEffectType::Egress => {
-                let curr = Instant::now().elapsed().as_millis();
+                /*let curr = Instant::now().elapsed().as_millis();
                 let wake_time = curr + self.egress_penalty as u128;
                 self.delayed_messages.push_back((wake_time, message, height, author, consensus_handler));
 
@@ -2321,46 +2325,15 @@ impl Core {
                     //start timer
                     let next_wake = Timer::new(0, 0, self.egress_penalty);
                     self.egress_timer_futures.push(Box::pin(next_wake));
-                }
+                }*/
+                //self.egress_delay_queue.insert_at((message, height, author, consensus_handler), self.current_egress_end);
+                self.egress_delayed_msgs.push_back((message, height, author, consensus_handler));
             }
 
             _ => {
                 panic!("not a valid effect")
             }
         }
-        
-        /*if self.during_simulated_partition { //TODO: Remove this
-            match author {
-                Some(author) => {
-                    if self.partition_public_keys.contains(&author) {
-                        // The receiver is in our partition, so we can send the message directly
-                        debug!("single message during partition, sent normally");
-                        self.send_msg_normal(message, height, Some(author), consensus_handler).await;
-                    } else {
-                        // The receiver is not in our partition, so we buffer for later
-                        debug!("single message during partition, buffered");
-                        self.partition_delayed_msgs.push((message, height, Some(author), consensus_handler));
-                    }
-                }
-                None => {
-                    // Send the message to all nodes in our side of the partition
-                    if self.partition_public_keys.len() > 1 {
-                        self.send_msg_partition(&message, height, consensus_handler, true).await;
-                        debug!("broadcast message during partition, sent to nodes in our partition");
-                    }
-                    
-                    // Buffer the message for the other side of the partition
-                    self.partition_delayed_msgs.push((message, height, None, consensus_handler));
-                }
-            }
-        } 
-        else if self.during_simulated_asynchrony {
-            self.simulate_async_effect(message, height, author, consensus_handler).await;
-        }
-        else {
-            debug!("message sent normally");
-            self.send_msg_normal(message, height, author, consensus_handler).await;
-        }*/
     }
 
     pub async fn simulate_async_effect(&mut self, message: PrimaryMessage, height: u64, author: Option<PublicKey>, consensus_handler: bool) {
@@ -2679,8 +2652,8 @@ impl Core {
                         debug!("asynchrony ends at time {:?}", self.current_async_end);
 
                         if self.current_effect_type == AsyncEffectType::Egress {
-                            self.current_egress_end = Instant::now().checked_add(Duration::from_millis(self.egress_penalty)).unwrap();
-                            debug!("egress ends at time {:?}", self.current_egress_end);
+                            // Start the first egress timer
+                            self.egress_timer.reset();
                         }
                     }
 
@@ -2717,11 +2690,11 @@ impl Core {
                         //Egress delay
                         if self.current_effect_type == AsyncEffectType::Egress {
                             //Send all.
-                            for (_, msg, height, author, consensus_handler) in self.delayed_messages.clone() { //TODO: Can one move out all of them without cloning?
-                                debug!("sending delayed message");
+                            while !self.egress_delayed_msgs.is_empty() {
+                                let (msg, height, author, consensus_handler) = self.egress_delayed_msgs.pop_front().unwrap();
+                                debug!("sending delayed egress message");
                                 self.send_msg_normal(msg, height, author, consensus_handler).await;
                             }
-                            
                         }
 
                         // Turn off the async effect type
@@ -2788,6 +2761,19 @@ impl Core {
                 
                     Ok(())
 
+                },
+
+                (_, _) = &mut self.egress_timer => {
+                    if self.during_simulated_asynchrony {
+                        //Send all.
+                        while !self.egress_delayed_msgs.is_empty() {
+                            let (msg, height, author, consensus_handler) = self.egress_delayed_msgs.pop_front().unwrap();
+                            debug!("sending delayed egress message");
+                            self.send_msg_normal(msg, height, author, consensus_handler).await;
+                        }
+                        self.egress_timer.reset();
+                    }
+                    Ok(())
                 },
               
 
