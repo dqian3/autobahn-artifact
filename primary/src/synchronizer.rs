@@ -108,6 +108,7 @@ impl Synchronizer {
     pub async fn get_proposals(&mut self, consensus_message: &ConsensusMessage, delivered_header: &Header) -> DagResult<Vec<Header>> { 
         let mut missing = Vec::new();
         let mut proposals_vector = Vec::new();
+        let mut missing_proposals = false;
         //println!("getting proposals");
 
         match consensus_message {
@@ -136,6 +137,8 @@ impl Synchronizer {
                                 let lower_bound = self.last_fast_sync_heights.get(pk).unwrap().clone();
                                 if proposal.height - 1 > lower_bound {
                                     missing.push((*pk, proposal.clone(), lower_bound));
+                                } else {
+                                    missing_proposals = true;
                                 }
                                 self.last_fast_sync_heights.insert(*pk, proposal.height - 1);
                             } else {
@@ -157,6 +160,7 @@ impl Synchronizer {
                     match self.store.read(proposal.header_digest.to_vec()).await? {
                         Some(header) => proposals_vector.push(bincode::deserialize(&header)?),
                         None => {
+                            missing_proposals = true;
                             if self.use_fast_sync  {
                                 let lower_bound = self.last_fast_sync_heights.get(pk).unwrap().clone();
                                 if proposal.height - 1 > lower_bound {
@@ -183,6 +187,7 @@ impl Synchronizer {
                     match self.store.read(proposal.header_digest.to_vec()).await? {
                         Some(header) => proposals_vector.push(bincode::deserialize(&header)?),
                         None => {
+                            missing_proposals = true;
                             if self.use_fast_sync  {
                                 let lower_bound = self.last_fast_sync_heights.get(pk).unwrap().clone();
                                 if proposal.height - 1 > lower_bound {
@@ -198,7 +203,7 @@ impl Synchronizer {
             },
         }
 
-        if missing.is_empty() {
+        if missing.is_empty() && !missing_proposals {
             //println!("Have all proposals");
             debug!("have all proposals and their ancestors");
             return Ok(proposals_vector);
@@ -207,10 +212,13 @@ impl Synchronizer {
         //println!("sending to header waiter");
         debug!("Triggering sync for proposals");
         debug!("missing proposals are {:?}", missing);
-        self.tx_header_waiter
-            .send(WaiterMessage::SyncProposals(missing, consensus_message.clone(), delivered_header.clone()))
-            .await
-            .expect("Failed to send sync parents request");
+        if !missing.is_empty() {
+            self.tx_header_waiter
+                .send(WaiterMessage::SyncProposals(missing, consensus_message.clone(), delivered_header.clone()))
+                .await
+                .expect("Failed to send sync parents request");
+        }
+        
         Ok(Vec::new())
     }
 
