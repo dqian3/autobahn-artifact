@@ -504,6 +504,22 @@ impl HeaderWaiter {
                 Some(result) = prepare_proposal_waiting.next() => match result {
                     Ok(Some(deliver)) => {
                         //println!("finished syncing");
+                        let id = proposal_digest(&deliver.0);
+                        let _ = self.pending.remove(&id);
+                        for x in deliver.1.payload.keys() {
+                            let _ = self.batch_requests.remove(x);
+                        }
+
+                        let possibly_missing;
+                        match &deliver.0 {
+                            ConsensusMessage::Prepare {view: _, slot: _, tc: _, qc_ticket: _, proposals} => {possibly_missing = proposals},
+                            ConsensusMessage::Confirm {view: _, slot: _, qc: _, proposals} => {possibly_missing = proposals},
+                            ConsensusMessage::Commit {view: _, slot: _, qc: _, proposals} => {possibly_missing = proposals},
+                        }
+                        for (_, prop) in possibly_missing.iter() {
+                            debug!("removing prop digest {:?}", prop.header_digest);
+                            let _ = self.parent_requests.remove(&prop.header_digest);
+                        }
                         debug!("wake up prepare optimistic tips");
                         self.tx_consensus_loopback.send(deliver).await.expect("Failed to send header");
                     },
