@@ -374,6 +374,7 @@ impl Synchronizer {
         let parent = header.parent_cert.header_digest.clone();
         match self.store.read(parent.to_vec()).await? {
             Some(bytes) => {
+                debug!("fast sync header height is {}, last height is {}", header.height(), self.last_fast_sync_heights.get(&header.author).unwrap().clone());
                 // Update latest height for fast sync
                 if self.last_fast_sync_heights.get(&header.author).unwrap().clone() < header.height() - 1 {
                     self.last_fast_sync_heights.insert(header.author, header.height() - 1);
@@ -387,6 +388,8 @@ impl Synchronizer {
                 if self.use_fast_sync && header.height() - 1 <= lower_bound {
                    return Ok(None)
                 }
+
+                debug!("not in store fast sync header height is {}, last height is {}", header.height(), lower_bound);
 
                 // Update fast sync heights
                 self.last_fast_sync_heights.insert(header.author, header.height() - 1);
