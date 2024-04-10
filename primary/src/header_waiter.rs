@@ -275,6 +275,7 @@ impl HeaderWaiter {
                             }
 
                             debug!("use fast sync is {}", self.use_fast_sync);
+                            debug!("parent missing digest is {:?}", header.digest());
 
                             // Add the header to the waiter pool. The waiter will return it to us
                             // when all its parents are in the store.
@@ -404,6 +405,7 @@ impl HeaderWaiter {
                                 
                                 for (pk, proposal, lower_bound) in missing {
                                     debug!("send a fast sync proposal request with height {}, lower bound {}", proposal.height, lower_bound);
+                                    debug!("opt digest sync is {:?}", proposal.header_digest);
                                         
                                     self.parent_requests.entry(proposal.header_digest.clone()).or_insert_with(|| {
                                         requires_sync.push((proposal.header_digest, lower_bound));
