@@ -275,7 +275,7 @@ impl HeaderWaiter {
                             }
 
                             debug!("use fast sync is {}", self.use_fast_sync);
-                            debug!("parent missing digest is {:?}", header.digest());
+                            debug!("parent missing digest is {:?}", missing);
 
                             // Add the header to the waiter pool. The waiter will return it to us
                             // when all its parents are in the store.
