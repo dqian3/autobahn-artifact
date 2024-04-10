@@ -28,6 +28,10 @@ pub struct Synchronizer {
     tx_certificate_waiter: Sender<Certificate>,
     /// Genesis header
     genesis_headers: HashMap<PublicKey, Header>,
+    // Keeps track of the latest heights for each lane, which is necessary for fast sync
+    last_fast_sync_heights: HashMap<PublicKey, Height>,
+    // Whether to use fast sync
+    use_fast_sync: bool,
 }
 
 impl Synchronizer {
@@ -37,6 +41,7 @@ impl Synchronizer {
         store: Store,
         tx_header_waiter: Sender<WaiterMessage>,
         tx_certificate_waiter: Sender<Certificate>,
+        use_fast_sync: bool,
     ) -> Self {
         Self {
             name,
@@ -44,6 +49,8 @@ impl Synchronizer {
             tx_header_waiter,
             tx_certificate_waiter,
             genesis_headers: Header::genesis_headers(committee),
+            last_fast_sync_heights: committee.authorities.keys().map(|x| (*x, 1)).collect(),
+            use_fast_sync,
         }
     }
 
@@ -124,7 +131,17 @@ impl Synchronizer {
                             proposals_vector.push(bincode::deserialize(&header)?);
                             //println!("after adding to proposal vector");
                         },
-                        None => missing.push((*pk, proposal.clone())),
+                        None => {
+                            if self.use_fast_sync  {
+                                let lower_bound = self.last_fast_sync_heights.get(pk).unwrap().clone();
+                                if proposal.height - 1 > lower_bound {
+                                    missing.push((*pk, proposal.clone(), lower_bound));
+                                }
+                                self.last_fast_sync_heights.insert(*pk, proposal.height - 1);
+                            } else {
+                                missing.push((*pk, proposal.clone(), 1));
+                            }
+                        },
                     }
                 }
             },
@@ -139,7 +156,17 @@ impl Synchronizer {
 
                     match self.store.read(proposal.header_digest.to_vec()).await? {
                         Some(header) => proposals_vector.push(bincode::deserialize(&header)?),
-                        None => missing.push((*pk, proposal.clone())),
+                        None => {
+                            if self.use_fast_sync  {
+                                let lower_bound = self.last_fast_sync_heights.get(pk).unwrap().clone();
+                                if proposal.height - 1 > lower_bound {
+                                    missing.push((*pk, proposal.clone(), lower_bound));
+                                }
+                                self.last_fast_sync_heights.insert(*pk, proposal.height - 1);
+                            } else {
+                                missing.push((*pk, proposal.clone(), 1));
+                            }
+                        },
                     }
                 }
             },
@@ -155,7 +182,17 @@ impl Synchronizer {
 
                     match self.store.read(proposal.header_digest.to_vec()).await? {
                         Some(header) => proposals_vector.push(bincode::deserialize(&header)?),
-                        None => missing.push((*pk, proposal.clone())),
+                        None => {
+                            if self.use_fast_sync  {
+                                let lower_bound = self.last_fast_sync_heights.get(pk).unwrap().clone();
+                                if proposal.height - 1 > lower_bound {
+                                    missing.push((*pk, proposal.clone(), lower_bound));
+                                }
+                                self.last_fast_sync_heights.insert(*pk, proposal.height - 1);
+                            } else {
+                                missing.push((*pk, proposal.clone(), 1));
+                            }
+                        },
                     }
                 }
             },
@@ -205,7 +242,7 @@ impl Synchronizer {
                         Some(dummy_value) => {
                             debug!("success readiny optimistic key");
                         },
-                        None => missing.push((*pk, proposal.clone())),
+                        None => missing.push((*pk, proposal.clone(), 1)), /* 1 is a dummy lower bound for opt tips */
                     }
                 }
             },
@@ -328,12 +365,29 @@ impl Synchronizer {
 
         let parent = header.parent_cert.header_digest.clone();
         match self.store.read(parent.to_vec()).await? {
-            Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
+            Some(bytes) => {
+                // Update latest height for fast sync
+                if self.last_fast_sync_heights.get(&header.author).unwrap().clone() < header.height() - 1 {
+                    self.last_fast_sync_heights.insert(header.author, header.height() - 1);
+                }
+                Ok(Some(bincode::deserialize(&bytes)?))
+            },
+            
             None => {
+                let lower_bound = self.last_fast_sync_heights.get(&header.author).unwrap().clone();
+                // Already sent a fast sync request that subsumes this request
+                if self.use_fast_sync && header.height() - 1 <= lower_bound {
+                   return Ok(None)
+                }
+
+                // Update fast sync heights
+                self.last_fast_sync_heights.insert(header.author, header.height() - 1);
+
                 self.tx_header_waiter
-                    .send(WaiterMessage::SyncParent(parent, header.clone()))
+                    .send(WaiterMessage::SyncParent(parent, header.clone(), lower_bound))
                     .await
                     .expect("Failed to send sync parent request");
+                
                 Ok(None)
             }
         }

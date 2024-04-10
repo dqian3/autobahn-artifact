@@ -29,10 +29,10 @@ const TIMER_RESOLUTION: u64 = 1_000;
 #[derive(Debug)]
 pub enum WaiterMessage {
     SyncBatches(HashMap<Digest, WorkerId>, Header, bool),
-    SyncProposals(Vec<(PublicKey, Proposal)>, ConsensusMessage, Header),
+    SyncProposals(Vec<(PublicKey, Proposal, Height)>, ConsensusMessage, Header),
     // SyncProposalsC(Vec<Proposal>, ConsensusMessage), //Consensus is independent of header.
     // SyncProposalsCAsync(Vec<Proposal>), //Consensus is independent of header.
-    SyncParent(Digest, Header),
+    SyncParent(Digest, Header, u64),
     SyncHeader(Digest),
 }
 
@@ -72,8 +72,6 @@ pub struct HeaderWaiter {
     use_fast_sync: bool,
     // whether optimistic tips is enabled
     use_optimistic_tips: bool,
-    // Keeps track of the latest heights for each lane, which is necessary for fast sync
-    last_fast_sync_heights: HashMap<PublicKey, Height>,
     /// Keeps the digests of the all tx batches for which we sent a sync request,
     /// similarly to `header_requests`.
     batch_requests: HashMap<Digest, Height>,
@@ -116,7 +114,6 @@ impl HeaderWaiter {
                 batch_requests: HashMap::new(),
                 use_fast_sync,
                 use_optimistic_tips,
-                last_fast_sync_heights: committee.authorities.keys().map(|x| (*x, 1)).collect(),
                 pending: HashMap::new(),
             }
             .run()
@@ -266,7 +263,7 @@ impl HeaderWaiter {
                             }
                         }
 
-                        WaiterMessage::SyncParent(missing, header) => {
+                        WaiterMessage::SyncParent(missing, header, lower_bound) => {
                             debug!("Synching the parents of {}", header);
                             let header_id = header.id.clone();
                             let height = header.height();
@@ -295,26 +292,22 @@ impl HeaderWaiter {
 
                             // Check whether we should send a fast sync request to the network to avoid duplicate sync requests
                             if self.use_fast_sync {
-                                let last_height = *self.last_fast_sync_heights.get(&author).unwrap_or(&1);
+                                debug!("send a fast sync parent request with height {}, lower bound {}", height, lower_bound);
+                                let mut requires_sync = Vec::new();
                                 
-                                // Only send a fast sync request if the height is greater than the last synced height
-                                if height > last_height {
-                                    debug!("send a fast sync parent request with height {}, last height {}", height, last_height);
-                                    let mut requires_sync = Vec::new();
-                                    self.last_fast_sync_heights.insert(author, height);
-                                    self.parent_requests.entry(missing.clone()).or_insert_with(|| {
-                                        requires_sync.push((missing.clone(), last_height));
-                                        (height, now)
-                                    });
-                                    let address = self.committee
-                                        .primary(&author)
-                                        .expect("Author of valid header not in the committee")
-                                        .primary_to_primary;
-                                    // Lower bound to stop syncing is last height
-                                    let message = PrimaryMessage::FastSyncHeadersRequest(requires_sync, self.name);
-                                    let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                                    self.network.send(address, Bytes::from(bytes)).await;
-                                }
+                                self.parent_requests.entry(missing.clone()).or_insert_with(|| {
+                                    requires_sync.push((missing.clone(), lower_bound));
+                                    (height, now)
+                                });
+                                let address = self.committee
+                                    .primary(&author)
+                                    .expect("Author of valid header not in the committee")
+                                    .primary_to_primary;
+                                // Lower bound to stop syncing is last height
+                                let message = PrimaryMessage::FastSyncHeadersRequest(requires_sync, self.name);
+                                let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
+                                self.network.send(address, Bytes::from(bytes)).await;
+                                
                             } else {
                                 // Ensure we didn't already sent a sync request for these parents.
                                 // Optimistically send the sync request to the node that created the certificate.
@@ -360,7 +353,7 @@ impl HeaderWaiter {
                                         let wait_for_opt = missing
                                             .iter()
                                             .cloned()
-                                            .map(|(_, x)| ({let mut opt_key = x.header_digest.to_vec(); opt_key.push(1); debug!("opt key is {:?}", opt_key); opt_key}, self.store.clone()))
+                                            .map(|(_, x, _)| ({let mut opt_key = x.header_digest.to_vec(); opt_key.push(1); debug!("opt key is {:?}", opt_key); opt_key}, self.store.clone()))
                                             .collect();
                                         let (tx_cancel, rx_cancel) = channel(1);
                                         self.pending.insert(id, (height, tx_cancel));
@@ -373,7 +366,7 @@ impl HeaderWaiter {
                                         let wait_for = missing
                                             .iter()
                                             .cloned()
-                                            .map(|(_, x)| (x.header_digest.to_vec(), self.store.clone()))
+                                            .map(|(_, x, _)| (x.header_digest.to_vec(), self.store.clone()))
                                             .collect();
                                         let (tx_cancel, rx_cancel) = channel(1);
                                         self.pending.insert(id, (height, tx_cancel));
@@ -389,7 +382,7 @@ impl HeaderWaiter {
                                     let wait_for = missing
                                         .iter()
                                         .cloned()
-                                        .map(|(_, x)| (x.header_digest.to_vec(), self.store.clone()))
+                                        .map(|(_, x, _)| (x.header_digest.to_vec(), self.store.clone()))
                                         .collect();
                                     let (tx_cancel, rx_cancel) = channel(1);
                                     self.pending.insert(id, (height, tx_cancel));
@@ -409,17 +402,13 @@ impl HeaderWaiter {
                             if self.use_fast_sync {
                                 let mut requires_sync = Vec::new();
                                 
-                                for (pk, proposal) in missing {
-                                    let last_height = *self.last_fast_sync_heights.get(&pk).unwrap_or(&1);
-                                    // Only send a fast sync request if the height is greater than the last synced height
-                                    if height > last_height {
-                                        debug!("send a fast sync proposal request with height {}, last height {}", height, last_height);
-                                        self.last_fast_sync_heights.insert(pk, height);
-                                        self.parent_requests.entry(proposal.header_digest.clone()).or_insert_with(|| {
-                                            requires_sync.push((proposal.header_digest, last_height));
-                                            (height, now)
-                                        });
-                                    }
+                                for (pk, proposal, lower_bound) in missing {
+                                    debug!("send a fast sync proposal request with height {}, lower bound {}", height, lower_bound);
+                                        
+                                    self.parent_requests.entry(proposal.header_digest.clone()).or_insert_with(|| {
+                                        requires_sync.push((proposal.header_digest, lower_bound));
+                                        (height, now)
+                                    });
                                 }
 
                                 if !requires_sync.is_empty() {
@@ -437,7 +426,7 @@ impl HeaderWaiter {
                                 // If this fails (after a timeout), we broadcast the sync request.
                                 
                                 let mut requires_sync = Vec::new();
-                                for (_, missing) in missing {
+                                for (_, missing, _) in missing {
                                     self.parent_requests.entry(missing.header_digest.clone()).or_insert_with(|| {
                                         requires_sync.push(missing.header_digest);
                                         (missing.height, now)

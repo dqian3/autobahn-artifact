@@ -164,6 +164,7 @@ impl Primary {
             store.clone(),
             /* tx_header_waiter */ tx_sync_headers,
             /* tx_certificate_waiter */ tx_sync_certificates,
+            parameters.use_fast_sync,
         );
 
         let timeout_delay = 1000;
