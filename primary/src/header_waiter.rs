@@ -449,7 +449,7 @@ impl HeaderWaiter {
 
                 Some(result) = waiting.next() => match result {
                     Ok(Some(header)) => {
-                        debug!("Finished synching {:?}", header);
+                        debug!("Finished synching digest {:?} for header {:?}", header.parent_cert.header_digest, header);
                         let _ = self.pending.remove(&header.id);
                         for x in header.payload.keys() {
                             let _ = self.batch_requests.remove(x);
