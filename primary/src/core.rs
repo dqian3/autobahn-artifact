@@ -199,7 +199,7 @@ pub struct Core {
     during_simulated_asynchrony: bool,  //Currently in async period?
     current_effect_type: AsyncEffectType, //Currently active effect.
     current_num_affected_nodes: u64,
-    current_async_end: Instant,
+  
     async_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>, //Used to turn on/off period  //Note: (slot, view) are not needed, it's just to re-use existing Timer
     already_set_timers: bool,
 
@@ -211,11 +211,9 @@ pub struct Core {
     partition_delayed_msgs: Vec<(PrimaryMessage, u64, Option<PublicKey>, bool)>, //(msg, height, author, consensus/car path)
     //For egress
     egress_penalty: u64, //the number of ms of egress penalty.
-    egress_delay_queue: DelayQueue<(PrimaryMessage, u64, Option<PublicKey>, bool)>,
-    delayed_messages: VecDeque<(u128, PrimaryMessage, u64, Option<PublicKey>, bool)>, //(wake-time, msg, height, author, consensus/car path)
-    egress_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>, //Use this timer to wake next delayed message.
+    //delayed_messages: VecDeque<(u128, PrimaryMessage, u64, Option<PublicKey>, bool)>, //(wake-time, msg, height, author, consensus/car path)
+    //egress_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>, //Use this timer to wake next delayed message.
     //                                                                                             //Use Instant::now().elapsed().as_milis() to get current time to compute wake-time
-    current_egress_end: Instant,
     egress_timer: Timer,
     egress_delayed_msgs: VecDeque<(PrimaryMessage, u64, Option<PublicKey>, bool)>,
 }
@@ -358,13 +356,10 @@ impl Core {
                 partition_public_keys: HashSet::new(),
                 partition_delayed_msgs: Vec::new(),
                 //For egress
-                //egress_penalty,
-                egress_penalty: 0,
-                egress_delay_queue: DelayQueue::new(),
-                delayed_messages: VecDeque::new(), 
-                egress_timer_futures: FuturesUnordered::new(),
-                current_async_end: Instant::now(),
-                current_egress_end: Instant::now(),
+                egress_penalty,
+                //egress_delay_queue: DelayQueue::new(),
+                //delayed_messages: VecDeque::new(), 
+                //egress_timer_futures: FuturesUnordered::new(),
                 egress_timer: Timer::new(0, 0, egress_penalty),
                 egress_delayed_msgs: VecDeque::new(),
             }
@@ -2336,7 +2331,7 @@ impl Core {
         }
     }
 
-    pub async fn simulate_async_effect(&mut self, message: PrimaryMessage, height: u64, author: Option<PublicKey>, consensus_handler: bool) {
+    /*pub async fn simulate_async_effect(&mut self, message: PrimaryMessage, height: u64, author: Option<PublicKey>, consensus_handler: bool) {
 
         //go through enums
         match self.current_effect_type {
@@ -2407,7 +2402,7 @@ impl Core {
             }
         }
 
-    }
+    }*/
 
     pub async fn send_msg_partition(&mut self, message: &PrimaryMessage, height: u64, consensus_handler: bool, our_partition: bool) {
         let addresses = self
@@ -2485,52 +2480,6 @@ impl Core {
 
     // Main loop listening to incoming messages.
     pub async fn run(&mut self) {
-
-        //Simulate asynchrony duration:
-        /*if self.simulate_asynchrony {
-            debug!("added async timers");
-            let async_start = Timer::new(0, 0, self.asynchrony_start);
-            let async_end = Timer::new(0, 0, self.asynchrony_start + self.asynchrony_duration);
-            self.async_timer_futures.push(Box::pin(async_start));
-            self.async_timer_futures.push(Box::pin(async_end));
-        }*/
-
-        // Simulate network partition
-        /*if self.simulate_partition {
-            let mut keys: Vec<_> = self.committee.authorities.keys().cloned().collect();
-            keys.sort();
-            let index = keys.binary_search(&self.name).unwrap();
-
-            // Figure out which partition we are in, partition_nodes indicates when the left partition ends
-            let mut start: usize = 0;
-            let mut end: usize = 0;
-        
-            // We are in the right partition
-            if index > self.partition_nodes as usize - 1 {
-                start = self.partition_nodes as usize;
-                end = keys.len();
-               
-            } else {
-                // We are in the left partition
-                start = 0;
-                end = self.partition_nodes as usize;
-            }
-
-            // These are the nodes in our side of the partition
-            for i in start..end {
-                self.partition_public_keys.insert(keys[i]);
-            }
-
-            debug!("partition pks are {:?}", self.partition_public_keys);
-            
-            let partition_start = Timer::new(0, 0, self.partition_start);
-            let partition_end = Timer::new(0, 0, self.partition_start + self.partition_duration);
-            
-            self.during_simulated_partition = false;
-            self.partition_timer_futures.push(Box::pin(partition_start));
-            self.partition_timer_futures.push(Box::pin(partition_end));
-        }*/
-
         // Initialize current proposals with the genesis tips
         self.current_proposal_tips = Header::genesis_proposals(&self.committee);
         self.current_certified_tips = Header::genesis_proposals(&self.committee);
@@ -2648,8 +2597,6 @@ impl Core {
                     if self.during_simulated_asynchrony {
                         debug!("asynchrony type is {:?}", self.asynchrony_type);
                         self.current_effect_type = self.asynchrony_type.pop_front().unwrap();
-                        self.current_async_end = self.current_time.checked_add(Duration::from_millis(self.asynchrony_duration.pop_front().unwrap())).unwrap();
-                        debug!("asynchrony ends at time {:?}", self.current_async_end);
 
                         if self.current_effect_type == AsyncEffectType::Egress {
                             // Start the first egress timer
@@ -2718,18 +2665,7 @@ impl Core {
                     Ok(())
                 },
 
-                Some(item) = self.egress_delay_queue.next() => {
-                    debug!("sending delayed message");
-                    let (message, height, author, consensus_handler) = item.into_inner();
-                    self.send_msg_normal(message, height, author, consensus_handler).await;
-                    debug!("egress delay queue size is {}", self.egress_delay_queue.len());
-                    if self.egress_delay_queue.is_empty() {
-                        self.current_egress_end = Instant::now().checked_add(Duration::from_millis(self.egress_penalty)).unwrap();
-                    }
-                    Ok(())
-                },
-
-                Some((slot, view)) = self.egress_timer_futures.next() => {
+                /*Some((slot, view)) = self.egress_timer_futures.next() => {
                     
                     //If delayed messages non empty. Pop head and send. //pop all other heads that are below current time
                     if !self.delayed_messages.is_empty() {
@@ -2761,7 +2697,7 @@ impl Core {
                 
                     Ok(())
 
-                },
+                },*/
 
                 (_, _) = &mut self.egress_timer => {
                     if self.during_simulated_asynchrony {
