@@ -1468,6 +1468,7 @@ impl Core {
         valid = self.is_valid(&consensus_message).await;
 
         if !valid {
+            debug!("not valid");
             return Ok(());
         }
 
