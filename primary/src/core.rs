@@ -214,8 +214,10 @@ pub struct Core {
     //delayed_messages: VecDeque<(u128, PrimaryMessage, u64, Option<PublicKey>, bool)>, //(wake-time, msg, height, author, consensus/car path)
     //egress_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>, //Use this timer to wake next delayed message.
     //                                                                                             //Use Instant::now().elapsed().as_milis() to get current time to compute wake-time
-    egress_timer: Timer,
-    egress_delayed_msgs: VecDeque<(PrimaryMessage, u64, Option<PublicKey>, bool)>,
+    //egress_timer: Timer,
+    //egress_delayed_msgs: VecDeque<(PrimaryMessage, u64, Option<PublicKey>, bool)>,
+    egress_delay_queue: DelayQueue<(PrimaryMessage, u64, Option<PublicKey>, bool)>,
+    current_egress_end: Instant,
 }
 
 impl Core {
@@ -360,8 +362,10 @@ impl Core {
                 //egress_delay_queue: DelayQueue::new(),
                 //delayed_messages: VecDeque::new(), 
                 //egress_timer_futures: FuturesUnordered::new(),
-                egress_timer: Timer::new(0, 0, egress_penalty),
-                egress_delayed_msgs: VecDeque::new(),
+                //egress_timer: Timer::new(0, 0, egress_penalty),
+                //egress_delayed_msgs: VecDeque::new(),
+                egress_delay_queue: DelayQueue::new(),
+                current_egress_end: Instant::now(),
             }
             .run()
             .await;
@@ -2344,7 +2348,14 @@ impl Core {
                     self.egress_timer_futures.push(Box::pin(next_wake));
                 }*/
                 //self.egress_delay_queue.insert_at((message, height, author, consensus_handler), self.current_egress_end);
-                self.egress_delayed_msgs.push_back((message, height, author, consensus_handler));
+                //self.egress_delayed_msgs.push_back((message, height, author, consensus_handler));
+                let egress_end_time = Instant::now() + Duration::from_millis(self.egress_penalty);
+                debug!("current time is {:?}", Instant::now());
+                debug!("egress penalty is {:?}", self.egress_penalty);
+                debug!("msg egress end time is {:?}", egress_end_time);
+                let actual_send_time = egress_end_time.min(self.current_egress_end);
+                debug!("msg actual send time is {:?}", actual_send_time);
+                self.egress_delay_queue.insert_at((message, height, author, consensus_handler), actual_send_time);
             }
 
             _ => {
@@ -2622,7 +2633,10 @@ impl Core {
 
                         if self.current_effect_type == AsyncEffectType::Egress {
                             // Start the first egress timer
-                            self.egress_timer.reset();
+                            //self.egress_timer.reset();
+                            let async_duration = self.asynchrony_duration.pop_front().unwrap();
+                            self.current_egress_end = Instant::now() + Duration::from_millis(async_duration);
+                            debug!("End of egress is {:?}", self.current_egress_end);
                         }
                     }
 
@@ -2663,11 +2677,11 @@ impl Core {
                         //Egress delay
                         if self.current_effect_type == AsyncEffectType::Egress {
                             //Send all.
-                            while !self.egress_delayed_msgs.is_empty() {
+                            /*while !self.egress_delayed_msgs.is_empty() {
                                 let (msg, height, author, consensus_handler) = self.egress_delayed_msgs.pop_front().unwrap();
                                 debug!("sending delayed egress message");
                                 self.send_msg_normal(msg, height, author, consensus_handler).await;
-                            }
+                            }*/
                         }
 
                         // Turn off the async effect type
@@ -2725,7 +2739,14 @@ impl Core {
 
                 },*/
 
-                (_, _) = &mut self.egress_timer => {
+                Some(item) = self.egress_delay_queue.next() => {
+                    debug!("egress msg expired, sending normally");
+                    let (message, height, author, consensus_handler) = item.into_inner();
+                    self.send_msg_normal(message, height, author, consensus_handler).await;
+                    Ok(())
+                },
+
+                /*(_, _) = &mut self.egress_timer => {
                     if self.during_simulated_asynchrony {
                         //Send all.
                         while !self.egress_delayed_msgs.is_empty() {
@@ -2736,7 +2757,7 @@ impl Core {
                         self.egress_timer.reset();
                     }
                     Ok(())
-                },
+                },*/
               
 
                 Some((slot, view)) = self.partition_timer_futures.next() => {
