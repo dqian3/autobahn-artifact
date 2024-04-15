@@ -196,6 +196,7 @@ pub fn verify_confirm(consensus_message: &ConsensusMessage, committee: &Committe
             let prepare_id = Digest(hasher.finalize().as_slice()[..32].try_into().unwrap());
 
             if prepare_id != qc.id {
+                debug!("qc ids don't match");
                 return false;
             }
     

@@ -1596,7 +1596,7 @@ impl Core {
                 // TODO:Can implement different forwarding methods (can be random, can forward to f+1, current one is the most pessimisstic)
               
                 if self.k > 1 { //check whether a) we have already committed; and if not b) whether ticket is ready (prepare and QC)
-                    if !self.committed_slots.contains_key(&(slot+1)) && !self.timers.contains(&(slot + 1, 1)) && self.committed_slots.contains_key(&(slot+1 - self.k))  { 
+                    if !self.committed_slots.contains_key(&(slot+1)) && !self.timers.contains(&(slot + 1, 1)) && (slot + 1 <= self.k || self.committed_slots.contains_key(&(slot+1 - self.k)))  { 
                         debug!("start timer for slot {}", slot +1);
                         let timer = Timer::new(slot + 1, 1, self.timeout_delay);
                         self.timer_futures.push(Box::pin(timer));
