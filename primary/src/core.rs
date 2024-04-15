@@ -464,6 +464,14 @@ impl Core {
         debug!("Past header parent cert stake check");
         //println!("After second ensure");
 
+        // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
+        // reschedule processing of this header once we have it.
+        if self.synchronizer.missing_payload(&header, sync).await? {
+            //println!("Missing payload");
+            debug!("Processing of {} suspended: missing payload", header);
+            return Ok(());
+        }
+
         // Write this header as an optimistic tip
         if self.use_optimistic_tips {
             debug!("Wrote optimistic tip to store");
@@ -480,14 +488,6 @@ impl Core {
                 },
                 None => { debug!("cannot read our own optimistic key {:?}", optimistic_key); },
             }*/
-        }
-
-        // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
-        // reschedule processing of this header once we have it.
-        if self.synchronizer.missing_payload(&header, sync).await? {
-            //println!("Missing payload");
-            debug!("Processing of {} suspended: missing payload", header);
-            return Ok(());
         }
         
         // By FIFO should have parent of this header (and recursively all ancestors), reschedule for processing if we don't
