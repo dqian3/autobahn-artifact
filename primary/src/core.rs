@@ -2294,6 +2294,17 @@ impl Core {
                 panic!("TempBlip currently deprecated");
             }
             AsyncEffectType::Failure => {
+                match message {
+                    PrimaryMessage::ConsensusMessage(m) => {
+                        match m.clone() {
+                            ConsensusMessage::Prepare {slot, view, tc, qc_ticket: _, proposals} => {
+                                self.async_delayed_prepare = Some(m);
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => { debug!("dropping all other messages") }
+                }
                 //drop message
                 debug!("dropping message");
             }
@@ -2633,6 +2644,10 @@ impl Core {
                         }
                         //Failure
                         if self.current_effect_type == AsyncEffectType::Failure {
+                            if self.async_delayed_prepare.is_some() {
+                                let _ = self.send_consensus_req(self.async_delayed_prepare.clone().unwrap()).await;
+                            }
+                            self.async_delayed_prepare = None;
                             //do nothing
                         }
                         //Partition
