@@ -1795,6 +1795,7 @@ impl Core {
                     debug!("sending to committer");
                     // Only write to the log if we aren't the failed node during simulated asynchrony
                     let write_to_log = !(self.during_simulated_asynchrony && self.current_effect_type == AsyncEffectType::Failure);
+                    debug!("write to log is {}", write_to_log);
                     self.tx_committer
                         .send((commit_message, write_to_log))
                         .await
@@ -1874,6 +1875,7 @@ impl Core {
             ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals: _ } => {
                 // Send the commit message to the committer to order everything
                 let write_to_log = !(self.during_simulated_asynchrony && self.current_effect_type == AsyncEffectType::Failure);
+                debug!("write to log is {}", write_to_log);
                 self.tx_committer
                     .send((consensus_message, write_to_log))
                     .await
