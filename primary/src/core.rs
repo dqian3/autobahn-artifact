@@ -2302,11 +2302,15 @@ impl Core {
                 panic!("TempBlip currently deprecated");
             }
             AsyncEffectType::Failure => {
-                match message {
+                match message.clone() {
                     PrimaryMessage::ConsensusMessage(m) => {
                         match m.clone() {
                             ConsensusMessage::Prepare {slot, view, tc, qc_ticket: _, proposals} => {
-                                self.async_delayed_prepare = Some(m);
+                                if self.async_delayed_prepare.is_some() {
+                                    self.send_msg_normal(message, height, author, consensus_handler).await;
+                                } else {
+                                    self.async_delayed_prepare = Some(m);
+                                }                               
                             }
                             _ => {}
                         }
