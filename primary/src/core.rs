@@ -1907,8 +1907,10 @@ impl Core {
     fn calculate_timeout(&self, view: View) -> u64 {
         if self.use_expoential_timeouts {
             let timeout = self.timeout_delay as f64 * 2.0_f64.powi((view - 1) as i32);
+            debug!("Timeout for view {} is {}", view, timeout as u64);
             timeout as u64
         } else {
+            debug!("Timeout for view {} is {}", view, self.timeout_delay);
             self.timeout_delay
         }
     }
