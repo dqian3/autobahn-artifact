@@ -210,10 +210,6 @@ impl Primary {
             // parameters.simulate_asynchrony,
             // parameters.asynchrony_start,
             // parameters.asynchrony_duration,
-            parameters.simulate_partition,
-            parameters.partition_start,
-            parameters.partition_duration,
-            parameters.partition_nodes,
 
             parameters.simulate_asynchrony,
             parameters.asynchrony_type,
@@ -221,6 +217,7 @@ impl Primary {
             parameters.asynchrony_duration,
             parameters.affected_nodes,
             parameters.egress_penalty,
+            parameters.use_exponential_timeouts,
         );
 
         Committer::spawn(committee.clone(), store.clone(), parameters.gc_depth, rx_mempool, rx_committer, rx_commit, tx_output, synchronizer);

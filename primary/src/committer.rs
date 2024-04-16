@@ -74,7 +74,7 @@ pub struct Committer {
     gc_depth: Height,
     rx_mempool: Receiver<Certificate>,
     rx_deliver: Receiver<Certificate>,
-    rx_commit_message: Receiver<ConsensusMessage>,
+    rx_commit_message: Receiver<(ConsensusMessage, bool)>,
     tx_output: Sender<Header>,
     synchronizer: Synchronizer,
     genesis: Vec<Certificate>,
@@ -87,7 +87,7 @@ impl Committer {
         gc_depth: Height,
         rx_mempool: Receiver<Certificate>,
         rx_commit: Receiver<Certificate>,
-        rx_commit_message: Receiver<ConsensusMessage>,
+        rx_commit_message: Receiver<(ConsensusMessage, bool)>,
         tx_output: Sender<Header>,
         synchronizer: Synchronizer,
     ) {
@@ -114,7 +114,7 @@ impl Committer {
         });
     }
 
-    async fn process_commit_message(&mut self, state: &mut State, commit_message: ConsensusMessage) {
+    async fn process_commit_message(&mut self, state: &mut State, commit_message: ConsensusMessage, write_to_log: bool) {
         match commit_message.clone() {
             ConsensusMessage::Commit{slot, view: _, qc: _, proposals: _} => {
                 if slot <= state.last_executed_slot {
@@ -151,9 +151,11 @@ impl Committer {
                                 for header in headers {
                                     info!("Committed {}", header);
                                     #[cfg(feature = "benchmark")]
-                                    for digest in header.payload.keys() {
-                                        // NOTE: This log entry is used to compute performance.
-                                        info!("Committed {} -> {:?}", header, digest);
+                                    if write_to_log {
+                                        for digest in header.payload.keys() {
+                                            // NOTE: This log entry is used to compute performance.
+                                            info!("Committed {} -> {:?}", header, digest);
+                                        }
                                     }
                                     debug!("Finished Commit");
                                     // Output the block to the top-level application.
@@ -187,8 +189,8 @@ impl Committer {
                         (certificate.digest(), certificate.clone()),
                     );*/
                 },
-                Some(commit_message) = self.rx_commit_message.recv() => {
-                    self.process_commit_message(state.borrow_mut(), commit_message).await;
+                Some((commit_message, write_to_log)) = self.rx_commit_message.recv() => {
+                    self.process_commit_message(state.borrow_mut(), commit_message, write_to_log).await;
                 },
                 Some(_) = self.rx_deliver.recv() => {}
 

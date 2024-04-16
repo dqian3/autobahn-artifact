@@ -77,7 +77,7 @@ pub struct Core {
     /// Receives our newly created headers from the `Proposer`.
     rx_proposer: Receiver<Header>,
     // Output all certificates to the consensus Dag view
-    tx_committer: Sender<ConsensusMessage>,
+    tx_committer: Sender<(ConsensusMessage, bool)>,
 
     /// Send a valid parent certificate to the `Proposer` 
     tx_proposer: Sender<Certificate>,
@@ -158,12 +158,6 @@ pub struct Core {
 
     //TODO: Replace with the generic framework.
     //parition simulation
-    simulate_partition: bool,
-    partition_start: u64,
-    partition_duration: u64,
-    partition_nodes: u64,
-    during_simulated_partition: bool,
-    partition_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>,
 
     // partition_public_keys: HashSet<PublicKey>,
     // partition_delayed_msgs: Vec<(PrimaryMessage, u64, Option<PublicKey>, bool)>, //(msg, height, author, consensus/car path)
@@ -218,6 +212,8 @@ pub struct Core {
     //egress_delayed_msgs: VecDeque<(PrimaryMessage, u64, Option<PublicKey>, bool)>,
     egress_delay_queue: DelayQueue<(PrimaryMessage, u64, Option<PublicKey>, bool)>,
     current_egress_end: Instant,
+    // exponential timeouts
+    use_expoential_timeouts: bool,
 }
 
 impl Core {
@@ -234,7 +230,7 @@ impl Core {
         rx_header_waiter: Receiver<Header>,
         rx_header_waiter_instances: Receiver<(ConsensusMessage, Header)>,
         rx_proposer: Receiver<Header>,
-        tx_committer: Sender<ConsensusMessage>,
+        tx_committer: Sender<(ConsensusMessage, bool)>,
         tx_proposer: Sender<Certificate>,
         rx_request_header_sync: Receiver<Digest>,
         tx_info: Sender<ConsensusMessage>,
@@ -248,11 +244,6 @@ impl Core {
         use_ride_share: bool,
         car_timeout: u64,
 
-        simulate_partition: bool,
-        partition_start: u64,
-        partition_duration: u64,
-        partition_nodes: u64,
-
         simulate_asynchrony: bool,
         //asynchrony_start: u64,
         //asynchrony_duration: u64,
@@ -262,6 +253,7 @@ impl Core {
         asynchrony_duration: VecDeque<u64>,
         affected_nodes: VecDeque<u64>, 
         egress_penalty: u64,
+        use_expoential_timeouts: bool,
     ) {
         tokio::spawn(async move {
             Self {
@@ -331,13 +323,6 @@ impl Core {
                 //current_time: Instant::now(),
                 //async_delayed_prepare: None,
 
-                simulate_partition,
-                partition_start,
-                partition_duration,
-                partition_nodes,
-                during_simulated_partition: false,
-                partition_timer_futures: FuturesUnordered::new(),
-
                 // partition_delayed_msgs: Vec::new(),
                 // partition_public_keys: HashSet::new(),
 
@@ -366,6 +351,7 @@ impl Core {
                 //egress_delayed_msgs: VecDeque::new(),
                 egress_delay_queue: DelayQueue::new(),
                 current_egress_end: Instant::now(),
+                use_expoential_timeouts,
             }
             .run()
             .await;
@@ -1807,8 +1793,10 @@ impl Core {
                 if !self.synchronizer.get_proposals(&commit_message, &header).await.unwrap().is_empty() {
                     //println!("Sent to committer");
                     debug!("sending to committer");
+                    // Only write to the log if we aren't the failed node during simulated asynchrony
+                    let write_to_log = !(self.during_simulated_asynchrony && self.current_effect_type == AsyncEffectType::Failure);
                     self.tx_committer
-                        .send(commit_message)
+                        .send((commit_message, write_to_log))
                         .await
                         .expect("Failed to send headers");
                 }
@@ -1885,8 +1873,9 @@ impl Core {
             },
             ConsensusMessage::Commit { slot: _, view: _, qc: _, proposals: _ } => {
                 // Send the commit message to the committer to order everything
+                let write_to_log = !(self.during_simulated_asynchrony && self.current_effect_type == AsyncEffectType::Failure);
                 self.tx_committer
-                    .send(consensus_message)
+                    .send((consensus_message, write_to_log))
                     .await
                     .expect("Failed to send to committer");
             },
@@ -1911,6 +1900,15 @@ impl Core {
             _ => {}
         }
         Ok(())
+    }
+
+    fn calculate_timeout(&self, view: View) -> u64 {
+        if self.use_expoential_timeouts {
+            let timeout = self.timeout_delay as f64 * 2.0_f64.powi((view - 1) as i32);
+            timeout as u64
+        } else {
+            self.timeout_delay
+        }
     }
 
     async fn qc_timeout() {
@@ -2072,7 +2070,8 @@ impl Core {
             self.views.insert(timeout.slot, timeout.view + 1);
 
             // Start the new view timer
-            let timer = Timer::new(tc.slot, tc.view + 1, self.timeout_delay);
+            let duration = self.calculate_timeout(tc.view + 1);
+            let timer = Timer::new(tc.slot, tc.view + 1, duration);
             self.timer_futures.push(Box::pin(timer));
             self.timers.insert((tc.slot, tc.view + 1));
 
@@ -2743,40 +2742,6 @@ impl Core {
                     debug!("egress msg expired, sending normally");
                     let (message, height, author, consensus_handler) = item.into_inner();
                     self.send_msg_normal(message, height, author, consensus_handler).await;
-                    Ok(())
-                },
-
-                /*(_, _) = &mut self.egress_timer => {
-                    if self.during_simulated_asynchrony {
-                        //Send all.
-                        while !self.egress_delayed_msgs.is_empty() {
-                            let (msg, height, author, consensus_handler) = self.egress_delayed_msgs.pop_front().unwrap();
-                            debug!("sending delayed egress message");
-                            self.send_msg_normal(msg, height, author, consensus_handler).await;
-                        }
-                        self.egress_timer.reset();
-                    }
-                    Ok(())
-                },*/
-              
-
-                Some((slot, view)) = self.partition_timer_futures.next() => {
-                    self.during_simulated_partition = !self.during_simulated_partition;
-
-                    if self.during_simulated_partition {
-                        debug!("partition started with last committed slot of {}", self.last_committed_slot);
-                    } 
-
-                    if !self.during_simulated_partition {
-                        debug!("partition over, last committed slot is {}", self.last_committed_slot);
-                        for (msg, height, author, consensus_handler) in self.partition_delayed_msgs.clone() {
-                            debug!("sending messages to other side of partition");
-                            match author {
-                                Some(author) => self.send_msg_normal(msg, height, Some(author), consensus_handler).await,
-                                None => self.send_msg_partition(&msg, height, consensus_handler, false).await,
-                            }
-                        }
-                    }
                     Ok(())
                 },
 
