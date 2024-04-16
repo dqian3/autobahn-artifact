@@ -1904,8 +1904,9 @@ impl Core {
         Ok(())
     }
 
-    fn calculate_timeout(&self, view: View) -> u64 {
-        if self.use_expoential_timeouts {
+    fn calculate_timeout(&self, slot: Slot, view: View) -> u64 {
+        // Don't use exponential timeouts for the first few slots since nodes are just booting up
+        if slot > 4 && self.use_expoential_timeouts {
             let timeout = self.timeout_delay as f64 * 2.0_f64.powi((view - 1) as i32);
             debug!("Timeout for view {} is {}", view, timeout as u64);
             timeout as u64
@@ -2074,7 +2075,7 @@ impl Core {
             self.views.insert(timeout.slot, timeout.view + 1);
 
             // Start the new view timer
-            let duration = self.calculate_timeout(tc.view + 1);
+            let duration = self.calculate_timeout(tc.slot, tc.view + 1);
             let timer = Timer::new(tc.slot, tc.view + 1, duration);
             self.timer_futures.push(Box::pin(timer));
             self.timers.insert((tc.slot, tc.view + 1));
