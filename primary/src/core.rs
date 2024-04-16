@@ -214,6 +214,7 @@ pub struct Core {
     current_egress_end: Instant,
     // exponential timeouts
     use_expoential_timeouts: bool,
+    dropped_slot: u64,
 }
 
 impl Core {
@@ -352,6 +353,7 @@ impl Core {
                 egress_delay_queue: DelayQueue::new(),
                 current_egress_end: Instant::now(),
                 use_expoential_timeouts,
+                dropped_slot: 0,
             }
             .run()
             .await;
@@ -2306,13 +2308,27 @@ impl Core {
                     PrimaryMessage::ConsensusMessage(m) => {
                         match m.clone() {
                             ConsensusMessage::Prepare {slot, view, tc, qc_ticket: _, proposals} => {
-                                if self.async_delayed_prepare.is_some() {
+                                self.async_delayed_prepare = Some(m);
+                                if self.dropped_slot > 0 {
                                     self.send_msg_normal(message, height, author, consensus_handler).await;
                                 } else {
-                                    self.async_delayed_prepare = Some(m);
-                                }                               
+                                    self.dropped_slot = slot;
+                                }                                
+                            },
+                            ConsensusMessage::Confirm { slot, view: _, qc: _, proposals: _ } => {
+                                if self.dropped_slot > 0 {
+                                    self.send_msg_normal(message, height, author, consensus_handler).await;
+                                } else {
+                                    self.dropped_slot = slot;
+                                }
+                            },
+                            ConsensusMessage::Commit { slot, view: _, qc: _, proposals: _ } => {
+                                if self.dropped_slot > 0 {
+                                    self.send_msg_normal(message, height, author, consensus_handler).await;
+                                } else {
+                                    self.dropped_slot = slot;
+                                }
                             }
-                            _ => {}
                         }
                     }
                     _ => { debug!("dropping all other messages") }
