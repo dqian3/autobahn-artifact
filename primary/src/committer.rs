@@ -149,9 +149,9 @@ impl Committer {
 
                                 // Commit all of the headers
                                 for header in headers {
-                                    info!("Committed {}", header);
-                                    #[cfg(feature = "benchmark")]
                                     if write_to_log {
+                                        info!("Committed {}", header);
+                                        #[cfg(feature = "benchmark")]
                                         for digest in header.payload.keys() {
                                             // NOTE: This log entry is used to compute performance.
                                             info!("Committed {} -> {:?}", header, digest);
