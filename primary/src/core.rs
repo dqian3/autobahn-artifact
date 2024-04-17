@@ -1492,7 +1492,12 @@ impl Core {
                     debug!("optimistic tips not ready");
                     return Ok(())
                 } else {
-                    debug!("optimistic tips are ready");
+                    if !self.use_optimistic_tips {
+                        self.synchronizer.get_proposals(&consensus_message, &header).await?;
+                        debug!("start syncing certified proposals");
+                    } else {
+                        debug!("optimistic tips are ready");
+                    }
                 }
                 
                 // Start syncing on the proposals if we haven't already
