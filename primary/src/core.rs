@@ -11,6 +11,7 @@ use crate::messages::{
 use crate::primary::{Height, PrimaryMessage, Slot, View};
 use crate::synchronizer::{Synchronizer, self};
 use crate::timer::{Timer, CarTimer, FastTimer};
+use crate::PrimaryWorkerMessage;
 use async_recursion::async_recursion;
 use bytes::Bytes;
 use config::{Committee, Stake};
@@ -2669,7 +2670,19 @@ impl Core {
 
                         if self.current_effect_type == AsyncEffectType::Partition {
                             debug!("start partition updating batch maker");
-                            self.tx_worker_async_channel.send((true, self.partition_public_keys.clone())).await.expect("Failed to send async message");
+                            let addresses: Vec<std::net::SocketAddr> = self.committee
+                                    .our_workers(&self.name)
+                                    //.worker(&self.name, &worker_id)
+                                    .expect("Author of valid header is not in the committee")
+                                    .iter()
+                                    .map(|x| x.primary_to_worker)
+                                    .collect();
+                                   
+                            let message = PrimaryWorkerMessage::Async(true, self.partition_public_keys.clone());
+                            let bytes = bincode::serialize(&message).expect("Failed to serialize batch sync request");
+                            self.network.broadcast(addresses, Bytes::from(bytes)).await;
+                            //self.network.send(address, Bytes::from(bytes)).await;
+                            //self.tx_worker_async_channel.send((true, self.partition_public_keys.clone())).await.expect("Failed to send async message");
                         }
                     }
 
@@ -2700,7 +2713,19 @@ impl Core {
                         //Partition
                         if self.current_effect_type == AsyncEffectType::Partition {
                             debug!("end partition updating batch maker");
-                            self.tx_worker_async_channel.send((false, self.partition_public_keys.clone())).await.expect("Failed to send async message");
+                            //self.tx_worker_async_channel.send((false, self.partition_public_keys.clone())).await.expect("Failed to send async message");
+                            let addresses: Vec<std::net::SocketAddr> = self.committee
+                                    .our_workers(&self.name)
+                                    //.worker(&self.name, &worker_id)
+                                    .expect("Author of valid header is not in the committee")
+                                    .iter()
+                                    .map(|x| x.primary_to_worker)
+                                    .collect();
+                                   
+                            let message = PrimaryWorkerMessage::Async(true, self.partition_public_keys.clone());
+                            let bytes = bincode::serialize(&message).expect("Failed to serialize batch sync request");
+                            self.network.broadcast(addresses, Bytes::from(bytes)).await;
+                            
                             for (msg, height, author, consensus_handler) in self.partition_delayed_msgs.clone() {
                                 debug!("sending messages to other side of partition");
                                 match author {

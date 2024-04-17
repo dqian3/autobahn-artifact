@@ -75,9 +75,9 @@ impl Worker {
 
         // Spawn all worker tasks.
         let (tx_primary, rx_primary) = channel(CHANNEL_CAPACITY);
-        //let (tx_batch_maker_async, rx_batch_maker_async) = channel(CHANNEL_CAPACITY);
-        worker.handle_primary_messages();                         //spawns async task that listens for network message from Primary
-        worker.handle_clients_transactions(tx_primary.clone(), rx_batch_maker_async);   //spawns async task that listens for network messages from Client
+        let (tx_batch_maker_async_real, rx_batch_maker_real_async) = channel(CHANNEL_CAPACITY);
+        worker.handle_primary_messages(tx_batch_maker_async_real);                         //spawns async task that listens for network message from Primary
+        worker.handle_clients_transactions(tx_primary.clone(), rx_batch_maker_async, rx_batch_maker_real_async);   //spawns async task that listens for network messages from Client
         worker.handle_workers_messages(tx_primary);               //spawns async task that listens for network messages from other Workers
 
         // The `PrimaryConnector` allows the worker to send messages to its primary.
@@ -107,7 +107,7 @@ impl Worker {
 
 
     /// Spawn all tasks responsible to handle messages from our primary.
-    fn handle_primary_messages(&self) {
+    fn handle_primary_messages(&self, tx_batch_maker_async_real: Sender<PrimaryWorkerMessage>) {
         let (tx_synchronizer, rx_synchronizer) = channel(CHANNEL_CAPACITY); //channel between PrimaryReceiverHandler and Synchronizer
 
         // Receive incoming messages from our primary.
@@ -120,7 +120,7 @@ impl Worker {
         Receiver::spawn(
             address,                                    //socket to receive Primary messages from
             /* handler */
-            PrimaryReceiverHandler { tx_synchronizer }, //handler for received Primary messages, forwards them to synchronizer
+            PrimaryReceiverHandler { tx_synchronizer, tx_batch_maker: tx_batch_maker_async_real }, //handler for received Primary messages, forwards them to synchronizer
         );
 
         // The `Synchronizer` is responsible to keep the worker in sync with the others. It handles the commands
@@ -143,7 +143,7 @@ impl Worker {
     }
 
     /// Spawn all tasks responsible to handle clients transactions.
-    fn handle_clients_transactions(&self, tx_primary: Sender<SerializedBatchDigestMessage>, rx_batch_maker_async: OtherReceiver<(bool, HashSet<PublicKey>)>) {  //tx_primary: channel between processor and PrimaryConnector
+    fn handle_clients_transactions(&self, tx_primary: Sender<SerializedBatchDigestMessage>, rx_batch_maker_async: OtherReceiver<(bool, HashSet<PublicKey>)>, rx_batch_maker_async_real: OtherReceiver<PrimaryWorkerMessage>) {  //tx_primary: channel between processor and PrimaryConnector
         let (tx_batch_maker, rx_batch_maker) = channel(CHANNEL_CAPACITY);      //channel between TxReceive (Client) and batch maker
         //let (tx_quorum_waiter, rx_quorum_waiter) = channel(CHANNEL_CAPACITY);  //channel between batch maker and quorum waiter
         let (tx_processor, rx_processor) = channel(CHANNEL_CAPACITY);          //channel between quorum waiter and processor
@@ -176,6 +176,7 @@ impl Worker {
                 .map(|(name, addresses)| (*name, addresses.worker_to_worker))
                 .collect(),
             rx_batch_maker_async,  //receiver channel to connect to PrimaryReceiverHandler
+            rx_batch_maker_async_real,
         );
 
         // // The `QuorumWaiter` waits for 2f authorities to acknowledge reception of the batch. It then forwards
@@ -314,6 +315,7 @@ impl MessageHandler for WorkerReceiverHandler {
 #[derive(Clone)]
 struct PrimaryReceiverHandler {
     tx_synchronizer: Sender<PrimaryWorkerMessage>,  //sender channel to connect to synchronizer.
+    tx_batch_maker: Sender<PrimaryWorkerMessage>,   //sender channel to connect to batch maker.
 }
 
 #[async_trait]
@@ -326,12 +328,25 @@ impl MessageHandler for PrimaryReceiverHandler {
         // Deserialize the message and send it to the synchronizer.
         match bincode::deserialize(&serialized) {
             Err(e) => error!("Failed to deserialize primary message: {}", e),
-            Ok(message) => 
-                self             
+            Ok(message) => {
+                match message {
+                    PrimaryWorkerMessage::Async(..) => self
+                        .tx_batch_maker
+                        .send(message)
+                        .await
+                        .expect("Failed to send synchronization message"),
+                    _ => self
+                        .tx_synchronizer
+                        .send(message)
+                        .await
+                        .expect("Failed to send cleanup message"),
+                }
+            },
+                /*self             
                     .tx_synchronizer
                     .send(message)
                     .await
-                    .expect("Failed to send transaction"),
+                    .expect("Failed to send transaction"),*/
         }
         Ok(())
     }

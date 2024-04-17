@@ -13,7 +13,7 @@ use log::debug;
 #[cfg(feature = "benchmark")]
 use log::info;
 use network::{ReliableSender, SimpleSender};
-use primary::{PrimaryWorkerMessage, WorkerPrimaryMessage};
+use primary::{Primary, PrimaryWorkerMessage, WorkerPrimaryMessage};
 use std::collections::HashSet;
 #[cfg(feature = "benchmark")]
 use std::convert::TryInto as _;
@@ -56,6 +56,8 @@ pub struct BatchMaker {
     during_simulated_asynchrony: bool,
     // Partition public keys
     partition_public_keys: HashSet<PublicKey>,
+    // Receive real async requests
+    rx_async_real: Receiver<PrimaryWorkerMessage>,
 
 }
 
@@ -68,6 +70,7 @@ impl BatchMaker {
         tx_batch: Sender<Vec<u8>>,   // sender channel to worker.Processor
         workers_addresses: Vec<(PublicKey, SocketAddr)>,
         rx_async: Receiver<(bool, HashSet<PublicKey>)>,
+        rx_async_real: Receiver<PrimaryWorkerMessage>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -83,6 +86,7 @@ impl BatchMaker {
                 rx_async,
                 during_simulated_asynchrony: false,
                 partition_public_keys: HashSet::new(),
+                rx_async_real,
             }
             .run()
             .await;
@@ -117,6 +121,17 @@ impl BatchMaker {
                     self.partition_public_keys = partition_public_keys;
                 },
 
+                Some(async_request) = self.rx_async_real.recv() => {
+                    debug!("BatchMaker: received real async request");
+                    match async_request {
+                        PrimaryWorkerMessage::Async(during_simulated_asynchrony, partition_public_keys) => {
+                            self.during_simulated_asynchrony = during_simulated_asynchrony;
+                            self.partition_public_keys = partition_public_keys;
+                        },
+                        _ => {},
+                    }
+                },
+
                 // If the timer triggers, seal the batch even if it contains few transactions.
                 () = &mut timer => {
                     debug!("BatchMaker: max batch delay timer triggered");
@@ -126,7 +141,8 @@ impl BatchMaker {
 
                     current_time = Instant::now();
                     timer.as_mut().reset(Instant::now() + Duration::from_millis(self.max_batch_delay));
-                }
+                },
+
             }
 
             // Give the change to schedule other tasks.

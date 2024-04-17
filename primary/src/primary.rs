@@ -63,6 +63,8 @@ pub enum PrimaryWorkerMessage {
     Synchronize(Vec<Digest>, /* target */ PublicKey),
     /// The primary indicates a round update.
     Cleanup(Height),
+    /// Async
+    Async(bool, HashSet<PublicKey>),
 }
 
 /// The messages sent by the workers to their primary.
