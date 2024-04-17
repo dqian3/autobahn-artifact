@@ -16,9 +16,10 @@ use log::{error, info, warn};
 use network::{MessageHandler, Receiver, Writer};
 use primary::PrimaryWorkerMessage;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::error::Error;
 use store::Store;
-use tokio::sync::mpsc::{channel, Sender};
+use tokio::sync::mpsc::{channel, Sender, Receiver as OtherReceiver};
 
 #[cfg(test)]
 #[path = "tests/worker_tests.rs"]
@@ -61,6 +62,7 @@ impl Worker {
         committee: Committee,
         parameters: Parameters,
         store: Store,
+        rx_batch_maker_async: OtherReceiver<(bool, HashSet<PublicKey>)>,
     ) {
         // Define a worker instance.
         let worker = Self {
@@ -73,8 +75,9 @@ impl Worker {
 
         // Spawn all worker tasks.
         let (tx_primary, rx_primary) = channel(CHANNEL_CAPACITY);
+        //let (tx_batch_maker_async, rx_batch_maker_async) = channel(CHANNEL_CAPACITY);
         worker.handle_primary_messages();                         //spawns async task that listens for network message from Primary
-        worker.handle_clients_transactions(tx_primary.clone());   //spawns async task that listens for network messages from Client
+        worker.handle_clients_transactions(tx_primary.clone(), rx_batch_maker_async);   //spawns async task that listens for network messages from Client
         worker.handle_workers_messages(tx_primary);               //spawns async task that listens for network messages from other Workers
 
         // The `PrimaryConnector` allows the worker to send messages to its primary.
@@ -140,7 +143,7 @@ impl Worker {
     }
 
     /// Spawn all tasks responsible to handle clients transactions.
-    fn handle_clients_transactions(&self, tx_primary: Sender<SerializedBatchDigestMessage>) {  //tx_primary: channel between processor and PrimaryConnector
+    fn handle_clients_transactions(&self, tx_primary: Sender<SerializedBatchDigestMessage>, rx_batch_maker_async: OtherReceiver<(bool, HashSet<PublicKey>)>) {  //tx_primary: channel between processor and PrimaryConnector
         let (tx_batch_maker, rx_batch_maker) = channel(CHANNEL_CAPACITY);      //channel between TxReceive (Client) and batch maker
         //let (tx_quorum_waiter, rx_quorum_waiter) = channel(CHANNEL_CAPACITY);  //channel between batch maker and quorum waiter
         let (tx_processor, rx_processor) = channel(CHANNEL_CAPACITY);          //channel between quorum waiter and processor
@@ -172,6 +175,7 @@ impl Worker {
                 .iter()
                 .map(|(name, addresses)| (*name, addresses.worker_to_worker))
                 .collect(),
+            rx_batch_maker_async,  //receiver channel to connect to PrimaryReceiverHandler
         );
 
         // // The `QuorumWaiter` waits for 2f authorities to acknowledge reception of the batch. It then forwards
@@ -322,11 +326,12 @@ impl MessageHandler for PrimaryReceiverHandler {
         // Deserialize the message and send it to the synchronizer.
         match bincode::deserialize(&serialized) {
             Err(e) => error!("Failed to deserialize primary message: {}", e),
-            Ok(message) => self             
-                .tx_synchronizer
-                .send(message)
-                .await
-                .expect("Failed to send transaction"),
+            Ok(message) => 
+                self             
+                    .tx_synchronizer
+                    .send(message)
+                    .await
+                    .expect("Failed to send transaction"),
         }
         Ok(())
     }

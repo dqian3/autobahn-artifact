@@ -215,6 +215,8 @@ pub struct Core {
     // exponential timeouts
     use_expoential_timeouts: bool,
     dropped_slot: u64,
+    // Channel to communicate async period to the worker
+    tx_worker_async_channel: Sender<(bool, HashSet<PublicKey>)>,
 }
 
 impl Core {
@@ -255,6 +257,7 @@ impl Core {
         affected_nodes: VecDeque<u64>, 
         egress_penalty: u64,
         use_expoential_timeouts: bool,
+        tx_worker_async_channel: Sender<(bool, HashSet<PublicKey>)>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -354,6 +357,7 @@ impl Core {
                 current_egress_end: Instant::now(),
                 use_expoential_timeouts,
                 dropped_slot: 0,
+                tx_worker_async_channel,
             }
             .run()
             .await;
@@ -2662,6 +2666,10 @@ impl Core {
                             self.current_egress_end = Instant::now() + Duration::from_millis(async_duration);
                             debug!("End of egress is {:?}", self.current_egress_end);
                         }
+
+                        if self.current_effect_type == AsyncEffectType::Partition {
+                            self.tx_worker_async_channel.send((true, self.partition_public_keys.clone())).await.expect("Failed to send async message");
+                        }
                     }
 
                     if !self.during_simulated_asynchrony {
@@ -2690,6 +2698,8 @@ impl Core {
                         }
                         //Partition
                         if self.current_effect_type == AsyncEffectType::Partition {
+                            debug!("end partition updating batch maker");
+                            self.tx_worker_async_channel.send((false, self.partition_public_keys.clone())).await.expect("Failed to send async message");
                             for (msg, height, author, consensus_handler) in self.partition_delayed_msgs.clone() {
                                 debug!("sending messages to other side of partition");
                                 match author {

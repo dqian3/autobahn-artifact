@@ -13,6 +13,8 @@ use log::debug;
 #[cfg(feature = "benchmark")]
 use log::info;
 use network::{ReliableSender, SimpleSender};
+use primary::{PrimaryWorkerMessage, WorkerPrimaryMessage};
+use std::collections::HashSet;
 #[cfg(feature = "benchmark")]
 use std::convert::TryInto as _;
 use std::net::SocketAddr;
@@ -48,6 +50,13 @@ pub struct BatchMaker {
     current_batch_size: usize,
     /// A network sender to broadcast the batches to the other workers.
     network: SimpleSender,
+    // Receive async requests from primary core
+    rx_async: Receiver<(bool, HashSet<PublicKey>)>,
+    // Currently during asynchrony
+    during_simulated_asynchrony: bool,
+    // Partition public keys
+    partition_public_keys: HashSet<PublicKey>,
+
 }
 
 impl BatchMaker {
@@ -58,6 +67,7 @@ impl BatchMaker {
         //tx_message: Sender<QuorumWaiterMessage>, //sender channel to worker.QuorumWaiter
         tx_batch: Sender<Vec<u8>>,   // sender channel to worker.Processor
         workers_addresses: Vec<(PublicKey, SocketAddr)>,
+        rx_async: Receiver<(bool, HashSet<PublicKey>)>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -70,6 +80,9 @@ impl BatchMaker {
                 current_batch: Batch::with_capacity(batch_size * 2),
                 current_batch_size: 0,
                 network: SimpleSender::new(),
+                rx_async,
+                during_simulated_asynchrony: false,
+                partition_public_keys: HashSet::new(),
             }
             .run()
             .await;
@@ -96,6 +109,11 @@ impl BatchMaker {
 
                         timer.as_mut().reset(Instant::now() + Duration::from_millis(self.max_batch_delay));
                     }
+                },
+
+                Some((during_simulated_asynchrony, partition_public_keys)) = self.rx_async.recv() => {
+                    self.during_simulated_asynchrony = during_simulated_asynchrony;
+                    self.partition_public_keys = partition_public_keys;
                 },
 
                 // If the timer triggers, seal the batch even if it contains few transactions.
@@ -161,10 +179,19 @@ impl BatchMaker {
 
         //NEW:
         //Best-effort broadcast only. Any failure is correlated with the primary operating this node (running on same machine)
-        let (_, addresses): (Vec<_>, _) = self.workers_addresses.iter().cloned().unzip();
+        
         let bytes = Bytes::from(serialized.clone());
-        self.network.broadcast(addresses, bytes).await; 
-
+        if self.during_simulated_asynchrony {
+            debug!("BatchMaker: Simulated asynchrony enabled. Only sending to partitioned keys from broadcast");
+            let new_addresses: Vec<_> = self.workers_addresses.iter().filter(|(pk, _)| self.partition_public_keys.contains(pk)).map(|(_, addr)| addr).cloned().collect();
+            //let (_, addresses) = new_addresses.iter().cloned().unzip();
+            debug!("addresses is {:?}", new_addresses);
+            self.network.broadcast(new_addresses, bytes).await; 
+        } else {
+            let (_, addresses): (Vec<_>, _) = self.workers_addresses.iter().cloned().unzip();
+            self.network.broadcast(addresses, bytes).await; 
+        }
+        
         self.tx_batch.send(serialized).await.expect("Failed to deliver batch");
 
         //OLD:

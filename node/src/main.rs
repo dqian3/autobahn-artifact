@@ -109,6 +109,8 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
 
     // Channel for indicating commit and that new header should be proposed
     //let (tx_ticket, rx_ticket) = channel(CHANNEL_CAPACITY);
+    // Channel for sending whether async to the worker
+    let (tx_async, rx_async) = channel(CHANNEL_CAPACITY);
 
     // Check whether to run a primary, a worker, or an entire authority.
     //Note: Each node has at most one worker. Workers that don't include a primary (e.g. are not an entire authority) use PrimaryConnector to connect to a designated primary.
@@ -136,6 +138,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 rx_pushdown_cert,
                 rx_request_header_sync,
                 tx_output,
+                tx_async,
             );
             /*Consensus::spawn(
                 name,
@@ -162,7 +165,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 .unwrap()
                 .parse::<WorkerId>()
                 .context("The worker id must be a positive integer")?;
-            Worker::spawn(keypair.name, id, committee, parameters, store);
+            Worker::spawn(keypair.name, id, committee, parameters, store, rx_async);
         }
         _ => unreachable!(),
     }

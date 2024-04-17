@@ -17,11 +17,12 @@ use crate::synchronizer::Synchronizer;
 use async_trait::async_trait;
 use bytes::Bytes;
 use config::{Committee, Parameters, WorkerId};
-use crypto::{Digest, PublicKey, SignatureService};
+use crypto::{Digest, Hash, PublicKey, SignatureService};
 use futures::sink::SinkExt as _;
 use log::info;
 use network::{MessageHandler, Receiver as NetworkReceiver, Writer};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::error::Error;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -90,6 +91,7 @@ impl Primary {
         _rx_pushdown_cert: Receiver<Certificate>,
         rx_request_header_sync: Receiver<Digest>,
         tx_output: Sender<Header>,
+        tx_async: Sender<(bool, HashSet<PublicKey>)>,
     ) {
         let (tx_others_digests, rx_others_digests) = channel(CHANNEL_CAPACITY);
         let (tx_our_digests, rx_our_digests) = channel(CHANNEL_CAPACITY);
@@ -218,6 +220,7 @@ impl Primary {
             parameters.affected_nodes,
             parameters.egress_penalty,
             parameters.use_exponential_timeouts,
+            tx_async,
         );
 
         Committer::spawn(committee.clone(), store.clone(), parameters.gc_depth, rx_mempool, rx_committer, rx_commit, tx_output, synchronizer);
