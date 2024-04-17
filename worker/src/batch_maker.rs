@@ -152,12 +152,14 @@ impl BatchMaker {
                 () = &mut timer1 => {
                     debug!("BatchMaker: partition delay timer 1 triggered");
                     self.during_simulated_asynchrony = true;
+                    timer1.as_mut().reset(Instant::now() + Duration::from_secs(100));
                 },
 
                 // If the timer triggers, seal the batch even if it contains few transactions.
                 () = &mut timer2 => {
                     debug!("BatchMaker: partition delay timer 2 triggered");
                     self.during_simulated_asynchrony = false;
+                    timer2.as_mut().reset(Instant::now() + Duration::from_secs(100));
                 },
 
             }
