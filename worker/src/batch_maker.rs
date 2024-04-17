@@ -71,6 +71,7 @@ impl BatchMaker {
         workers_addresses: Vec<(PublicKey, SocketAddr)>,
         rx_async: Receiver<(bool, HashSet<PublicKey>)>,
         rx_async_real: Receiver<PrimaryWorkerMessage>,
+        partition_public_keys: HashSet<PublicKey>,
     ) {
         tokio::spawn(async move {
             Self {
@@ -85,7 +86,7 @@ impl BatchMaker {
                 network: SimpleSender::new(),
                 rx_async,
                 during_simulated_asynchrony: false,
-                partition_public_keys: HashSet::new(),
+                partition_public_keys,
                 rx_async_real,
             }
             .run()
@@ -97,6 +98,10 @@ impl BatchMaker {
     async fn run(&mut self) {
         let timer = sleep(Duration::from_millis(self.max_batch_delay));
         tokio::pin!(timer);
+        let timer1 = sleep(Duration::from_secs(10));
+        tokio::pin!(timer1);
+        let timer2 = sleep(Duration::from_secs(30));
+        tokio::pin!(timer2);
         let mut current_time = Instant::now();
 
         loop {
@@ -141,6 +146,18 @@ impl BatchMaker {
 
                     current_time = Instant::now();
                     timer.as_mut().reset(Instant::now() + Duration::from_millis(self.max_batch_delay));
+                },
+
+                // If the timer triggers, seal the batch even if it contains few transactions.
+                () = &mut timer1 => {
+                    debug!("BatchMaker: partition delay timer 1 triggered");
+                    self.during_simulated_asynchrony = true;
+                },
+
+                // If the timer triggers, seal the batch even if it contains few transactions.
+                () = &mut timer2 => {
+                    debug!("BatchMaker: partition delay timer 2 triggered");
+                    self.during_simulated_asynchrony = false;
                 },
 
             }
