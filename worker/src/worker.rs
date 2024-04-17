@@ -12,7 +12,7 @@ use bytes::Bytes;
 use config::{Committee, Parameters, WorkerId};
 use crypto::{Digest, PublicKey};
 use futures::sink::SinkExt as _;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use network::{MessageHandler, Receiver, Writer};
 use primary::PrimaryWorkerMessage;
 use serde::{Deserialize, Serialize};
@@ -330,11 +330,14 @@ impl MessageHandler for PrimaryReceiverHandler {
             Err(e) => error!("Failed to deserialize primary message: {}", e),
             Ok(message) => {
                 match message {
-                    PrimaryWorkerMessage::Async(..) => self
+                    PrimaryWorkerMessage::Async(..) => {
+                        debug!("Received async message from primary message handler");
+                        self
                         .tx_batch_maker
                         .send(message)
                         .await
-                        .expect("Failed to send synchronization message"),
+                        .expect("Failed to send async message")
+                    },
                     _ => self
                         .tx_synchronizer
                         .send(message)
