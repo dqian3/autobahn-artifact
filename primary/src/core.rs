@@ -2668,6 +2668,7 @@ impl Core {
                         }
 
                         if self.current_effect_type == AsyncEffectType::Partition {
+                            debug!("start partition updating batch maker");
                             self.tx_worker_async_channel.send((true, self.partition_public_keys.clone())).await.expect("Failed to send async message");
                         }
                     }

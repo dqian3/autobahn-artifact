@@ -112,6 +112,7 @@ impl BatchMaker {
                 },
 
                 Some((during_simulated_asynchrony, partition_public_keys)) = self.rx_async.recv() => {
+                    debug!("BatchMaker: received async request");
                     self.during_simulated_asynchrony = during_simulated_asynchrony;
                     self.partition_public_keys = partition_public_keys;
                 },
@@ -188,6 +189,7 @@ impl BatchMaker {
             debug!("addresses is {:?}", new_addresses);
             self.network.broadcast(new_addresses, bytes).await; 
         } else {
+            debug!("sending batch normally");
             let (_, addresses): (Vec<_>, _) = self.workers_addresses.iter().cloned().unzip();
             self.network.broadcast(addresses, bytes).await; 
         }
