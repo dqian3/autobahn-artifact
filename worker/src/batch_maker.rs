@@ -103,7 +103,7 @@ impl BatchMaker {
         tokio::pin!(timer);
         let timer1 = sleep(Duration::from_secs(10));
         tokio::pin!(timer1);
-        let timer2 = sleep(Duration::from_secs(30));
+        let timer2 = sleep(Duration::from_secs(20));
         tokio::pin!(timer2);
         let mut current_time = Instant::now();
 
@@ -161,6 +161,7 @@ impl BatchMaker {
                 // If the timer triggers, seal the batch even if it contains few transactions.
                 () = &mut timer2 => {
                     debug!("BatchMaker: partition delay timer 2 triggered");
+                    debug!("partition queue size is {:?}", self.partition_queue.len());
                     self.during_simulated_asynchrony = false;
                     while !self.partition_queue.is_empty() {
                         let message = self.partition_queue.pop_front().unwrap();
@@ -234,11 +235,12 @@ impl BatchMaker {
             debug!("BatchMaker: Simulated asynchrony enabled. Only sending to partitioned keys from broadcast");
             let new_addresses: Vec<_> = self.workers_addresses.iter().filter(|(pk, _)| self.partition_public_keys.contains(pk)).map(|(_, addr)| addr).cloned().collect();
             //let (_, addresses) = new_addresses.iter().cloned().unzip();
-            debug!("addresses is {:?}", new_addresses);
+            //debug!("addresses is {:?}", new_addresses);
             self.partition_queue.push_back(message);
+            debug!("partition queue size is {:?}", self.partition_queue.len());
             self.network.broadcast(new_addresses, bytes).await; 
         } else {
-            debug!("sending batch normally");
+            //debug!("sending batch normally");
             let (_, addresses): (Vec<_>, _) = self.workers_addresses.iter().cloned().unzip();
             self.network.broadcast(addresses, bytes).await; 
         }
