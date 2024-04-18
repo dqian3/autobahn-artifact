@@ -1790,15 +1790,7 @@ impl Core {
                         self.timer_futures.push(Box::pin(timer));
                         self.timers.insert((slot + self.k, 1));
 
-                        match commit_message {
-                            ConsensusMessage::Commit { slot: s, view: v, qc: q, proposals: p } => {
-                                // Send the commit message to the committer to order everything
-                                let prepare_msg = ConsensusMessage::Prepare { slot: s, view: v, tc: None, qc_ticket: None, proposals: p };
-                                debug!("adding prepare ticket {:?}", prepare_msg);
-                                self.prepare_tickets.push_front(prepare_msg);
-                            },
-                            _ => {}
-                        };
+                       
                     }
                 }
                 else{ //If slot + k has ticket ready (Prepare from s+k-1 + QC in s)
@@ -1825,6 +1817,17 @@ impl Core {
                         .await
                         .expect("Failed to send headers");
                 }
+
+                // add fake prepare message to the prepare tickets queue
+                match commit_message {
+                    ConsensusMessage::Commit { slot: s, view: v, qc: q, proposals: p } => {
+                        // Send the commit message to the committer to order everything
+                        let prepare_msg = ConsensusMessage::Prepare { slot: s, view: v, tc: None, qc_ticket: None, proposals: p };
+                        debug!("adding fake prepare ticket {:?}", prepare_msg);
+                        self.prepare_tickets.push_front(prepare_msg);
+                    },
+                    _ => {}
+                };
 
                 //Try waking any prepares that are waiting for a QC ticket
                 self.try_prepare_waiting_slots().await?;
