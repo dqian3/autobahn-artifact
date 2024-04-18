@@ -1824,6 +1824,8 @@ impl Core {
                         // Send the commit message to the committer to order everything
                         let prepare_msg = ConsensusMessage::Prepare { slot: s, view: v, tc: None, qc_ticket: None, proposals: p };
                         debug!("adding fake prepare ticket {:?}", prepare_msg);
+                        debug!("fake prepare proposals are {:?}", p);
+                        debug!("current proposals are {:?}", self.current_proposal_tips);
                         self.prepare_tickets.push_front(prepare_msg);
                     },
                     _ => {}
