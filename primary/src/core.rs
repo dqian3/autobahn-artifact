@@ -1831,7 +1831,7 @@ impl Core {
                         let prepare_msg = ConsensusMessage::Prepare { slot: *s, view: *v, tc: None, qc_ticket: None, proposals: p.clone() };
                         debug!("adding fake prepare ticket {:?}", prepare_msg);
                         debug!("fake prepare proposals are {:?}", p);
-                        debug!("current proposals are {:?}", self.current_proposal_tips);
+                        debug!("current proposals are {:?}", self.current_certified_tips);
                         self.prepare_tickets.push_front(prepare_msg);
                     },
                     _ => {}
