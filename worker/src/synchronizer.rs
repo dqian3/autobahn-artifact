@@ -6,8 +6,10 @@ use crypto::{Digest, PublicKey};
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::stream::StreamExt as _;
 use log::{debug, error};
-//use network::ReliableSender;
-use network::SimpleSender;
+use primary::Height;
+use network::ReliableSender;
+use network::CancelHandler;
+//use network::SimpleSender;
 use primary::PrimaryWorkerMessage;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -42,8 +44,8 @@ pub struct Synchronizer {
     /// Input channel to receive the commands from the primary.
     rx_message: Receiver<PrimaryWorkerMessage>,
     /// A network sender to send requests to the other workers.
-    network: SimpleSender,
-    //network: ReliableSender,
+    //network: SimpleSender,
+    network: ReliableSender,
     /// Loosely keep track of the primary's round number (only used for cleanup).
     round: Round,
     /// Keeps the digests (of batches) that are waiting to be processed by the primary. Their
@@ -51,7 +53,7 @@ pub struct Synchronizer {
     /// It also keeps the round number and a timestamp (`u128`) of each request we sent.
     pending: HashMap<Digest, (Round, Sender<()>, u128)>,
 
-    //cancel_handlers: HashMap<Height, Vec<CancelHandler>>,
+    cancel_handlers: HashMap<Digest, Vec<CancelHandler>>,
 }
 
 impl Synchronizer {
@@ -76,11 +78,11 @@ impl Synchronizer {
                 sync_retry_delay,
                 sync_retry_nodes,
                 rx_message,
-                network: SimpleSender::new(),
-                //network: ReliableSender::new(),
+                //network: SimpleSender::new(),
+                network: ReliableSender::new(),
                 round: Round::default(),
                 pending: HashMap::new(),
-                //cancel_handlers: Hash
+                cancel_handlers: HashMap::new(),
             }
             .run()
             .await;
@@ -159,18 +161,21 @@ impl Synchronizer {
                                 continue;
                             }
                         };
-                        let message = WorkerMessage::BatchRequest(missing, self.name);
+                        let message = WorkerMessage::BatchRequest(missing.clone(), self.name);
                         let serialized = bincode::serialize(&message).expect("Failed to serialize our own message");
+
+                        debug!("Requesting sync for missing {:?}, address is {:?}", missing, address);
                         
-                        self.network.send(address, Bytes::from(serialized)).await;
-                        /*self.cancel_handlers
-                            .entry(self.id) 
+                        let handler = self.network.send(address, Bytes::from(serialized)).await;
+                        self.cancel_handlers
+                            .entry(Digest::default()) 
                             .or_insert_with(Vec::new)
-                            .push(handler);*/
+                            .push(handler);
+                        
                     },
                     PrimaryWorkerMessage::Cleanup(round) => {
                         // Keep track of the primary's round number.
-                        self.round = round;
+                        /*self.round = round;
 
                         // Cleanup internal state.
                         if self.round < self.gc_depth {
@@ -183,7 +188,7 @@ impl Synchronizer {
                                 let _ = handler.send(()).await;
                             }
                         }
-                        self.pending.retain(|_, (r, _, _)| r > &mut gc_round);
+                        self.pending.retain(|_, (r, _, _)| r > &mut gc_round);*/
                     },
                     _ => {},
                 },
@@ -193,6 +198,7 @@ impl Synchronizer {
                     Ok(Some(digest)) => {
                         // We got the batch, remove it from the pending list.
                         self.pending.remove(&digest);
+                        //self.cancel_handlers.remove(&digest);
                     },
                     Ok(None) => {
                         // The sync request for this batch has been canceled.
@@ -218,16 +224,16 @@ impl Synchronizer {
                         }
                     }
                     if !retry.is_empty() {
-                        let addresses = self.committee
+                        /*let addresses = self.committee
                             .others_workers(&self.name, &self.id)
                             .iter().map(|(_, address)| address.worker_to_worker)
                             .collect();
                         let message = WorkerMessage::BatchRequest(retry, self.name);
                         let serialized = bincode::serialize(&message).expect("Failed to serialize our own message");
-                        self.network
+                        let handler = self.network
                             .lucky_broadcast(addresses, Bytes::from(serialized), self.sync_retry_nodes)
                             .await;
-                        /*self.cancel_handlers
+                        self.cancel_handlers
                             .entry(self.id) 
                             .or_insert_with(Vec::new)
                             .push(handler);*/
