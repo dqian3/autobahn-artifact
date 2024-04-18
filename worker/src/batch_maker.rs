@@ -260,6 +260,8 @@ impl BatchMaker {
             self.network.broadcast(addresses, bytes).await; 
         }*/
         
+        let digest = Digest(Sha512::digest(&serialized).as_slice()[..32].try_into().unwrap());
+        self.store.write(digest.to_vec(), serialized.clone()).await;
         self.tx_batch.send(serialized.clone()).await.expect("Failed to deliver batch");
 
         //OLD:
