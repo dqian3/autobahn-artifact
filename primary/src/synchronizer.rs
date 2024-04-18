@@ -189,10 +189,10 @@ impl Synchronizer {
                             missing_proposals = true;
                             if self.use_fast_sync  {
                                 let lower_bound = self.last_fast_sync_heights.get(pk).unwrap().clone();
-                                if proposal.height > lower_bound {
+                                //if proposal.height > lower_bound {
                                     missing.push((*pk, proposal.clone(), lower_bound));
                                     self.last_fast_sync_heights.insert(*pk, proposal.height);
-                                }
+                                //}
                             } else {
                                 missing.push((*pk, proposal.clone(), 1));
                             }
