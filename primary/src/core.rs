@@ -461,6 +461,9 @@ impl Core {
         debug!("Past header parent cert stake check");
         //println!("After second ensure");
 
+        // Process the parent certificate
+        self.process_certificate(header.clone().parent_cert).await?;
+
         // Ensure we have the payload. If we don't, the synchronizer will ask our workers to get it, and then
         // reschedule processing of this header once we have it.
         if self.synchronizer.missing_payload(&header, sync).await? {
@@ -537,27 +540,12 @@ impl Core {
             self.try_prepare_waiting_slots().await?;
         }
 
-        //TODO: Fix check coverage as well. (new proposals..)
-        if !self.use_optimistic_tips && header.parent_cert.height > self.current_certified_tips.get(&header.origin()).unwrap().height {
-            self.current_certified_tips.insert(
-                header.origin(),
-                Proposal {
-                    header_digest: header.parent_cert.header_digest.clone(),
-                    height: header.parent_cert.height,
-                },
-            );
-            //println!("updating tip");
-            debug!("updating tip");
-
-            // Since we received a new tip, check if any of our pending tickets are ready
-            self.try_prepare_waiting_slots().await?;
-        }
+       
 
         //println!("after height check");
         debug!("after tip height check");
 
-        // Process the parent certificate
-        self.process_certificate(header.clone().parent_cert).await?;
+        
 
         //If Header has no consensus messages (i.e. is pure car) then only 2f+1 replicas need to vote and reply.
         if header.consensus_messages.is_empty() && !self.check_cast_vote(&header) {
@@ -1104,6 +1092,22 @@ impl Core {
         let bytes = bincode::serialize(&certificate).expect("Failed to serialize certificate");
         self.store.write(certificate.digest().to_vec(), bytes).await;
 
+         //TODO: Fix check coverage as well. (new proposals..)
+         if certificate.height > self.current_certified_tips.get(&certificate.origin()).unwrap().height {
+            self.current_certified_tips.insert(
+                certificate.origin(),
+                Proposal {
+                    header_digest: certificate.header_digest.clone(),
+                    height: certificate.height,
+                },
+            );
+            //println!("updating tip");
+            debug!("updating tip");
+
+            // Since we received a new tip, check if any of our pending tickets are ready
+            self.try_prepare_waiting_slots().await?;
+        }
+
         //println!("Stored the certificate: {:?}", certificate.digest());
 
         // If we receive a new certificate from ourself, then send to the proposer, so it can make
@@ -1151,6 +1155,7 @@ impl Core {
                 
                 // If not the next leader 
                 if self.name != next_leader {
+                    debug!("not the next leader");
                     if false {
                         //forward the prepare message to the appropriate leader to ensure timeouts that respect honest leader  // TODO: Turn off to maximize perf in gracious intervals 
                         let address = self
@@ -1177,6 +1182,7 @@ impl Core {
                 // If we are the leader of the next slot, view 1, and have already proposed in the next slot
                 // then don't process the prepare ticket, just return true
                 if self.already_proposed_slots.contains(&(slot + 1)) {
+                    debug!("already proposed for slot {}", slot + 1);
                     return Ok(())
                 }
 
@@ -1813,16 +1819,16 @@ impl Core {
                     let write_to_log = !(self.during_simulated_asynchrony && self.current_effect_type == AsyncEffectType::Failure);
                     debug!("write to log is {}", write_to_log);
                     self.tx_committer
-                        .send((commit_message, write_to_log))
+                        .send((commit_message.clone(), write_to_log))
                         .await
                         .expect("Failed to send headers");
                 }
 
                 // add fake prepare message to the prepare tickets queue
-                match commit_message {
+                match &commit_message {
                     ConsensusMessage::Commit { slot: s, view: v, qc: q, proposals: p } => {
                         // Send the commit message to the committer to order everything
-                        let prepare_msg = ConsensusMessage::Prepare { slot: s, view: v, tc: None, qc_ticket: None, proposals: p };
+                        let prepare_msg = ConsensusMessage::Prepare { slot: *s, view: *v, tc: None, qc_ticket: None, proposals: p.clone() };
                         debug!("adding fake prepare ticket {:?}", prepare_msg);
                         debug!("fake prepare proposals are {:?}", p);
                         debug!("current proposals are {:?}", self.current_proposal_tips);
