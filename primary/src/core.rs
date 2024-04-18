@@ -1794,6 +1794,7 @@ impl Core {
                             ConsensusMessage::Commit { slot: s, view: v, qc: q, proposals: p } => {
                                 // Send the commit message to the committer to order everything
                                 let prepare_msg = ConsensusMessage::Prepare { slot: s, view: v, tc: None, qc_ticket: None, proposals: p };
+                                debug!("adding prepare ticket {:?}", prepare_msg);
                                 self.prepare_tickets.push_front(prepare_msg);
                             },
                             _ => {}
