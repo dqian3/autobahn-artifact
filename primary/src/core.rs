@@ -1694,8 +1694,8 @@ impl Core {
         debug!("current proposals {:?}", current_proposals);
         debug!("prepare proposal tips {:?}", prepare_proposals);
 
-        //new_tips.len() as u32 >= self.committee.quorum_threshold()
-        new_tips.len() as u32 >= self.committee.validity_threshold()
+        new_tips.len() as u32 >= self.committee.quorum_threshold()
+        //new_tips.len() as u32 >= self.committee.validity_threshold()
     }
 
     #[async_recursion]
