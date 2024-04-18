@@ -236,12 +236,12 @@ impl BatchMaker {
         //NEW:
         //Best-effort broadcast only. Any failure is correlated with the primary operating this node (running on same machine)
         
-        /*let bytes = Bytes::from(serialized.clone());
+        let bytes = Bytes::from(serialized.clone());
         let digest = Digest(Sha512::digest(&serialized).as_slice()[..32].try_into().unwrap());
 
         // Store the batch.
         self.store.write(digest.to_vec(), serialized.clone()).await;
-        self.tx_batch.send(serialized).await.expect("Failed to deliver batch");*/
+        self.tx_batch.send(serialized).await.expect("Failed to deliver batch");
         if self.during_simulated_asynchrony {
             debug!("BatchMaker: Simulated asynchrony enabled. Only sending to partitioned keys from broadcast");
             let new_addresses: Vec<_> = self.workers_addresses.iter().filter(|(pk, _)| self.partition_public_keys.contains(pk)).map(|(_, addr)| addr).cloned().collect();
@@ -256,7 +256,7 @@ impl BatchMaker {
             self.network.broadcast(addresses, bytes).await; 
         }
         
-        self.tx_batch.send(serialized).await.expect("Failed to deliver batch");
+        //self.tx_batch.send(serialized).await.expect("Failed to deliver batch");
 
         //OLD:
         //This uses reliable sender. The receiver worker will reply with an ack. The Reply Handler is passed to Quorum Waiter.
