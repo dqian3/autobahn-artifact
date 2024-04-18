@@ -213,7 +213,8 @@ impl HeaderWaiter {
                             let fut = Self::waiter(wait_for, header, rx_cancel);
                             waiting.push(fut);
 
-                            if force_sync {
+                            if true {
+                            //if force_sync {
                                 // Ensure we didn't already send a sync request for these parents.
                                 let mut requires_sync = HashMap::new();
                                 for (digest, worker_id) in missing.into_iter() {
