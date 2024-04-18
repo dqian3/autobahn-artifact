@@ -1126,7 +1126,7 @@ impl Core {
     #[async_recursion]
     async fn try_prepare_waiting_slots(&mut self) -> DagResult<()> {
         //Could there even be multiple prepares? Bounding l <= 4 should make it so that each replica can only be the original leader for one slot? VC leaders are not blocked on coverage (they just propose current tips)
-    
+        debug!("prepare tickets {:?}", self.prepare_tickets.len());
         for i in 0..self.prepare_tickets.len() {
             //println!("checking prepare ticket");
             // Get the first buffered prepare ticket
@@ -1244,6 +1244,7 @@ impl Core {
                     // Not enough coverage, add this prepare ticket to the pending queue
                     // until enough new proposals have arrived
                     //println!("prepare ticket not ready");
+                    debug!("adding prepare ticket to queue for message {:?}", prepare_message);
                     self.prepare_tickets.push_back(prepare_message.clone());
                     return Ok(());
                 }
@@ -1606,6 +1607,7 @@ impl Core {
                     } else {
                         debug!("buffered prepare ticket for slot {}, not commit contains is {}, not timer contains is {}, commit contains key is {}", slot + 1,
                             !self.committed_slots.contains_key(&(slot+1)), !self.timers.contains(&(slot + 1, 1)), self.committed_slots.contains_key(&(slot+1 - self.k)));
+                        
                     }
                 }
 
