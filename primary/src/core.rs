@@ -1789,6 +1789,15 @@ impl Core {
                         let timer = Timer::new(slot + self.k, 1, self.timeout_delay);
                         self.timer_futures.push(Box::pin(timer));
                         self.timers.insert((slot + self.k, 1));
+
+                        match commit_message {
+                            ConsensusMessage::Commit { slot: s, view: v, qc: q, proposals: p } => {
+                                // Send the commit message to the committer to order everything
+                                let prepare_msg = ConsensusMessage::Prepare { slot: s, view: v, tc: None, qc_ticket: None, proposals: p };
+                                self.prepare_tickets.push_front(prepare_msg);
+                            },
+                            _ => {}
+                        };
                     }
                 }
                 else{ //If slot + k has ticket ready (Prepare from s+k-1 + QC in s)
