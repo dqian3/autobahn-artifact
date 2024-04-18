@@ -28,8 +28,8 @@ pub struct QuorumWaiter {
     stake: Stake,
     /// Input Channel to receive commands.
     rx_message: Receiver<QuorumWaiterMessage>,
-    /// Channel to deliver batches for which we have enough acknowledgements.
-    tx_batch: Sender<SerializedBatchMessage>,
+    // Channel to deliver batches for which we have enough acknowledgements.
+    //tx_batch: Sender<SerializedBatchMessage>,
 }
 
 impl QuorumWaiter {
@@ -38,14 +38,14 @@ impl QuorumWaiter {
         committee: Committee,
         stake: Stake,
         rx_message: Receiver<QuorumWaiterMessage>,
-        tx_batch: Sender<Vec<u8>>,
+        //tx_batch: Sender<Vec<u8>>,
     ) {
         tokio::spawn(async move {
             Self {
                 committee,
                 stake,
                 rx_message,
-                tx_batch,
+                //tx_batch,
             }
             .run()
             .await;
@@ -74,7 +74,7 @@ impl QuorumWaiter {
             // Wait for the first 2f nodes to send back an Ack. Then we consider the batch
             // delivered and we send its digest to the primary (that will include it into
             // the dag). This should reduce the amount of synching.
-            let mut total_stake = self.stake;
+            /*let mut total_stake = self.stake;
             while let Some(stake) = wait_for_quorum.next().await {   //Not sure how next() works here exactly (not part of documentation)? But seems to just return the next waiter that has yielded.
                 total_stake += stake;
                 if total_stake >= self.committee.quorum_threshold() {
@@ -84,7 +84,7 @@ impl QuorumWaiter {
                         .expect("Failed to deliver batch");
                     break;
                 }
-            }
+            }*/
         }
     }
 }

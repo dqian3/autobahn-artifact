@@ -145,7 +145,7 @@ impl Worker {
     /// Spawn all tasks responsible to handle clients transactions.
     fn handle_clients_transactions(&self, tx_primary: Sender<SerializedBatchDigestMessage>, rx_batch_maker_async: OtherReceiver<(bool, HashSet<PublicKey>)>, rx_batch_maker_async_real: OtherReceiver<PrimaryWorkerMessage>) {  //tx_primary: channel between processor and PrimaryConnector
         let (tx_batch_maker, rx_batch_maker) = channel(CHANNEL_CAPACITY);      //channel between TxReceive (Client) and batch maker
-        //let (tx_quorum_waiter, rx_quorum_waiter) = channel(CHANNEL_CAPACITY);  //channel between batch maker and quorum waiter
+        let (tx_quorum_waiter, rx_quorum_waiter) = channel(CHANNEL_CAPACITY);  //channel between batch maker and quorum waiter
         let (tx_processor, rx_processor) = channel(CHANNEL_CAPACITY);          //channel between quorum waiter and processor
 
         // We first receive clients' transactions from the network.
@@ -194,7 +194,7 @@ impl Worker {
             self.parameters.batch_size,
             self.parameters.max_batch_delay,
             /* rx_transaction */ rx_batch_maker,  //receiver channel to connect to TxReceiverHandler 
-            // tx_message tx_quorum_waiter,   //sender channel to connect to quorum waiter
+            /*tx_message*/ tx_quorum_waiter,   //sender channel to connect to quorum waiter
            /* tx_batch */ tx_processor,  //sender channel to connect to processor
             /* workers_addresses */
             self.committee
@@ -210,12 +210,12 @@ impl Worker {
 
         // // The `QuorumWaiter` waits for 2f authorities to acknowledge reception of the batch. It then forwards
         // // the batch to the `Processor`.
-        // QuorumWaiter::spawn(
-        //     self.committee.clone(),
-        //     /* stake */ self.committee.stake(&self.name),
-        //     /* rx_message */ rx_quorum_waiter, //receiver channel to connect to batch maker.
-        //     /* tx_batch */ tx_processor,  //sender channel to connect to processor
-        // );
+        QuorumWaiter::spawn(
+             self.committee.clone(),
+             /* stake */ self.committee.stake(&self.name),
+             /* rx_message */ rx_quorum_waiter, //receiver channel to connect to batch maker.
+             /* tx_batch */ //tx_processor,  //sender channel to connect to processor
+        );
 
         // The `Processor` hashes and stores the batch. It then forwards the batch's digest to the `PrimaryConnector`
         // that will send it to our primary machine.

@@ -65,6 +65,8 @@ pub struct BatchMaker {
     partition_queue: VecDeque<WorkerMessage>,
     // Store
     store: Store,
+    // Quorum waiter
+    tx_message: Sender<QuorumWaiterMessage>
 
 }
 
@@ -73,7 +75,7 @@ impl BatchMaker {
         batch_size: usize,
         max_batch_delay: u64,
         rx_transaction: Receiver<Transaction>, //receiver channel from worker.TxReceiverHandler 
-        //tx_message: Sender<QuorumWaiterMessage>, //sender channel to worker.QuorumWaiter
+        tx_message: Sender<QuorumWaiterMessage>, //sender channel to worker.QuorumWaiter
         tx_batch: Sender<Vec<u8>>,   // sender channel to worker.Processor
         workers_addresses: Vec<(PublicKey, SocketAddr)>,
         rx_async: Receiver<(bool, HashSet<PublicKey>)>,
@@ -86,7 +88,7 @@ impl BatchMaker {
                 batch_size,
                 max_batch_delay,
                 rx_transaction,
-                //tx_message, //previously forwarded batch to Quorum_waiter; now skipping this step.
+                tx_message, //previously forwarded batch to Quorum_waiter; now skipping this step.
                 tx_batch,  
                 workers_addresses,
                 current_batch: Batch::with_capacity(batch_size * 2),
@@ -171,7 +173,7 @@ impl BatchMaker {
                     debug!("BatchMaker: partition delay timer 2 triggered");
                     debug!("partition queue size is {:?}", self.partition_queue.len());
                     self.during_simulated_asynchrony = false;
-                    /*while !self.partition_queue.is_empty() {
+                    while !self.partition_queue.is_empty() {
                         let message = self.partition_queue.pop_front().unwrap();
                         let serialized = bincode::serialize(&message).expect("Failed to serialize our own batch");
                         let bytes = Bytes::from(serialized.clone());
@@ -180,7 +182,7 @@ impl BatchMaker {
                         debug!("addresses is {:?}", new_addresses);
                         self.partition_queue.push_back(message);
                         self.network.broadcast(new_addresses, bytes).await; 
-                    }*/
+                    }
                     timer2.as_mut().reset(Instant::now() + Duration::from_secs(100));
                 },
 
@@ -243,7 +245,7 @@ impl BatchMaker {
 
         // Store the batch.
         self.store.write(digest.to_vec(), serialized.clone()).await;
-        self.tx_batch.send(serialized).await.expect("Failed to deliver batch");
+        self.tx_batch.send(serialized.clone()).await.expect("Failed to deliver batch");
         if self.during_simulated_asynchrony {
             debug!("BatchMaker: Simulated asynchrony enabled. Only sending to partitioned keys from broadcast");
             let new_addresses: Vec<_> = self.workers_addresses.iter().filter(|(pk, _)| self.partition_public_keys.contains(pk)).map(|(_, addr)| addr).cloned().collect();
@@ -262,17 +264,17 @@ impl BatchMaker {
 
         //OLD:
         //This uses reliable sender. The receiver worker will reply with an ack. The Reply Handler is passed to Quorum Waiter.
-        // let (names, addresses): (Vec<_>, _) = self.workers_addresses.iter().cloned().unzip();
-        // let bytes = Bytes::from(serialized.clone());
-        // let handlers = self.network.broadcast(addresses, bytes).await; 
+        let (names, addresses): (Vec<_>, _) = self.workers_addresses.iter().cloned().unzip();
+        let bytes = Bytes::from(serialized.clone());
+        let handlers = self.network.broadcast(addresses, bytes).await; 
 
         // // Send the batch through the deliver channel for further processing.
-        // self.tx_message
-        //     .send(QuorumWaiterMessage {
-        //         batch: serialized,
-        //         handlers: names.into_iter().zip(handlers.into_iter()).collect(),
-        //     })
-        //     .await
-        //     .expect("Failed to deliver batch");
+        self.tx_message
+             .send(QuorumWaiterMessage {
+                batch: serialized,
+                 handlers: names.into_iter().zip(handlers.into_iter()).collect(),
+             })
+             .await
+            .expect("Failed to deliver batch");
     }
 }
