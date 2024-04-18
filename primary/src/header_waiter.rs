@@ -229,10 +229,13 @@ impl HeaderWaiter {
                                         .expect("Author of valid header is not in the committee")
                                         .primary_to_worker;
                                     debug!("Sent syncbatches message for height {}", round);
+                                    let addresses = self.committee.others_workers(&self.name, &worker_id).iter().map(|(_, x)| x.primary_to_worker).collect();
+                                    
                                     let message = PrimaryWorkerMessage::Synchronize(digests, author);
                                     let bytes = bincode::serialize(&message)
                                         .expect("Failed to serialize batch sync request");
-                                    self.network.send(address, Bytes::from(bytes)).await;
+                                    //self.network.send(address, Bytes::from(bytes)).await;
+                                    self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;
                                 }
                             }
                         }
@@ -435,7 +438,10 @@ impl HeaderWaiter {
                                         .primary_to_primary;
                                     let message = PrimaryMessage::FastSyncHeadersRequest(requires_sync, self.name);
                                     let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                                    self.network.send(address, Bytes::from(bytes)).await;
+                                    //self.network.send(address, Bytes::from(bytes)).await;
+                                    /*let addresses = self.committee.others_primaries(&self.name).iter().map(|(_, x)| x.primary_to_primary).collect();
+                                    self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;*/
+                                    
                                 }
                             } else {
                                 // Ensure we didn't already sent a sync request for these parents.
@@ -457,7 +463,9 @@ impl HeaderWaiter {
                                         .primary_to_primary;
                                     let message = PrimaryMessage::HeadersRequest(requires_sync, self.name);
                                     let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                                    self.network.send(address, Bytes::from(bytes)).await;
+                                    //self.network.send(address, Bytes::from(bytes)).await;
+                                    /*let addresses = self.committee.others_primaries(&self.name).iter().map(|(_, x)| x.primary_to_primary).collect();
+                                    self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;*/
                                 }
                             }                            
                         }
