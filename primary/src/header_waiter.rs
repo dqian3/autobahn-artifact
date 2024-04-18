@@ -229,13 +229,12 @@ impl HeaderWaiter {
                                         .expect("Author of valid header is not in the committee")
                                         .primary_to_worker;
                                     debug!("Sent syncbatches message for height {}", round);
-                                    let addresses = self.committee.others_workers(&self.name, &worker_id).iter().map(|(_, x)| x.primary_to_worker).collect();
                                     
                                     let message = PrimaryWorkerMessage::Synchronize(digests, author);
                                     let bytes = bincode::serialize(&message)
                                         .expect("Failed to serialize batch sync request");
-                                    //self.network.send(address, Bytes::from(bytes)).await;
-                                    self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;
+                                    self.network.send(address, Bytes::from(bytes)).await;
+                                    //self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;
                                 }
                             }
                         }
