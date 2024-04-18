@@ -151,6 +151,7 @@ impl Committer {
                                 for header in headers {
                                     if write_to_log {
                                         info!("Committed {}", header);
+                                        debug!("Committed header payload key size {:?}", header.payload.keys().len());
                                         #[cfg(feature = "benchmark")]
                                         for digest in header.payload.keys() {
                                             // NOTE: This log entry is used to compute performance.
