@@ -1094,6 +1094,7 @@ impl Core {
 
          //TODO: Fix check coverage as well. (new proposals..)
          if certificate.height > self.current_certified_tips.get(&certificate.origin()).unwrap().height {
+            debug!("updating tip from author {:?}, from height {:?} to height {:?}", certificate.origin(), self.current_certified_tips.get(&certificate.origin()).unwrap(), certificate.height);
             self.current_certified_tips.insert(
                 certificate.origin(),
                 Proposal {
@@ -1102,7 +1103,7 @@ impl Core {
                 },
             );
             //println!("updating tip");
-            debug!("updating tip");
+            
 
             // Since we received a new tip, check if any of our pending tickets are ready
             self.try_prepare_waiting_slots().await?;
@@ -1689,6 +1690,9 @@ impl Core {
             .iter()
             .filter(|(pk, proposal)| proposal.height > prepare_proposals.get(&pk).unwrap().height)
             .collect();
+
+        debug!("current proposals {:?}", current_proposals);
+        debug!("prepare proposal tips {:?}", prepare_proposals);
 
         new_tips.len() as u32 >= self.committee.quorum_threshold()
     }
