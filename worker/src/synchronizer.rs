@@ -136,6 +136,7 @@ impl Synchronizer {
                                     debug!("Requesting sync for batch {}", digest);
                                 },
                                 Ok(Some(_)) => {
+                                    debug!("already have batch {}", digest);
                                     // The batch arrived in the meantime: no need to request it.
                                 },
                                 Err(e) => {
