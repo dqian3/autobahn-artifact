@@ -212,7 +212,8 @@ impl HeaderWaiter {
                                 })
                                 .collect();
                             let (tx_cancel, rx_cancel) = channel(1);
-                            self.pending.insert(header_id, (round, tx_cancel));
+                            self.pending.insert(header_id.clone(), (round, tx_cancel));
+                            debug!("SyncBatches pending insert for header {}", header_id);
                             let fut = Self::waiter(wait_for, header, rx_cancel);
                             waiting.push(fut);
 
@@ -289,7 +290,8 @@ impl HeaderWaiter {
                             let mut wait_for = Vec::new();
                             wait_for.push((missing.to_vec(), self.store.clone()));
                             let (tx_cancel, rx_cancel) = channel(1);
-                            self.pending.insert(header_id, (height, tx_cancel));
+                            self.pending.insert(header_id.clone(), (height, tx_cancel));
+                            debug!("SyncParent pending insert for header {}", header_id);
                             let fut = Self::waiter(wait_for, header, rx_cancel);
                             waiting.push(fut);
 
@@ -372,7 +374,8 @@ impl HeaderWaiter {
                                             .map(|(_, x, _)| ({let mut opt_key = x.header_digest.to_vec(); opt_key.push(1); debug!("opt key is {:?}", opt_key); opt_key}, self.store.clone()))
                                             .collect();
                                         let (tx_cancel, rx_cancel) = channel(1);
-                                        self.pending.insert(id, (height, tx_cancel));
+                                        self.pending.insert(id.clone(), (height, tx_cancel));
+                                        debug!("SyncProposals pending insert for header {}", id);
                                         let fut = Self::optimistic_tip_waiter(wait_for_opt, (consensus_message, header), rx_cancel);
                                         debug!("adding waiter for optimistic tip");
                                         prepare_proposal_waiting.push(fut);
@@ -385,7 +388,8 @@ impl HeaderWaiter {
                                             .map(|(_, x, _)| (x.header_digest.to_vec(), self.store.clone()))
                                             .collect();
                                         let (tx_cancel, rx_cancel) = channel(1);
-                                        self.pending.insert(id, (height, tx_cancel));
+                                        self.pending.insert(id.clone(), (height, tx_cancel));
+                                        debug!("SyncProposals pending insert for header {}", id);
                                         let fut = Self::proposal_waiter(wait_for, (consensus_message, header), rx_cancel);
                                         //println!("created proposal waiter");
                                         debug!("normal proposal waiter");
@@ -401,7 +405,8 @@ impl HeaderWaiter {
                                         .map(|(_, x, _)| (x.header_digest.to_vec(), self.store.clone()))
                                         .collect();
                                     let (tx_cancel, rx_cancel) = channel(1);
-                                    self.pending.insert(id, (height, tx_cancel));
+                                    self.pending.insert(id.clone(), (height, tx_cancel));
+                                    debug!("SyncProposals pending insert for header {}", id);
                                     let fut = Self::proposal_waiter(wait_for, (consensus_message, header), rx_cancel);
                                     debug!("normal proposal waiter");
                                     //println!("created proposal waiter");
