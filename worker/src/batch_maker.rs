@@ -14,7 +14,7 @@ use log::debug;
 use log::info;
 use network::{ReliableSender, SimpleSender};
 use primary::{Primary, PrimaryWorkerMessage, WorkerPrimaryMessage};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 #[cfg(feature = "benchmark")]
 use std::convert::TryInto as _;
 use std::net::SocketAddr;
@@ -58,6 +58,8 @@ pub struct BatchMaker {
     partition_public_keys: HashSet<PublicKey>,
     // Receive real async requests
     rx_async_real: Receiver<PrimaryWorkerMessage>,
+    // Partition queue for batch requests
+    partition_queue: VecDeque<WorkerMessage>,
 
 }
 
@@ -88,6 +90,7 @@ impl BatchMaker {
                 during_simulated_asynchrony: false,
                 partition_public_keys,
                 rx_async_real,
+                partition_queue: VecDeque::new(),
             }
             .run()
             .await;
@@ -159,6 +162,16 @@ impl BatchMaker {
                 () = &mut timer2 => {
                     debug!("BatchMaker: partition delay timer 2 triggered");
                     self.during_simulated_asynchrony = false;
+                    while !self.partition_queue.is_empty() {
+                        let message = self.partition_queue.pop_front().unwrap();
+                        let serialized = bincode::serialize(&message).expect("Failed to serialize our own batch");
+                        let bytes = Bytes::from(serialized.clone());
+                        let new_addresses: Vec<_> = self.workers_addresses.iter().filter(|(pk, _)| !self.partition_public_keys.contains(pk)).map(|(_, addr)| addr).cloned().collect();
+                        //let (_, addresses) = new_addresses.iter().cloned().unzip();
+                        debug!("addresses is {:?}", new_addresses);
+                        self.partition_queue.push_back(message);
+                        self.network.broadcast(new_addresses, bytes).await; 
+                    }
                     timer2.as_mut().reset(Instant::now() + Duration::from_secs(100));
                 },
 
@@ -222,6 +235,7 @@ impl BatchMaker {
             let new_addresses: Vec<_> = self.workers_addresses.iter().filter(|(pk, _)| self.partition_public_keys.contains(pk)).map(|(_, addr)| addr).cloned().collect();
             //let (_, addresses) = new_addresses.iter().cloned().unzip();
             debug!("addresses is {:?}", new_addresses);
+            self.partition_queue.push_back(message);
             self.network.broadcast(new_addresses, bytes).await; 
         } else {
             debug!("sending batch normally");
