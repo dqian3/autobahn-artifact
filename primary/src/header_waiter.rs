@@ -197,6 +197,7 @@ impl HeaderWaiter {
 
                             // Ensure we sync only once per header.
                             if self.pending.contains_key(&header_id) {
+                                debug!("already pending for header {}", header_id);
                                 continue;
                             }
 
