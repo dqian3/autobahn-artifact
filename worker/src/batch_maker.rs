@@ -107,10 +107,10 @@ impl BatchMaker {
     async fn run(&mut self) {
         let timer = sleep(Duration::from_millis(self.max_batch_delay));
         tokio::pin!(timer);
-        /*let timer1 = sleep(Duration::from_secs(10));
+        let timer1 = sleep(Duration::from_secs(10));
         tokio::pin!(timer1);
         let timer2 = sleep(Duration::from_secs(30));
-        tokio::pin!(timer2);*/
+        tokio::pin!(timer2);
         let mut current_time = Instant::now();
 
         loop {
@@ -158,7 +158,7 @@ impl BatchMaker {
                 },
 
                 // If the timer triggers, seal the batch even if it contains few transactions.
-                /*() = &mut timer1 => {
+                () = &mut timer1 => {
                     debug!("BatchMaker: partition delay timer 1 triggered");
                     self.during_simulated_asynchrony = true;
                     timer1.as_mut().reset(Instant::now() + Duration::from_secs(100));
@@ -180,7 +180,7 @@ impl BatchMaker {
                         self.network.broadcast(new_addresses, bytes).await; 
                     }*/
                     timer2.as_mut().reset(Instant::now() + Duration::from_secs(100));
-                },*/
+                },
 
             }
 
@@ -247,7 +247,7 @@ impl BatchMaker {
             let new_addresses: Vec<_> = self.workers_addresses.iter().filter(|(pk, _)| self.partition_public_keys.contains(pk)).map(|(_, addr)| addr).cloned().collect();
             //let (_, addresses) = new_addresses.iter().cloned().unzip();
             //debug!("addresses is {:?}", new_addresses);
-            self.partition_queue.push_back(message);
+            //self.partition_queue.push_back(message);
             debug!("partition queue size is {:?}", self.partition_queue.len());
             self.network.broadcast(new_addresses, bytes).await; 
         } else {
