@@ -1830,7 +1830,7 @@ impl Core {
                 }
 
                 // add fake prepare message to the prepare tickets queue
-                match &commit_message {
+                /*match &commit_message {
                     ConsensusMessage::Commit { slot: s, view: v, qc: q, proposals: p } => {
                         // Send the commit message to the committer to order everything
                         let prepare_msg = ConsensusMessage::Prepare { slot: *s, view: *v, tc: None, qc_ticket: None, proposals: p.clone() };
@@ -1840,7 +1840,7 @@ impl Core {
                         self.prepare_tickets.push_front(prepare_msg);
                     },
                     _ => {}
-                };
+                };*/
 
                 //Try waking any prepares that are waiting for a QC ticket
                 self.try_prepare_waiting_slots().await?;
@@ -2218,10 +2218,10 @@ impl Core {
     }
 
     fn sanitize_header(&mut self, header: &Header) -> DagResult<()> {
-        ensure!(
+        /*ensure!(
             self.gc_round <= header.height,
             DagError::HeaderTooOld(header.id.clone(), header.height)
-        );
+        );*/
 
         // Verify the header's signature.
         header.verify(&self.committee)?;
@@ -2761,7 +2761,8 @@ impl Core {
                             self.network.broadcast(addresses, Bytes::from(bytes)).await;
 
                             for (msg, height, author, consensus_handler) in self.partition_delayed_msgs.clone() {
-                                debug!("sending messages to other side of partition");
+                                //debug!("sending messages to other side of partition");
+                                debug!("sending msg to other side of partition {:?}", msg);
                                 match author {
                                     Some(author) => self.send_msg_normal(msg, height, Some(author), consensus_handler).await,
                                     None => self.send_msg_partition(&msg, height, consensus_handler, false).await,
