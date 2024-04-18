@@ -195,9 +195,9 @@ impl HeaderWaiter {
                             let author = header.author;
 
                             // Ensure we sync only once per header.
-                            /*if self.pending.contains_key(&header_id) {
+                            if self.pending.contains_key(&header_id) {
                                 continue;
-                            }*/
+                            }
 
                             // Add the header to the waiter pool. The waiter will return it to when all
                             // its parents are in the store.

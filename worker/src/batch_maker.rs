@@ -173,7 +173,7 @@ impl BatchMaker {
                     debug!("BatchMaker: partition delay timer 2 triggered");
                     debug!("partition queue size is {:?}", self.partition_queue.len());
                     self.during_simulated_asynchrony = false;
-                    while !self.partition_queue.is_empty() {
+                    /*while !self.partition_queue.is_empty() {
                         let message = self.partition_queue.pop_front().unwrap();
                         let serialized = bincode::serialize(&message).expect("Failed to serialize our own batch");
                         let bytes = Bytes::from(serialized.clone());
@@ -182,7 +182,7 @@ impl BatchMaker {
                         debug!("addresses is {:?}", new_addresses);
                         self.partition_queue.push_back(message);
                         self.network.broadcast(new_addresses, bytes).await; 
-                    }
+                    }*/
                     timer2.as_mut().reset(Instant::now() + Duration::from_secs(100));
                 },
 
@@ -240,7 +240,7 @@ impl BatchMaker {
         //NEW:
         //Best-effort broadcast only. Any failure is correlated with the primary operating this node (running on same machine)
         
-        let bytes = Bytes::from(serialized.clone());
+        /*let bytes = Bytes::from(serialized.clone());
         let digest = Digest(Sha512::digest(&serialized).as_slice()[..32].try_into().unwrap());
 
         // Store the batch.
@@ -258,15 +258,17 @@ impl BatchMaker {
             //debug!("sending batch normally");
             let (_, addresses): (Vec<_>, _) = self.workers_addresses.iter().cloned().unzip();
             self.network.broadcast(addresses, bytes).await; 
-        }
+        }*/
         
-        //self.tx_batch.send(serialized).await.expect("Failed to deliver batch");
+        self.tx_batch.send(serialized.clone()).await.expect("Failed to deliver batch");
 
         //OLD:
         //This uses reliable sender. The receiver worker will reply with an ack. The Reply Handler is passed to Quorum Waiter.
-        let (names, addresses): (Vec<_>, _) = self.workers_addresses.iter().cloned().unzip();
+        let (names, addresses): (Vec<_>, Vec<_>) = self.workers_addresses.iter().cloned().unzip();
+        let new_addresses: Vec<_> = self.workers_addresses.iter().filter(|(pk, _)| self.partition_public_keys.contains(pk)).map(|(_, addr)| addr).cloned().collect();
         let bytes = Bytes::from(serialized.clone());
-        let handlers = self.network.broadcast(addresses, bytes).await; 
+        //let handlers = self.network.broadcast(addresses, bytes).await;
+        let handlers = self.network.broadcast(new_addresses, bytes).await;  
 
         // // Send the batch through the deliver channel for further processing.
         self.tx_message
