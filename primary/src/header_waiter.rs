@@ -190,6 +190,7 @@ impl HeaderWaiter {
                     match message {
                         WaiterMessage::SyncBatches(missing, header, force_sync) => {
                             debug!("Synching the payload of {}", header);
+                            debug!("Missing payloads are {:?}", missing);
                             let header_id = header.id.clone();
                             let round = header.height;
                             let author = header.author;
@@ -223,12 +224,13 @@ impl HeaderWaiter {
                                         round
                                     });
                                 }
+                                debug!("requires_sync is {:?}", requires_sync);
                                 for (worker_id, digests) in requires_sync {
                                     let address = self.committee
                                         .worker(&self.name, &worker_id)
                                         .expect("Author of valid header is not in the committee")
                                         .primary_to_worker;
-                                    debug!("Sent syncbatches message for height {}", round);
+                                    debug!("Sent syncbatches message for height {}, digests {:?}", round, digests);
                                     
                                     let message = PrimaryWorkerMessage::Synchronize(digests, author);
                                     let bytes = bincode::serialize(&message)
