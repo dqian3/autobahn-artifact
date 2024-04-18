@@ -1892,7 +1892,7 @@ impl Core {
     #[async_recursion]
     async fn process_loopback(&mut self, consensus_message: ConsensusMessage, header: Header) -> DagResult<()> {
         //println!("reprocessing a header/commit message");
-        debug!("Can reprocess a header/commit message");
+        debug!("Can reprocess a header/commit message for header {:?}, consensus message {:?}", header, consensus_message);
         match &consensus_message {
             ConsensusMessage::Prepare { slot, view, tc: _, qc_ticket: _, proposals } => {
                 if self.use_ride_share {
