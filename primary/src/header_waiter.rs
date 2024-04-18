@@ -192,6 +192,7 @@ impl HeaderWaiter {
                             debug!("Synching the payload of {}", header);
                             debug!("Missing payloads are {:?}", missing);
                             let header_id = header.id.clone();
+                            let header_id1 = header.id.clone();
                             let round = header.height;
                             let author = header.author;
 
@@ -225,7 +226,7 @@ impl HeaderWaiter {
                                         round
                                     });
                                 }
-                                debug!("requires_sync is {:?}", requires_sync);
+                                debug!("requires_sync is {:?} for header {:?}", requires_sync, header_id1);
                                 for (worker_id, digests) in requires_sync {
                                     let address = self.committee
                                         .worker(&self.name, &worker_id)
