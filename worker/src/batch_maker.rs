@@ -251,7 +251,7 @@ impl BatchMaker {
             let new_addresses: Vec<_> = self.workers_addresses.iter().filter(|(pk, _)| self.partition_public_keys.contains(pk)).map(|(_, addr)| addr).cloned().collect();
             //let (_, addresses) = new_addresses.iter().cloned().unzip();
             //debug!("addresses is {:?}", new_addresses);
-            //self.partition_queue.push_back(message);
+            self.partition_queue.push_back(message);
             debug!("partition queue size is {:?}", self.partition_queue.len());
             self.network.broadcast(new_addresses, bytes).await; 
         } else {
