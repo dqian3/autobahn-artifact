@@ -292,24 +292,30 @@ impl HeaderWaiter {
                                 .expect("Failed to measure time")
                                 .as_millis();
 
+                            
+
                             // Check whether we should send a fast sync request to the network to avoid duplicate sync requests
                             if self.use_fast_sync {
-                                debug!("send a fast sync parent request with height {}, lower bound {}", height, lower_bound);
-                                let mut requires_sync = Vec::new();
-                                
-                                self.parent_requests.entry(missing.clone()).or_insert_with(|| {
-                                    requires_sync.push((missing.clone(), lower_bound));
-                                    (lower_bound, now)
-                                });
-                                let address = self.committee
-                                    .primary(&author)
-                                    .expect("Author of valid header not in the committee")
-                                    .primary_to_primary;
-                                // Lower bound to stop syncing is last height
-                                let message = PrimaryMessage::FastSyncHeadersRequest(requires_sync, self.name);
-                                let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                                self.network.send(address, Bytes::from(bytes)).await;
-                                
+                                let should_sync = height - 1 > lower_bound;
+                                if should_sync {
+                                    debug!("send a fast sync parent request with height {}, lower bound {}", height, lower_bound);
+                                    let mut requires_sync = Vec::new();
+                                    
+                                    self.parent_requests.entry(missing.clone()).or_insert_with(|| {
+                                        requires_sync.push((missing.clone(), lower_bound));
+                                        (lower_bound, now)
+                                    });
+                                    let address = self.committee
+                                        .primary(&author)
+                                        .expect("Author of valid header not in the committee")
+                                        .primary_to_primary;
+                                    // Lower bound to stop syncing is last height
+                                    let message = PrimaryMessage::FastSyncHeadersRequest(requires_sync, self.name);
+                                    let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
+                                    self.network.send(address, Bytes::from(bytes)).await;
+                                } else {
+                                    debug!("already sent fast sync request do not send duplicate");
+                                } 
                             } else {
                                 // Ensure we didn't already sent a sync request for these parents.
                                 // Optimistically send the sync request to the node that created the certificate.
@@ -407,11 +413,17 @@ impl HeaderWaiter {
                                 for (pk, proposal, lower_bound) in missing {
                                     debug!("send a fast sync proposal request with height {}, lower bound {}", proposal.height, lower_bound);
                                     debug!("opt digest sync is {:?}", proposal.header_digest);
-                                        
-                                    self.parent_requests.entry(proposal.header_digest.clone()).or_insert_with(|| {
-                                        requires_sync.push((proposal.header_digest, lower_bound));
-                                        (lower_bound, now)
-                                    });
+
+                                    let should_sync = proposal.height > lower_bound;
+
+                                    if should_sync {
+                                        self.parent_requests.entry(proposal.header_digest.clone()).or_insert_with(|| {
+                                            requires_sync.push((proposal.header_digest, lower_bound));
+                                            (lower_bound, now)
+                                        });
+                                    } else {
+                                        debug!("already sent fast sync request do not send duplicate");
+                                    }
                                 }
 
                                 if !requires_sync.is_empty() {
