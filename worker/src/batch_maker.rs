@@ -51,7 +51,8 @@ pub struct BatchMaker {
     /// Holds the size of the current batch (in bytes).
     current_batch_size: usize,
     /// A network sender to broadcast the batches to the other workers.
-    network: SimpleSender,
+    //network: SimpleSender,
+    network: ReliableSender,
     // Receive async requests from primary core
     rx_async: Receiver<(bool, HashSet<PublicKey>)>,
     // Currently during asynchrony
@@ -90,7 +91,8 @@ impl BatchMaker {
                 workers_addresses,
                 current_batch: Batch::with_capacity(batch_size * 2),
                 current_batch_size: 0,
-                network: SimpleSender::new(),
+                //network: SimpleSender::new(),
+                network: ReliableSender::new(),
                 rx_async,
                 during_simulated_asynchrony: false,
                 partition_public_keys,

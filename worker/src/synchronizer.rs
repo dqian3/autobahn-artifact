@@ -6,7 +6,8 @@ use crypto::{Digest, PublicKey};
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::stream::StreamExt as _;
 use log::{debug, error};
-use network::SimpleSender;
+use network::ReliableSender;
+//use network::SimpleSender;
 use primary::PrimaryWorkerMessage;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -41,7 +42,8 @@ pub struct Synchronizer {
     /// Input channel to receive the commands from the primary.
     rx_message: Receiver<PrimaryWorkerMessage>,
     /// A network sender to send requests to the other workers.
-    network: SimpleSender,
+    //network: SimpleSender,
+    network: ReliableSender,
     /// Loosely keep track of the primary's round number (only used for cleanup).
     round: Round,
     /// Keeps the digests (of batches) that are waiting to be processed by the primary. Their
@@ -72,7 +74,8 @@ impl Synchronizer {
                 sync_retry_delay,
                 sync_retry_nodes,
                 rx_message,
-                network: SimpleSender::new(),
+                //network: SimpleSender::new(),
+                network: ReliableSender::new(),
                 round: Round::default(),
                 pending: HashMap::new(),
             }
