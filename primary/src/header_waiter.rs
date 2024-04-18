@@ -344,12 +344,12 @@ impl HeaderWaiter {
                             let author = header.author;
                             let id = proposal_digest(&consensus_message);
                             //println!("syncing proposals in header waiter");
-                            let mut pending_already_set = false;
+                            //let mut pending_already_set = false;
 
                             // Ensure we sync only once per proposal
                             if self.pending.contains_key(&id) {
-                                pending_already_set = true;
-                                //continue;
+                                //pending_already_set = true;
+                                continue;
                             }
 
                             debug!("use fast sync is {}", self.use_fast_sync);
@@ -418,7 +418,7 @@ impl HeaderWaiter {
 
                                     let should_sync = proposal.height > lower_bound;
 
-                                    if should_sync && !pending_already_set {
+                                    if should_sync {
                                         self.parent_requests.entry(proposal.header_digest.clone()).or_insert_with(|| {
                                             requires_sync.push((proposal.header_digest, lower_bound));
                                             (lower_bound, now)

@@ -1501,7 +1501,7 @@ impl Core {
                     return Ok(())
                 } else {
                     if !self.use_optimistic_tips {
-                        self.synchronizer.get_proposals(&consensus_message, &header).await?;
+                        //self.synchronizer.get_proposals(&consensus_message, &header).await?;
                         debug!("start syncing certified proposals");
                     } else {
                         debug!("optimistic tips are ready");
@@ -1521,7 +1521,7 @@ impl Core {
                 //println!("processing confirm message");
                 debug!("processing confirm in slot {:?} with proposal {:?}", slot, proposals);
                 // Start syncing on the proposals if we haven't already
-                self.synchronizer.get_proposals(&consensus_message, &header).await?;
+                //self.synchronizer.get_proposals(&consensus_message, &header).await?;
                 self.process_confirm_message(&consensus_message, consensus_votes.as_mut()).await;
             },
             ConsensusMessage::Commit {
