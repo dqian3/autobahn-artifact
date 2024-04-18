@@ -100,7 +100,7 @@ impl BatchMaker {
         tokio::pin!(timer);
         let timer1 = sleep(Duration::from_secs(10));
         tokio::pin!(timer1);
-        let timer2 = sleep(Duration::from_secs(12));
+        let timer2 = sleep(Duration::from_secs(30));
         tokio::pin!(timer2);
         let mut current_time = Instant::now();
 
