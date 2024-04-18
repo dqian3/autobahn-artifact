@@ -205,6 +205,7 @@ impl Worker {
             rx_batch_maker_async,  //receiver channel to connect to PrimaryReceiverHandler
             rx_batch_maker_async_real,
             partition_public_keys,
+            self.store.clone(),
         );
 
         // // The `QuorumWaiter` waits for 2f authorities to acknowledge reception of the batch. It then forwards
