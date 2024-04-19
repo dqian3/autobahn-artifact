@@ -314,6 +314,7 @@ impl MessageHandler for WorkerReceiverHandler {
     async fn dispatch(&self, writer: &mut Writer, serialized: Bytes) -> Result<(), Box<dyn Error>> {
         //NEW: Do not need to Reply with an ack... Currently simple sender expects it though so we keep it (useful for debugging). Simple sender just sinks the reply.
         // // Reply with an ACK.
+        debug!("Received worker message: {:?}", serialized);
         let _ = writer.send(Bytes::from("Ack")).await;     //Question: Where is ack signed? Is authenticated channel assumed? TLS?
         // //Acknowledge Batches received. 
         // //Note: Missing Batch Requests don't expect an ack (they use simple sender) -- seems like it is sent anyways, but origin probably simply ignores it.
