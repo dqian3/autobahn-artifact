@@ -475,7 +475,7 @@ impl Core {
         if self.synchronizer.missing_payload(&header, sync).await? {
             //println!("Missing payload");
             debug!("Processing of {} suspended: missing payload", header);
-            let timer = PayloadTimer::new(header.clone(), 100);
+            let timer = PayloadTimer::new(header.clone(), 500);
             self.payload_timer_futures.push(Box::pin(timer));
             return Ok(());
         }
