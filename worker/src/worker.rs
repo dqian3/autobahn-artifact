@@ -29,7 +29,7 @@ use std::convert::TryInto;
 pub mod worker_tests;
 
 /// The default channel capacity for each channel of the worker.
-pub const CHANNEL_CAPACITY: usize = 1_000_000;
+pub const CHANNEL_CAPACITY: usize = 1_000;
 
 /// The primary round number.
 // TODO: Move to the primary.
