@@ -12,7 +12,7 @@ use futures::future::try_join_all;
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::stream::StreamExt as _;
 use log::{debug, error};
-use network::SimpleSender;
+use network::{CancelHandler, ReliableSender};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -61,7 +61,8 @@ pub struct HeaderWaiter {
     tx_consensus_loopback: Sender<(ConsensusMessage, Header)>,
 
     /// Network driver allowing to send messages.
-    network: SimpleSender,
+    //network: SimpleSender,
+    network: ReliableSender,
 
     /// Keeps the digests of the all certificates for which we sent a sync request,
     /// along with a timestamp (`u128`) indicating when we sent the request.
@@ -78,6 +79,8 @@ pub struct HeaderWaiter {
     /// List of digests (either certificates, headers or tx batch) that are waiting
     /// to be processed. Their processing will resume when we get all their dependencies.
     pending: HashMap<Digest, (Height, Sender<()>)>,
+    // Cancel handlers
+    cancel_handlers: HashMap<Digest, Vec<CancelHandler>>,
 }
 
 impl HeaderWaiter {
@@ -108,10 +111,12 @@ impl HeaderWaiter {
                 rx_synchronizer,
                 tx_core,
                 tx_consensus_loopback,
-                network: SimpleSender::new(),
+                //network: SimpleSender::new(),
+                network: ReliableSender::new(),
                 parent_requests: HashMap::new(),
                 header_requests: HashMap::new(),
                 batch_requests: HashMap::new(),
+                cancel_handlers: HashMap::new(),
                 use_fast_sync,
                 use_optimistic_tips,
                 pending: HashMap::new(),
@@ -238,7 +243,11 @@ impl HeaderWaiter {
                                     let message = PrimaryWorkerMessage::Synchronize(digests, author);
                                     let bytes = bincode::serialize(&message)
                                         .expect("Failed to serialize batch sync request");
-                                    self.network.send(address, Bytes::from(bytes)).await;
+                                    let handler = self.network.send(address, Bytes::from(bytes)).await;
+                                    self.cancel_handlers
+                                        .entry(header_id.clone())
+                                        .or_insert_with(Vec::new)
+                                        .push(handler);
                                     //self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;
                                 }
                             }
@@ -320,7 +329,11 @@ impl HeaderWaiter {
                                     // Lower bound to stop syncing is last height
                                     let message = PrimaryMessage::FastSyncHeadersRequest(requires_sync, self.name);
                                     let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                                    self.network.send(address, Bytes::from(bytes)).await;
+                                    let handler = self.network.send(address, Bytes::from(bytes)).await;
+                                    self.cancel_handlers
+                                        .entry(header_id.clone())
+                                        .or_insert_with(Vec::new)
+                                        .push(handler);
                                 } else {
                                     debug!("already sent fast sync request do not send duplicate");
                                 } 
@@ -340,7 +353,12 @@ impl HeaderWaiter {
                                         .primary_to_primary;
                                     let message = PrimaryMessage::HeadersRequest(requires_sync, self.name);
                                     let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                                    self.network.send(address, Bytes::from(bytes)).await;
+                                    let handler = self.network.send(address, Bytes::from(bytes)).await;
+                                    self.cancel_handlers
+                                        .entry(header_id.clone())
+                                        .or_insert_with(Vec::new)
+                                        .push(handler);
+
                                 }
                             }                            
                         }
@@ -446,7 +464,11 @@ impl HeaderWaiter {
                                         .primary_to_primary;
                                     let message = PrimaryMessage::FastSyncHeadersRequest(requires_sync, self.name);
                                     let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                                    //self.network.send(address, Bytes::from(bytes)).await;
+                                    let handler = self.network.send(address, Bytes::from(bytes)).await;
+                                    self.cancel_handlers
+                                        .entry(id.clone())
+                                        .or_insert_with(Vec::new)
+                                        .push(handler);
                                     /*let addresses = self.committee.others_primaries(&self.name).iter().map(|(_, x)| x.primary_to_primary).collect();
                                     self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;*/
                                     
@@ -471,7 +493,11 @@ impl HeaderWaiter {
                                         .primary_to_primary;
                                     let message = PrimaryMessage::HeadersRequest(requires_sync, self.name);
                                     let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                                    //self.network.send(address, Bytes::from(bytes)).await;
+                                    let handler = self.network.send(address, Bytes::from(bytes)).await;
+                                    self.cancel_handlers
+                                        .entry(id.clone())
+                                        .or_insert_with(Vec::new)
+                                        .push(handler);
                                     /*let addresses = self.committee.others_primaries(&self.name).iter().map(|(_, x)| x.primary_to_primary).collect();
                                     self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;*/
                                 }
@@ -505,6 +531,7 @@ impl HeaderWaiter {
                         //println!("finished syncing");
                         let id = proposal_digest(&deliver.0);
                         let _ = self.pending.remove(&id);
+                        let _ = self.cancel_handlers.remove(&id);
                         for x in deliver.1.payload.keys() {
                             let _ = self.batch_requests.remove(x);
                         }
@@ -537,6 +564,7 @@ impl HeaderWaiter {
                         //println!("finished syncing");
                         let id = proposal_digest(&deliver.0);
                         let _ = self.pending.remove(&id);
+                        let _ = self.cancel_handlers.remove(&id);
                         for x in deliver.1.payload.keys() {
                             let _ = self.batch_requests.remove(x);
                         }
@@ -603,11 +631,21 @@ impl HeaderWaiter {
                     if self.use_fast_sync {
                         let message = PrimaryMessage::FastSyncHeadersRequest(retry_fast_sync, self.name);
                         let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                        self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;
+                        let handlers = self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;
+                        self.cancel_handlers
+                            .entry(Digest::default())
+                            .or_insert_with(Vec::new)
+                            .extend(handlers);
+            
                     } else {
                         let message = PrimaryMessage::HeadersRequest(retry, self.name);
                         let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                        self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;
+                        let handlers = self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;
+
+                        self.cancel_handlers
+                            .entry(Digest::default())
+                            .or_insert_with(Vec::new)
+                            .extend(handlers);
                     }
                     
                     // Reschedule the timer.
@@ -625,10 +663,10 @@ impl HeaderWaiter {
                         let _ = handler.send(()).await;
                     }
                 }
-                self.pending.retain(|_, (r, _)| r > &mut gc_round);
+                /*self.pending.retain(|_, (r, _)| r > &mut gc_round);
                 self.batch_requests.retain(|_, r| r > &mut gc_round);
                 self.parent_requests.retain(|_, (r, _)| r > &mut gc_round);
-                self.header_requests.retain(|_, (r, _)| r > &mut gc_round);
+                self.header_requests.retain(|_, (r, _)| r > &mut gc_round);*/
             }
         }
     }
