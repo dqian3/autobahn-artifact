@@ -1100,6 +1100,7 @@ impl Core {
                 Proposal {
                     header_digest: certificate.header_digest.clone(),
                     height: certificate.height,
+                    //TODO: WE should also be including the cert itself (In case other replicas don't have it; so we can convince them this proposal tip is certified!)
                 },
             );
             //println!("updating tip");

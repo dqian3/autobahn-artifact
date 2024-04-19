@@ -147,8 +147,8 @@ impl Committer {
                                     state.last_executed_heights.insert(*pk, proposal.height);
                                 }
 
-                                // Commit all of the headers
-                                for header in headers {
+                                // Commit all of the headers  //TODO: Zip all histories for fairness
+                                for header in headers { //TODO: Iter from old to new?
                                     if write_to_log {
                                         info!("Committed {}", header);
                                         #[cfg(feature = "benchmark")]

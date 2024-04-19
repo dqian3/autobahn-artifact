@@ -26,6 +26,7 @@ pub mod messages_tests;
 pub struct Proposal {
     pub header_digest: Digest,
     pub height: Height,
+     //TODO: WE should also be including the cert itself (In case other replicas don't have it; so we can convince them this proposal tip is certified!)
 }
 
 impl Proposal {
