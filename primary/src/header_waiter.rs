@@ -12,7 +12,7 @@ use futures::future::try_join_all;
 use futures::stream::futures_unordered::FuturesUnordered;
 use futures::stream::StreamExt as _;
 use log::{debug, error};
-use network::SimpleSender;
+use network::{CancelHandler, ReliableSender};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -61,7 +61,8 @@ pub struct HeaderWaiter {
     tx_consensus_loopback: Sender<(ConsensusMessage, Header)>,
 
     /// Network driver allowing to send messages.
-    network: SimpleSender,
+    //network: SimpleSender,
+    network: ReliableSender,
 
     /// Keeps the digests of the all certificates for which we sent a sync request,
     /// along with a timestamp (`u128`) indicating when we sent the request.
@@ -78,6 +79,8 @@ pub struct HeaderWaiter {
     /// List of digests (either certificates, headers or tx batch) that are waiting
     /// to be processed. Their processing will resume when we get all their dependencies.
     pending: HashMap<Digest, (Height, Sender<()>)>,
+    // Cancel handlers
+    cancel_handlers: Vec<CancelHandler>,
 }
 
 impl HeaderWaiter {
@@ -108,10 +111,12 @@ impl HeaderWaiter {
                 rx_synchronizer,
                 tx_core,
                 tx_consensus_loopback,
-                network: SimpleSender::new(),
+                //network: SimpleSender::new(),
+                network: ReliableSender::new(),
                 parent_requests: HashMap::new(),
                 header_requests: HashMap::new(),
                 batch_requests: HashMap::new(),
+                cancel_handlers: Vec::new(),
                 use_fast_sync,
                 use_optimistic_tips,
                 pending: HashMap::new(),
@@ -190,12 +195,15 @@ impl HeaderWaiter {
                     match message {
                         WaiterMessage::SyncBatches(missing, header, force_sync) => {
                             debug!("Synching the payload of {}", header);
+                            debug!("Missing payloads are {:?}", missing);
                             let header_id = header.id.clone();
+                            let header_id1 = header.id.clone();
                             let round = header.height;
                             let author = header.author;
 
                             // Ensure we sync only once per header.
                             if self.pending.contains_key(&header_id) {
+                                debug!("already pending for header {}", header_id);
                                 continue;
                             }
 
@@ -209,7 +217,8 @@ impl HeaderWaiter {
                                 })
                                 .collect();
                             let (tx_cancel, rx_cancel) = channel(1);
-                            self.pending.insert(header_id, (round, tx_cancel));
+                            self.pending.insert(header_id.clone(), (round, tx_cancel));
+                            debug!("SyncBatches pending insert for header {}", header_id);
                             let fut = Self::waiter(wait_for, header, rx_cancel);
                             waiting.push(fut);
 
@@ -223,16 +232,20 @@ impl HeaderWaiter {
                                         round
                                     });
                                 }
+                                debug!("requires_sync is {:?} for header {:?}", requires_sync, header_id1);
                                 for (worker_id, digests) in requires_sync {
                                     let address = self.committee
                                         .worker(&self.name, &worker_id)
                                         .expect("Author of valid header is not in the committee")
                                         .primary_to_worker;
-                                    debug!("Sent syncbatches message for height {}", round);
+                                    debug!("Sent syncbatches message for height {}, digests {:?}", round, digests);
+                                    
                                     let message = PrimaryWorkerMessage::Synchronize(digests, author);
                                     let bytes = bincode::serialize(&message)
                                         .expect("Failed to serialize batch sync request");
-                                    self.network.send(address, Bytes::from(bytes)).await;
+                                    let handler = self.network.send(address, Bytes::from(bytes)).await;
+                                    self.cancel_handlers.push(handler);
+                                    //self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;
                                 }
                             }
                         }
@@ -283,7 +296,8 @@ impl HeaderWaiter {
                             let mut wait_for = Vec::new();
                             wait_for.push((missing.to_vec(), self.store.clone()));
                             let (tx_cancel, rx_cancel) = channel(1);
-                            self.pending.insert(header_id, (height, tx_cancel));
+                            self.pending.insert(header_id.clone(), (height, tx_cancel));
+                            debug!("SyncParent pending insert for header {}", header_id);
                             let fut = Self::waiter(wait_for, header, rx_cancel);
                             waiting.push(fut);
 
@@ -292,24 +306,31 @@ impl HeaderWaiter {
                                 .expect("Failed to measure time")
                                 .as_millis();
 
+                            
+
                             // Check whether we should send a fast sync request to the network to avoid duplicate sync requests
                             if self.use_fast_sync {
-                                debug!("send a fast sync parent request with height {}, lower bound {}", height, lower_bound);
-                                let mut requires_sync = Vec::new();
-                                
-                                self.parent_requests.entry(missing.clone()).or_insert_with(|| {
-                                    requires_sync.push((missing.clone(), lower_bound));
-                                    (lower_bound, now)
-                                });
-                                let address = self.committee
-                                    .primary(&author)
-                                    .expect("Author of valid header not in the committee")
-                                    .primary_to_primary;
-                                // Lower bound to stop syncing is last height
-                                let message = PrimaryMessage::FastSyncHeadersRequest(requires_sync, self.name);
-                                let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                                self.network.send(address, Bytes::from(bytes)).await;
-                                
+                                let should_sync = height - 1 > lower_bound;
+                                if should_sync {
+                                    debug!("send a fast sync parent request with height {}, lower bound {}", height, lower_bound);
+                                    let mut requires_sync = Vec::new();
+                                    
+                                    self.parent_requests.entry(missing.clone()).or_insert_with(|| {
+                                        requires_sync.push((missing.clone(), lower_bound));
+                                        (lower_bound, now)
+                                    });
+                                    let address = self.committee
+                                        .primary(&author)
+                                        .expect("Author of valid header not in the committee")
+                                        .primary_to_primary;
+                                    // Lower bound to stop syncing is last height
+                                    let message = PrimaryMessage::FastSyncHeadersRequest(requires_sync, self.name);
+                                    let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
+                                    let handler = self.network.send(address, Bytes::from(bytes)).await;
+                                    self.cancel_handlers.push(handler);
+                                } else {
+                                    debug!("already sent fast sync request do not send duplicate");
+                                } 
                             } else {
                                 // Ensure we didn't already sent a sync request for these parents.
                                 // Optimistically send the sync request to the node that created the certificate.
@@ -326,7 +347,9 @@ impl HeaderWaiter {
                                         .primary_to_primary;
                                     let message = PrimaryMessage::HeadersRequest(requires_sync, self.name);
                                     let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                                    self.network.send(address, Bytes::from(bytes)).await;
+                                    let handler = self.network.send(address, Bytes::from(bytes)).await;
+                                    self.cancel_handlers.push(handler);
+
                                 }
                             }                            
                         }
@@ -338,10 +361,12 @@ impl HeaderWaiter {
                             let author = header.author;
                             let id = proposal_digest(&consensus_message);
                             //println!("syncing proposals in header waiter");
+                            let mut pending_already_set = false;
 
                             // Ensure we sync only once per proposal
                             if self.pending.contains_key(&id) {
-                                continue;
+                                pending_already_set = true;
+                                //continue;
                             }
 
                             debug!("use fast sync is {}", self.use_fast_sync);
@@ -358,7 +383,8 @@ impl HeaderWaiter {
                                             .map(|(_, x, _)| ({let mut opt_key = x.header_digest.to_vec(); opt_key.push(1); debug!("opt key is {:?}", opt_key); opt_key}, self.store.clone()))
                                             .collect();
                                         let (tx_cancel, rx_cancel) = channel(1);
-                                        self.pending.insert(id, (height, tx_cancel));
+                                        self.pending.insert(id.clone(), (height, tx_cancel));
+                                        debug!("SyncProposals pending insert for header {}", id);
                                         let fut = Self::optimistic_tip_waiter(wait_for_opt, (consensus_message, header), rx_cancel);
                                         debug!("adding waiter for optimistic tip");
                                         prepare_proposal_waiting.push(fut);
@@ -371,7 +397,8 @@ impl HeaderWaiter {
                                             .map(|(_, x, _)| (x.header_digest.to_vec(), self.store.clone()))
                                             .collect();
                                         let (tx_cancel, rx_cancel) = channel(1);
-                                        self.pending.insert(id, (height, tx_cancel));
+                                        self.pending.insert(id.clone(), (height, tx_cancel));
+                                        debug!("SyncProposals pending insert for header {}", id);
                                         let fut = Self::proposal_waiter(wait_for, (consensus_message, header), rx_cancel);
                                         //println!("created proposal waiter");
                                         debug!("normal proposal waiter");
@@ -387,7 +414,8 @@ impl HeaderWaiter {
                                         .map(|(_, x, _)| (x.header_digest.to_vec(), self.store.clone()))
                                         .collect();
                                     let (tx_cancel, rx_cancel) = channel(1);
-                                    self.pending.insert(id, (height, tx_cancel));
+                                    self.pending.insert(id.clone(), (height, tx_cancel));
+                                    debug!("SyncProposals pending insert for header {}", id);
                                     let fut = Self::proposal_waiter(wait_for, (consensus_message, header), rx_cancel);
                                     debug!("normal proposal waiter");
                                     //println!("created proposal waiter");
@@ -407,11 +435,17 @@ impl HeaderWaiter {
                                 for (pk, proposal, lower_bound) in missing {
                                     debug!("send a fast sync proposal request with height {}, lower bound {}", proposal.height, lower_bound);
                                     debug!("opt digest sync is {:?}", proposal.header_digest);
-                                        
-                                    self.parent_requests.entry(proposal.header_digest.clone()).or_insert_with(|| {
-                                        requires_sync.push((proposal.header_digest, lower_bound));
-                                        (lower_bound, now)
-                                    });
+
+                                    let should_sync = proposal.height > lower_bound;
+
+                                    if should_sync && !pending_already_set {
+                                        self.parent_requests.entry(proposal.header_digest.clone()).or_insert_with(|| {
+                                            requires_sync.push((proposal.header_digest, lower_bound));
+                                            (lower_bound, now)
+                                        });
+                                    } else {
+                                        debug!("already sent fast sync request do not send duplicate");
+                                    }
                                 }
 
                                 if !requires_sync.is_empty() {
@@ -421,7 +455,11 @@ impl HeaderWaiter {
                                         .primary_to_primary;
                                     let message = PrimaryMessage::FastSyncHeadersRequest(requires_sync, self.name);
                                     let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                                    self.network.send(address, Bytes::from(bytes)).await;
+                                    let handler = self.network.send(address, Bytes::from(bytes)).await;
+                                    self.cancel_handlers.push(handler);
+                                    /*let addresses = self.committee.others_primaries(&self.name).iter().map(|(_, x)| x.primary_to_primary).collect();
+                                    self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;*/
+                                    
                                 }
                             } else {
                                 // Ensure we didn't already sent a sync request for these parents.
@@ -443,7 +481,10 @@ impl HeaderWaiter {
                                         .primary_to_primary;
                                     let message = PrimaryMessage::HeadersRequest(requires_sync, self.name);
                                     let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                                    self.network.send(address, Bytes::from(bytes)).await;
+                                    let handler = self.network.send(address, Bytes::from(bytes)).await;
+                                    self.cancel_handlers.push(handler);
+                                    /*let addresses = self.committee.others_primaries(&self.name).iter().map(|(_, x)| x.primary_to_primary).collect();
+                                    self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;*/
                                 }
                             }                            
                         }
@@ -475,6 +516,7 @@ impl HeaderWaiter {
                         //println!("finished syncing");
                         let id = proposal_digest(&deliver.0);
                         let _ = self.pending.remove(&id);
+                        //let _ = self.cancel_handlers.remove(&id);
                         for x in deliver.1.payload.keys() {
                             let _ = self.batch_requests.remove(x);
                         }
@@ -507,6 +549,7 @@ impl HeaderWaiter {
                         //println!("finished syncing");
                         let id = proposal_digest(&deliver.0);
                         let _ = self.pending.remove(&id);
+                        //let _ = self.cancel_handlers.remove(&id);
                         for x in deliver.1.payload.keys() {
                             let _ = self.batch_requests.remove(x);
                         }
@@ -573,11 +616,15 @@ impl HeaderWaiter {
                     if self.use_fast_sync {
                         let message = PrimaryMessage::FastSyncHeadersRequest(retry_fast_sync, self.name);
                         let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                        self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;
+                        let handlers = self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;
+                        self.cancel_handlers.extend(handlers);
+            
                     } else {
                         let message = PrimaryMessage::HeadersRequest(retry, self.name);
                         let bytes = bincode::serialize(&message).expect("Failed to serialize cert request");
-                        self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;
+                        let handlers = self.network.lucky_broadcast(addresses, Bytes::from(bytes), self.sync_retry_nodes).await;
+
+                        self.cancel_handlers.extend(handlers);
                     }
                     
                     // Reschedule the timer.
@@ -595,10 +642,10 @@ impl HeaderWaiter {
                         let _ = handler.send(()).await;
                     }
                 }
-                self.pending.retain(|_, (r, _)| r > &mut gc_round);
+                /*self.pending.retain(|_, (r, _)| r > &mut gc_round);
                 self.batch_requests.retain(|_, r| r > &mut gc_round);
                 self.parent_requests.retain(|_, (r, _)| r > &mut gc_round);
-                self.header_requests.retain(|_, (r, _)| r > &mut gc_round);
+                self.header_requests.retain(|_, (r, _)| r > &mut gc_round);*/
             }
         }
     }

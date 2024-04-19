@@ -4,22 +4,24 @@
 use crate::quorum_waiter::QuorumWaiterMessage;
 use crate::worker::WorkerMessage;
 use bytes::Bytes;
-#[cfg(feature = "benchmark")]
+//#[cfg(feature = "benchmark")]
 use crypto::Digest;
 use crypto::PublicKey;
-#[cfg(feature = "benchmark")]
+//#[cfg(feature = "benchmark")]
 use ed25519_dalek::{Digest as _, Sha512};
 use log::debug;
-#[cfg(feature = "benchmark")]
+//#[cfg(feature = "benchmark")]
 use log::info;
 use network::{ReliableSender, SimpleSender};
 use primary::{Primary, PrimaryWorkerMessage, WorkerPrimaryMessage};
 use std::collections::{HashSet, VecDeque};
-#[cfg(feature = "benchmark")]
-use std::convert::TryInto as _;
+//#[cfg(feature = "benchmark")]
+
 use std::net::SocketAddr;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration, Instant};
+use store::Store;
+use std::convert::TryInto as _;
 
 #[cfg(test)]
 #[path = "tests/batch_maker_tests.rs"]
@@ -49,17 +51,18 @@ pub struct BatchMaker {
     /// Holds the size of the current batch (in bytes).
     current_batch_size: usize,
     /// A network sender to broadcast the batches to the other workers.
-    network: SimpleSender,
-    // Receive async requests from primary core
-    rx_async: Receiver<(bool, HashSet<PublicKey>)>,
+    //network: SimpleSender,
+    network: ReliableSender,
     // Currently during asynchrony
     during_simulated_asynchrony: bool,
     // Partition public keys
     partition_public_keys: HashSet<PublicKey>,
-    // Receive real async requests
-    rx_async_real: Receiver<PrimaryWorkerMessage>,
     // Partition queue for batch requests
     partition_queue: VecDeque<WorkerMessage>,
+    // Store
+    store: Store,
+    // Quorum waiter
+    tx_message: Sender<QuorumWaiterMessage>
 
 }
 
@@ -68,29 +71,28 @@ impl BatchMaker {
         batch_size: usize,
         max_batch_delay: u64,
         rx_transaction: Receiver<Transaction>, //receiver channel from worker.TxReceiverHandler 
-        //tx_message: Sender<QuorumWaiterMessage>, //sender channel to worker.QuorumWaiter
+        tx_message: Sender<QuorumWaiterMessage>, //sender channel to worker.QuorumWaiter
         tx_batch: Sender<Vec<u8>>,   // sender channel to worker.Processor
         workers_addresses: Vec<(PublicKey, SocketAddr)>,
-        rx_async: Receiver<(bool, HashSet<PublicKey>)>,
-        rx_async_real: Receiver<PrimaryWorkerMessage>,
         partition_public_keys: HashSet<PublicKey>,
+        mut store: Store,
     ) {
         tokio::spawn(async move {
             Self {
                 batch_size,
                 max_batch_delay,
                 rx_transaction,
-                //tx_message, //previously forwarded batch to Quorum_waiter; now skipping this step.
+                tx_message, //previously forwarded batch to Quorum_waiter; now skipping this step.
                 tx_batch,  
                 workers_addresses,
                 current_batch: Batch::with_capacity(batch_size * 2),
                 current_batch_size: 0,
-                network: SimpleSender::new(),
-                rx_async,
+                //network: SimpleSender::new(),
+                network: ReliableSender::new(),
                 during_simulated_asynchrony: false,
                 partition_public_keys,
-                rx_async_real,
                 partition_queue: VecDeque::new(),
+                store,
             }
             .run()
             .await;
@@ -123,23 +125,6 @@ impl BatchMaker {
                     }
                 },
 
-                Some((during_simulated_asynchrony, partition_public_keys)) = self.rx_async.recv() => {
-                    debug!("BatchMaker: received async request");
-                    self.during_simulated_asynchrony = during_simulated_asynchrony;
-                    self.partition_public_keys = partition_public_keys;
-                },
-
-                Some(async_request) = self.rx_async_real.recv() => {
-                    debug!("BatchMaker: received real async request");
-                    match async_request {
-                        PrimaryWorkerMessage::Async(during_simulated_asynchrony, partition_public_keys) => {
-                            self.during_simulated_asynchrony = during_simulated_asynchrony;
-                            self.partition_public_keys = partition_public_keys;
-                        },
-                        _ => {},
-                    }
-                },
-
                 // If the timer triggers, seal the batch even if it contains few transactions.
                 () = &mut timer => {
                     debug!("BatchMaker: max batch delay timer triggered");
@@ -161,8 +146,9 @@ impl BatchMaker {
                 // If the timer triggers, seal the batch even if it contains few transactions.
                 () = &mut timer2 => {
                     debug!("BatchMaker: partition delay timer 2 triggered");
+                    debug!("partition queue size is {:?}", self.partition_queue.len());
                     self.during_simulated_asynchrony = false;
-                    while !self.partition_queue.is_empty() {
+                    /*while !self.partition_queue.is_empty() {
                         let message = self.partition_queue.pop_front().unwrap();
                         let serialized = bincode::serialize(&message).expect("Failed to serialize our own batch");
                         let bytes = Bytes::from(serialized.clone());
@@ -171,7 +157,7 @@ impl BatchMaker {
                         debug!("addresses is {:?}", new_addresses);
                         self.partition_queue.push_back(message);
                         self.network.broadcast(new_addresses, bytes).await; 
-                    }
+                    }*/
                     timer2.as_mut().reset(Instant::now() + Duration::from_secs(100));
                 },
 
@@ -230,34 +216,44 @@ impl BatchMaker {
         //Best-effort broadcast only. Any failure is correlated with the primary operating this node (running on same machine)
         
         let bytes = Bytes::from(serialized.clone());
+        let digest = Digest(Sha512::digest(&serialized).as_slice()[..32].try_into().unwrap());
+
+        // Store the batch.
+        self.store.write(digest.to_vec(), serialized.clone()).await;
+        self.tx_batch.send(serialized.clone()).await.expect("Failed to deliver batch");
         if self.during_simulated_asynchrony {
             debug!("BatchMaker: Simulated asynchrony enabled. Only sending to partitioned keys from broadcast");
             let new_addresses: Vec<_> = self.workers_addresses.iter().filter(|(pk, _)| self.partition_public_keys.contains(pk)).map(|(_, addr)| addr).cloned().collect();
             //let (_, addresses) = new_addresses.iter().cloned().unzip();
-            debug!("addresses is {:?}", new_addresses);
+            //debug!("addresses is {:?}", new_addresses);
             self.partition_queue.push_back(message);
+            debug!("partition queue size is {:?}", self.partition_queue.len());
             self.network.broadcast(new_addresses, bytes).await; 
         } else {
-            debug!("sending batch normally");
+            //debug!("sending batch normally");
             let (_, addresses): (Vec<_>, _) = self.workers_addresses.iter().cloned().unzip();
             self.network.broadcast(addresses, bytes).await; 
         }
         
-        self.tx_batch.send(serialized).await.expect("Failed to deliver batch");
+        /*let digest = Digest(Sha512::digest(&serialized).as_slice()[..32].try_into().unwrap());
+        self.store.write(digest.to_vec(), serialized.clone()).await;
+        self.tx_batch.send(serialized.clone()).await.expect("Failed to deliver batch");
 
         //OLD:
         //This uses reliable sender. The receiver worker will reply with an ack. The Reply Handler is passed to Quorum Waiter.
-        // let (names, addresses): (Vec<_>, _) = self.workers_addresses.iter().cloned().unzip();
-        // let bytes = Bytes::from(serialized.clone());
-        // let handlers = self.network.broadcast(addresses, bytes).await; 
+        let (names, addresses): (Vec<_>, Vec<_>) = self.workers_addresses.iter().cloned().unzip();
+        let new_addresses: Vec<_> = self.workers_addresses.iter().filter(|(pk, _)| self.partition_public_keys.contains(pk)).map(|(_, addr)| addr).cloned().collect();
+        let bytes = Bytes::from(serialized.clone());
+        //let handlers = self.network.broadcast(addresses, bytes).await;
+        let handlers = self.network.broadcast(new_addresses, bytes).await;  
 
         // // Send the batch through the deliver channel for further processing.
-        // self.tx_message
-        //     .send(QuorumWaiterMessage {
-        //         batch: serialized,
-        //         handlers: names.into_iter().zip(handlers.into_iter()).collect(),
-        //     })
-        //     .await
-        //     .expect("Failed to deliver batch");
+        self.tx_message
+             .send(QuorumWaiterMessage {
+                batch: serialized,
+                 handlers: names.into_iter().zip(handlers.into_iter()).collect(),
+             })
+             .await
+            .expect("Failed to deliver batch");*/
     }
 }

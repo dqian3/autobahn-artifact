@@ -5,6 +5,7 @@ use tokio::time::{sleep, Duration, Instant, Sleep};
 
 use crate::messages::{Vote, ConsensusVote};
 use crate::primary::{Slot, View};
+use crate::Header;
 
 //#[cfg(test)]
 //#[path = "tests/timer_tests.rs"]
@@ -100,6 +101,38 @@ impl Future for FastTimer {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match self.sleep.as_mut().poll(cx) {
             Poll::Ready(_) => Poll::Ready(self.vote.clone()),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+
+
+pub struct PayloadTimer {
+    header: Header, 
+    duration: u64,
+    sleep: Pin<Box<Sleep>>,
+}
+
+impl PayloadTimer {
+    pub fn new(header: Header, duration: u64) -> Self {
+        let sleep = Box::pin(sleep(Duration::from_millis(duration)));
+        Self {header, duration, sleep }
+    }
+
+    pub fn reset(&mut self) {
+        self.sleep
+            .as_mut()
+            .reset(Instant::now() + Duration::from_millis(self.duration));
+    }
+}
+
+impl Future for PayloadTimer {
+    type Output = Header;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.sleep.as_mut().poll(cx) {
+            Poll::Ready(_) => Poll::Ready(self.header.clone()),
             Poll::Pending => Poll::Pending,
         }
     }

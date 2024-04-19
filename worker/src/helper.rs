@@ -2,10 +2,12 @@
 use bytes::Bytes;
 use config::{Committee, WorkerId};
 use crypto::{Digest, PublicKey};
-use log::{error, warn};
-use network::SimpleSender;
+use log::{debug, error, warn};
+use network::{ReliableSender, SimpleSender};
 use store::Store;
 use tokio::sync::mpsc::Receiver;
+use network::CancelHandler;
+use std::collections::HashMap;
 
 #[cfg(test)]
 #[path = "tests/helper_tests.rs"]
@@ -22,7 +24,10 @@ pub struct Helper {
     /// Input channel to receive batch requests.
     rx_request: Receiver<(Vec<Digest>, PublicKey)>,
     /// A network sender to send the batches to the other workers.
-    network: SimpleSender,
+    //network: SimpleSender,
+    network: ReliableSender,
+    // Cancel handlers
+    cancel_handlers: Vec<CancelHandler>,
 }
 
 impl Helper {
@@ -38,7 +43,9 @@ impl Helper {
                 committee,
                 store,
                 rx_request,
-                network: SimpleSender::new(),
+                //network: SimpleSender::new(),
+                network: ReliableSender::new(),
+                cancel_handlers: Vec::new(),
             }
             .run()
             .await;
@@ -48,7 +55,7 @@ impl Helper {
     async fn run(&mut self) {
         while let Some((digests, origin)) = self.rx_request.recv().await {
             // TODO [issue #7]: Do some accounting to prevent bad nodes from monopolizing our resources.
-
+            debug!("Received helper batch request {:?}", digests);
             // get the requestors address.
             let address = match self.committee.worker(&origin, &self.id) {
                 Ok(x) => x.worker_to_worker,
@@ -61,8 +68,15 @@ impl Helper {
             // Reply to the request (the best we can).
             for digest in digests {
                 match self.store.read(digest.to_vec()).await {
-                    Ok(Some(data)) => self.network.send(address, Bytes::from(data)).await,
-                    Ok(None) => (),
+                    Ok(Some(data)) => {
+                        debug!("have digest {:?} in store", digest);
+                        let handler = self.network.send(address, Bytes::from(data)).await;
+                        self.cancel_handlers.push(handler);
+                    },
+                    Ok(None) => {
+                        debug!("don't have digest {:?} in store", digest);
+                        ()
+                    },
                     Err(e) => error!("{}", e),
                 }
             }

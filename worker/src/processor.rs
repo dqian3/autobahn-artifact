@@ -8,6 +8,7 @@ use primary::WorkerPrimaryMessage;
 use std::convert::TryInto;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
+use log::debug;
 
 #[cfg(test)]
 #[path = "tests/processor_tests.rs"]
@@ -36,6 +37,7 @@ impl Processor {
             while let Some(batch) = rx_batch.recv().await {
                 // Hash the batch.
                 let digest = Digest(Sha512::digest(&batch).as_slice()[..32].try_into().unwrap());
+                debug!("Processor received batch {:?}", digest);
 
                 // Store the batch.
                 store.write(digest.to_vec(), batch).await;

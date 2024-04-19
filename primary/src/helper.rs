@@ -4,7 +4,7 @@ use bytes::Bytes;
 use config::Committee;
 use crypto::{Digest, Hash, PublicKey};
 use log::{error, warn, debug};
-use network::SimpleSender;
+use network::{CancelHandler, ReliableSender, SimpleSender};
 use store::Store;
 use tokio::sync::mpsc::Receiver;
 
@@ -22,7 +22,11 @@ pub struct Helper {
     /// Input channel to receive fast sync header requests.
     rx_primaries_fast_sync_headers: Receiver<(Vec<(Digest, Height)>, PublicKey)>,
     /// A network sender to reply to the sync requests.
-    network: SimpleSender,
+    //network: SimpleSender,
+    // Change to reliable sender
+    network: ReliableSender,
+    // Cancel handlers
+    cancel_handlers: Vec<CancelHandler>,
 }
 
 impl Helper {
@@ -40,7 +44,9 @@ impl Helper {
                 rx_primaries_certs,
                 rx_primaries_headers,
                 rx_primaries_fast_sync_headers,
-                network: SimpleSender::new(),
+                //network: SimpleSender::new(),
+                network: ReliableSender::new(),
+                cancel_handlers: Vec::new(),
             }
             .run()
             .await;
@@ -71,7 +77,8 @@ impl Helper {
                                     .expect("Failed to deserialize our own certificate");
                                 let bytes = bincode::serialize(&PrimaryMessage::Certificate(certificate))
                                     .expect("Failed to serialize our own certificate");
-                                self.network.send(address, Bytes::from(bytes)).await;
+                                let handler = self.network.send(address, Bytes::from(bytes)).await;
+                                self.cancel_handlers.push(handler);
                             }
                             Ok(None) => (),
                             Err(e) => error!("{}", e),
@@ -99,7 +106,8 @@ impl Helper {
                                         .expect("Failed to deserialize our own certificate");
                                     let bytes = bincode::serialize(&PrimaryMessage::Header(header, true))  //sync = true
                                         .expect("Failed to serialize our own certificate");
-                                    self.network.send(address, Bytes::from(bytes)).await;
+                                    let handler = self.network.send(address, Bytes::from(bytes)).await;
+                                    self.cancel_handlers.push(handler);
                                 }
                                 Ok(None) => (),
                                 Err(e) => error!("{}", e),
@@ -133,7 +141,8 @@ impl Helper {
                                 
                                 let bytes = bincode::serialize(&PrimaryMessage::Header(header, true))  //sync = true
                                     .expect("Failed to serialize our own certificate");
-                                self.network.send(address, Bytes::from(bytes)).await;
+                                let handler = self.network.send(address, Bytes::from(bytes)).await;
+                                self.cancel_handlers.push(handler);
                                 
                                 // Since we have the header in the store, we must have all of its ancestors
                                 // Send sync replies for all ancestors until we reach the lower bound
@@ -144,7 +153,8 @@ impl Helper {
                                     parent_digest = current_header.parent_cert.header_digest.clone();
                                     let bytes = bincode::serialize(&PrimaryMessage::Header(current_header, true))  //sync = true
                                         .expect("Failed to serialize our own header");
-                                    self.network.send(address, Bytes::from(bytes)).await;
+                                    let handler = self.network.send(address, Bytes::from(bytes)).await;
+                                    self.cancel_handlers.push(handler);
                                     height -= 1;
                                 }                                                           
                             }

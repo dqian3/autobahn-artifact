@@ -10,7 +10,7 @@ use crate::messages::{
 };
 use crate::primary::{Height, PrimaryMessage, Slot, View};
 use crate::synchronizer::{Synchronizer, self};
-use crate::timer::{Timer, CarTimer, FastTimer};
+use crate::timer::{CarTimer, FastTimer, PayloadTimer, Timer};
 use crate::PrimaryWorkerMessage;
 use async_recursion::async_recursion;
 use bytes::Bytes;
@@ -218,6 +218,10 @@ pub struct Core {
     dropped_slot: u64,
     // Channel to communicate async period to the worker
     tx_worker_async_channel: Sender<(bool, HashSet<PublicKey>)>,
+    // Batch payload timers
+    payload_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = Header> + Send>>>,
+    // Missed payloads
+    missed_payloads: u64,
 }
 
 impl Core {
@@ -359,6 +363,8 @@ impl Core {
                 use_expoential_timeouts,
                 dropped_slot: 0,
                 tx_worker_async_channel,
+                payload_timer_futures: FuturesUnordered::new(),
+                missed_payloads: 0,
             }
             .run()
             .await;
@@ -469,6 +475,8 @@ impl Core {
         if self.synchronizer.missing_payload(&header, sync).await? {
             //println!("Missing payload");
             debug!("Processing of {} suspended: missing payload", header);
+            /*let timer = PayloadTimer::new(header.clone(), 5000);
+            self.payload_timer_futures.push(Box::pin(timer));*/
             return Ok(());
         }
 
@@ -1502,7 +1510,7 @@ impl Core {
                     return Ok(())
                 } else {
                     if !self.use_optimistic_tips {
-                        //self.synchronizer.get_proposals(&consensus_message, &header).await?;
+                        self.synchronizer.get_proposals(&consensus_message, &header).await?;
                         debug!("start syncing certified proposals");
                     } else {
                         debug!("optimistic tips are ready");
@@ -1522,7 +1530,7 @@ impl Core {
                 //println!("processing confirm message");
                 debug!("processing confirm in slot {:?} with proposal {:?}", slot, proposals);
                 // Start syncing on the proposals if we haven't already
-                //self.synchronizer.get_proposals(&consensus_message, &header).await?;
+                self.synchronizer.get_proposals(&consensus_message, &header).await?;
                 self.process_confirm_message(&consensus_message, consensus_votes.as_mut()).await;
             },
             ConsensusMessage::Commit {
@@ -2684,6 +2692,23 @@ impl Core {
                 //Fast path loopback for external consensus
                 Some(vote) = self.fast_timer_futures.next() => self.process_consensus_vote(vote, true).await,
 
+                // Payload timers
+                Some(header) = self.payload_timer_futures.next() => {
+                    debug!("Missed payloads are {:?}", self.missed_payloads);
+                    for (digest, worker_id) in header.payload.iter() {
+                        let key = [digest.as_ref(), &worker_id.to_le_bytes()].concat();
+                        let res = self.store.read(key.clone()).await.expect("should read");
+                        if res.is_none() {
+                            debug!("Not reading payload for digest {:?} and worker_id {:?}", digest, worker_id);
+                            self.missed_payloads += 1;
+                        } else {
+                            debug!("Reading payload for digest {:?} and worker_id {:?}", digest, worker_id);
+                        }
+                        self.store.write(key, Vec::new()).await;
+                    }
+                    Ok(())
+                }
+
                 Some((slot, view)) = self.async_timer_futures.next() => {
                     self.during_simulated_asynchrony = !self.during_simulated_asynchrony; 
 
@@ -2700,24 +2725,6 @@ impl Core {
                             let async_duration = self.asynchrony_duration.pop_front().unwrap();
                             self.current_egress_end = Instant::now() + Duration::from_millis(async_duration);
                             debug!("End of egress is {:?}", self.current_egress_end);
-                        }
-
-                        if self.current_effect_type == AsyncEffectType::Partition {
-                            debug!("start partition updating batch maker");
-                            let addresses: Vec<std::net::SocketAddr> = self.committee
-                                    .our_workers(&self.name)
-                                    //.worker(&self.name, &worker_id)
-                                    .expect("Author of valid header is not in the committee")
-                                    .iter()
-                                    .map(|x| x.primary_to_worker)
-                                    .collect();
-                                   
-                            let message = PrimaryWorkerMessage::Async(true, self.partition_public_keys.clone());
-                            let bytes = bincode::serialize(&message).expect("Failed to serialize batch sync request");
-                            debug!("worker addresses are {:?}", addresses);
-                            self.network.broadcast(addresses, Bytes::from(bytes)).await;
-                            //self.network.send(address, Bytes::from(bytes)).await;
-                            //self.tx_worker_async_channel.send((true, self.partition_public_keys.clone())).await.expect("Failed to send async message");
                         }
                     }
 
@@ -2748,19 +2755,6 @@ impl Core {
                         //Partition
                         if self.current_effect_type == AsyncEffectType::Partition {
                             debug!("end partition updating batch maker");
-                            //self.tx_worker_async_channel.send((false, self.partition_public_keys.clone())).await.expect("Failed to send async message");
-                            let addresses: Vec<std::net::SocketAddr> = self.committee
-                                    .our_workers(&self.name)
-                                    //.worker(&self.name, &worker_id)
-                                    .expect("Author of valid header is not in the committee")
-                                    .iter()
-                                    .map(|x| x.primary_to_worker)
-                                    .collect();
-                            debug!("worker addresses are {:?}", addresses);       
-                            let message = PrimaryWorkerMessage::Async(false, self.partition_public_keys.clone());
-                            let bytes = bincode::serialize(&message).expect("Failed to serialize batch sync request");
-                            self.network.broadcast(addresses, Bytes::from(bytes)).await;
-
                             for (msg, height, author, consensus_handler) in self.partition_delayed_msgs.clone() {
                                 //debug!("sending messages to other side of partition");
                                 debug!("sending msg to other side of partition {:?}", msg);

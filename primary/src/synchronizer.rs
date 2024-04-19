@@ -136,10 +136,10 @@ impl Synchronizer {
                             missing_proposals = true;
                             if self.use_fast_sync  {
                                 let lower_bound = self.last_fast_sync_heights.get(pk).unwrap().clone();
-                                if proposal.height > lower_bound {
-                                    missing.push((*pk, proposal.clone(), lower_bound));
-                                    self.last_fast_sync_heights.insert(*pk, proposal.height);
-                                }
+                                //if proposal.height > lower_bound {
+                                missing.push((*pk, proposal.clone(), lower_bound));
+                                self.last_fast_sync_heights.insert(*pk, proposal.height);
+                                //}
                             } else {
                                 missing.push((*pk, proposal.clone(), 1));
                             }
@@ -162,10 +162,10 @@ impl Synchronizer {
                             missing_proposals = true;
                             if self.use_fast_sync  {
                                 let lower_bound = self.last_fast_sync_heights.get(pk).unwrap().clone();
-                                if proposal.height > lower_bound {
-                                    missing.push((*pk, proposal.clone(), lower_bound));
-                                    self.last_fast_sync_heights.insert(*pk, proposal.height);
-                                }
+                                //if proposal.height > lower_bound {
+                                missing.push((*pk, proposal.clone(), lower_bound));
+                                self.last_fast_sync_heights.insert(*pk, proposal.height);
+                                //}
                             } else {
                                 missing.push((*pk, proposal.clone(), 1));
                             }
@@ -190,8 +190,8 @@ impl Synchronizer {
                             if self.use_fast_sync  {
                                 let lower_bound = self.last_fast_sync_heights.get(pk).unwrap().clone();
                                 //if proposal.height > lower_bound {
-                                    missing.push((*pk, proposal.clone(), lower_bound));
-                                    self.last_fast_sync_heights.insert(*pk, proposal.height);
+                                missing.push((*pk, proposal.clone(), lower_bound));
+                                self.last_fast_sync_heights.insert(*pk, proposal.height);
                                 //}
                             } else {
                                 missing.push((*pk, proposal.clone(), 1));
@@ -401,9 +401,9 @@ impl Synchronizer {
             None => {
                 let lower_bound = self.last_fast_sync_heights.get(&header.author).unwrap().clone();
                 // Already sent a fast sync request that subsumes this request
-                if self.use_fast_sync && header.height() - 1 <= lower_bound {
+                /*if self.use_fast_sync && header.height() - 1 <= lower_bound {
                    return Ok(None)
-                }
+                }*/
 
                 debug!("not in store fast sync header height is {}, last height is {}", header.height(), lower_bound);
 
