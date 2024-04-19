@@ -469,7 +469,7 @@ impl Core {
         if self.synchronizer.missing_payload(&header, sync).await? {
             //println!("Missing payload");
             debug!("Processing of {} suspended: missing payload", header);
-            return Ok(());
+            //return Ok(());
         }
 
         // Write this header as an optimistic tip
