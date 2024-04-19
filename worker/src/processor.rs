@@ -8,6 +8,7 @@ use primary::WorkerPrimaryMessage;
 use std::convert::TryInto;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
+use log::debug;
 
 #[cfg(test)]
 #[path = "tests/processor_tests.rs"]
