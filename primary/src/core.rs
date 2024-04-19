@@ -10,7 +10,7 @@ use crate::messages::{
 };
 use crate::primary::{Height, PrimaryMessage, Slot, View};
 use crate::synchronizer::{Synchronizer, self};
-use crate::timer::{Timer, CarTimer, FastTimer};
+use crate::timer::{CarTimer, FastTimer, PayloadTimer, Timer};
 use crate::PrimaryWorkerMessage;
 use async_recursion::async_recursion;
 use bytes::Bytes;
@@ -218,6 +218,8 @@ pub struct Core {
     dropped_slot: u64,
     // Channel to communicate async period to the worker
     tx_worker_async_channel: Sender<(bool, HashSet<PublicKey>)>,
+    // Batch payload timers
+    payload_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = Header> + Send>>>
 }
 
 impl Core {
@@ -359,6 +361,7 @@ impl Core {
                 use_expoential_timeouts,
                 dropped_slot: 0,
                 tx_worker_async_channel,
+                payload_timer_futures: FuturesUnordered::new(),
             }
             .run()
             .await;
@@ -469,7 +472,9 @@ impl Core {
         if self.synchronizer.missing_payload(&header, sync).await? {
             //println!("Missing payload");
             debug!("Processing of {} suspended: missing payload", header);
-            //return Ok(());
+            let timer = PayloadTimer::new(header.clone(), 50);
+            self.payload_timer_futures.push(Box::pin(timer));
+            return Ok(());
         }
 
         // Write this header as an optimistic tip
@@ -2682,6 +2687,15 @@ impl Core {
 
                 //Fast path loopback for external consensus
                 Some(vote) = self.fast_timer_futures.next() => self.process_consensus_vote(vote, true).await,
+
+                // Payload timers
+                Some(header) = self.payload_timer_futures.next() => {
+                    for (digest, worker_id) in header.payload.iter() {
+                        let key = [digest.as_ref(), &worker_id.to_le_bytes()].concat();
+                        self.store.write(key, Vec::new()).await;
+                    }
+                    Ok(())
+                }
 
                 Some((slot, view)) = self.async_timer_futures.next() => {
                     self.during_simulated_asynchrony = !self.during_simulated_asynchrony; 
