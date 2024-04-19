@@ -20,6 +20,9 @@ use std::collections::HashSet;
 use std::error::Error;
 use store::Store;
 use tokio::sync::mpsc::{channel, Sender, Receiver as OtherReceiver};
+use ed25519_dalek::Digest as _;
+use ed25519_dalek::Sha512;
+use std::convert::TryInto;
 
 #[cfg(test)]
 #[path = "tests/worker_tests.rs"]
@@ -321,7 +324,8 @@ impl MessageHandler for WorkerReceiverHandler {
         // Deserialize and parse the message.
         match bincode::deserialize(&serialized) {
             Ok(WorkerMessage::Batch(..)) => {
-                debug!("Received batch message");
+                let digest = Digest(Sha512::digest(&serialized.to_vec()).as_slice()[..32].try_into().unwrap());
+                debug!("Received batch message {:?}", digest);
                 self     //If receive batch message from another worker. Store the batch, and process.
                 .tx_processor
                 .send(serialized.to_vec())
