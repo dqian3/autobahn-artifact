@@ -27,7 +27,7 @@ pub struct Helper {
     //network: SimpleSender,
     network: ReliableSender,
     // Cancel handlers
-    cancel_handlers: HashMap<Digest, Vec<CancelHandler>>,
+    cancel_handlers: Vec<CancelHandler>,
 }
 
 impl Helper {
@@ -45,7 +45,7 @@ impl Helper {
                 rx_request,
                 //network: SimpleSender::new(),
                 network: ReliableSender::new(),
-                cancel_handlers: HashMap::new(),
+                cancel_handlers: Vec::new(),
             }
             .run()
             .await;
@@ -71,10 +71,7 @@ impl Helper {
                     Ok(Some(data)) => {
                         debug!("have digest {:?} in store", digest);
                         let handler = self.network.send(address, Bytes::from(data)).await;
-                        self.cancel_handlers
-                            .entry(digest.clone())
-                            .or_insert_with(Vec::new)
-                            .push(handler);
+                        self.cancel_handlers.push(handler);
                     },
                     Ok(None) => {
                         debug!("don't have digest {:?} in store", digest);
