@@ -62,7 +62,6 @@ impl Worker {
         committee: Committee,
         parameters: Parameters,
         store: Store,
-        rx_batch_maker_async: OtherReceiver<(bool, HashSet<PublicKey>)>,
     ) {
         // Define a worker instance.
         let worker = Self {
@@ -75,9 +74,9 @@ impl Worker {
 
         // Spawn all worker tasks.
         let (tx_primary, rx_primary) = channel(CHANNEL_CAPACITY);
-        let (tx_batch_maker_async_real, rx_batch_maker_real_async) = channel(CHANNEL_CAPACITY);
-        worker.handle_primary_messages(tx_batch_maker_async_real);                         //spawns async task that listens for network message from Primary
-        worker.handle_clients_transactions(tx_primary.clone(), rx_batch_maker_async, rx_batch_maker_real_async);   //spawns async task that listens for network messages from Client
+        
+        worker.handle_primary_messages();                         //spawns async task that listens for network message from Primary
+        worker.handle_clients_transactions(tx_primary.clone());   //spawns async task that listens for network messages from Client
         worker.handle_workers_messages(tx_primary);               //spawns async task that listens for network messages from other Workers
 
         // The `PrimaryConnector` allows the worker to send messages to its primary.
@@ -107,7 +106,7 @@ impl Worker {
 
 
     /// Spawn all tasks responsible to handle messages from our primary.
-    fn handle_primary_messages(&self, tx_batch_maker_async_real: Sender<PrimaryWorkerMessage>) {
+    fn handle_primary_messages(&self) {
         let (tx_synchronizer, rx_synchronizer) = channel(CHANNEL_CAPACITY); //channel between PrimaryReceiverHandler and Synchronizer
 
         // Receive incoming messages from our primary.
@@ -120,7 +119,7 @@ impl Worker {
         Receiver::spawn(
             address,                                    //socket to receive Primary messages from
             /* handler */
-            PrimaryReceiverHandler { tx_synchronizer, tx_batch_maker: tx_batch_maker_async_real }, //handler for received Primary messages, forwards them to synchronizer
+            PrimaryReceiverHandler { tx_synchronizer }, //handler for received Primary messages, forwards them to synchronizer
         );
 
         // The `Synchronizer` is responsible to keep the worker in sync with the others. It handles the commands
@@ -143,7 +142,7 @@ impl Worker {
     }
 
     /// Spawn all tasks responsible to handle clients transactions.
-    fn handle_clients_transactions(&self, tx_primary: Sender<SerializedBatchDigestMessage>, rx_batch_maker_async: OtherReceiver<(bool, HashSet<PublicKey>)>, rx_batch_maker_async_real: OtherReceiver<PrimaryWorkerMessage>) {  //tx_primary: channel between processor and PrimaryConnector
+    fn handle_clients_transactions(&self, tx_primary: Sender<SerializedBatchDigestMessage>) {  //tx_primary: channel between processor and PrimaryConnector
         let (tx_batch_maker, rx_batch_maker) = channel(CHANNEL_CAPACITY);      //channel between TxReceive (Client) and batch maker
         let (tx_quorum_waiter, rx_quorum_waiter) = channel(CHANNEL_CAPACITY);  //channel between batch maker and quorum waiter
         let (tx_processor, rx_processor) = channel(CHANNEL_CAPACITY);          //channel between quorum waiter and processor
@@ -162,30 +161,30 @@ impl Worker {
 
         let mut keys: Vec<_> = self.committee.authorities.keys().cloned().collect();
         let mut partition_public_keys = HashSet::new();
-                            keys.sort();
-                            let index = keys.binary_search(&self.name).unwrap();
+        keys.sort();
+        let index = keys.binary_search(&self.name).unwrap();
 
-                            // Figure out which partition we are in, partition_nodes indicates when the left partition ends
-                            let mut start: usize = 0;
-                            let mut end: usize = 0;
+        // Figure out which partition we are in, partition_nodes indicates when the left partition ends
+        let mut start: usize = 0;
+        let mut end: usize = 0;
                         
-                            // We are in the right partition
-                            if index > 2 as usize - 1 {
-                                start = 2 as usize;
-                                end = keys.len();
+        // We are in the right partition
+        if index > 2 as usize - 1 {
+            start = 2 as usize;
+            end = keys.len();
                             
-                            } else {
-                                // We are in the left partition
-                                start = 0;
-                                end = 2 as usize;
-                            }
+        } else {
+            // We are in the left partition
+            start = 0;
+            end = 2 as usize;
+        }
 
-                            // These are the nodes in our side of the partition
-                            for j in start..end {
-                                partition_public_keys.insert(keys[j]);
-                            }
+        // These are the nodes in our side of the partition
+        for j in start..end {
+            partition_public_keys.insert(keys[j]);
+        }
 
-                            debug!("partition pks are {:?}", partition_public_keys);
+        debug!("partition pks are {:?}", partition_public_keys);
 
         // The transactions are sent to the `BatchMaker` that assembles them into batches. It then broadcasts
         // (in a reliable manner) the batches to all other workers that share the same `id` as us. Finally, it
@@ -202,8 +201,6 @@ impl Worker {
                 .iter()
                 .map(|(name, addresses)| (*name, addresses.worker_to_worker))
                 .collect(),
-            rx_batch_maker_async,  //receiver channel to connect to PrimaryReceiverHandler
-            rx_batch_maker_async_real,
             partition_public_keys,
             self.store.clone(),
         );
@@ -344,7 +341,6 @@ impl MessageHandler for WorkerReceiverHandler {
 #[derive(Clone)]
 struct PrimaryReceiverHandler {
     tx_synchronizer: Sender<PrimaryWorkerMessage>,  //sender channel to connect to synchronizer.
-    tx_batch_maker: Sender<PrimaryWorkerMessage>,   //sender channel to connect to batch maker.
 }
 
 #[async_trait]
@@ -358,27 +354,13 @@ impl MessageHandler for PrimaryReceiverHandler {
         match bincode::deserialize(&serialized) {
             Err(e) => error!("Failed to deserialize primary message: {}", e),
             Ok(message) => {
-                match message {
-                    PrimaryWorkerMessage::Async(..) => {
-                        debug!("Received async message from primary message handler");
-                        self
-                        .tx_batch_maker
-                        .send(message)
-                        .await
-                        .expect("Failed to send async message")
-                    },
-                    _ => self
-                        .tx_synchronizer
-                        .send(message)
-                        .await
-                        .expect("Failed to send cleanup message"),
-                }
-            },
-                /*self             
+                debug!("Received primary message: {:?}", message);
+                self             
                     .tx_synchronizer
                     .send(message)
                     .await
-                    .expect("Failed to send transaction"),*/
+                    .expect("Failed to send transaction")
+            },
         }
         Ok(())
     }

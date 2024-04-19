@@ -53,14 +53,10 @@ pub struct BatchMaker {
     /// A network sender to broadcast the batches to the other workers.
     //network: SimpleSender,
     network: ReliableSender,
-    // Receive async requests from primary core
-    rx_async: Receiver<(bool, HashSet<PublicKey>)>,
     // Currently during asynchrony
     during_simulated_asynchrony: bool,
     // Partition public keys
     partition_public_keys: HashSet<PublicKey>,
-    // Receive real async requests
-    rx_async_real: Receiver<PrimaryWorkerMessage>,
     // Partition queue for batch requests
     partition_queue: VecDeque<WorkerMessage>,
     // Store
@@ -78,8 +74,6 @@ impl BatchMaker {
         tx_message: Sender<QuorumWaiterMessage>, //sender channel to worker.QuorumWaiter
         tx_batch: Sender<Vec<u8>>,   // sender channel to worker.Processor
         workers_addresses: Vec<(PublicKey, SocketAddr)>,
-        rx_async: Receiver<(bool, HashSet<PublicKey>)>,
-        rx_async_real: Receiver<PrimaryWorkerMessage>,
         partition_public_keys: HashSet<PublicKey>,
         mut store: Store,
     ) {
@@ -95,10 +89,8 @@ impl BatchMaker {
                 current_batch_size: 0,
                 //network: SimpleSender::new(),
                 network: ReliableSender::new(),
-                rx_async,
                 during_simulated_asynchrony: false,
                 partition_public_keys,
-                rx_async_real,
                 partition_queue: VecDeque::new(),
                 store,
             }
@@ -130,23 +122,6 @@ impl BatchMaker {
                         current_time = Instant::now();
 
                         timer.as_mut().reset(Instant::now() + Duration::from_millis(self.max_batch_delay));
-                    }
-                },
-
-                Some((during_simulated_asynchrony, partition_public_keys)) = self.rx_async.recv() => {
-                    debug!("BatchMaker: received async request");
-                    self.during_simulated_asynchrony = during_simulated_asynchrony;
-                    self.partition_public_keys = partition_public_keys;
-                },
-
-                Some(async_request) = self.rx_async_real.recv() => {
-                    debug!("BatchMaker: received real async request");
-                    match async_request {
-                        PrimaryWorkerMessage::Async(during_simulated_asynchrony, partition_public_keys) => {
-                            self.during_simulated_asynchrony = during_simulated_asynchrony;
-                            self.partition_public_keys = partition_public_keys;
-                        },
-                        _ => {},
                     }
                 },
 
