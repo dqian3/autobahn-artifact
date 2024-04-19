@@ -219,7 +219,9 @@ pub struct Core {
     // Channel to communicate async period to the worker
     tx_worker_async_channel: Sender<(bool, HashSet<PublicKey>)>,
     // Batch payload timers
-    payload_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = Header> + Send>>>
+    payload_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = Header> + Send>>>,
+    // Missed payloads
+    missed_payloads: u64,
 }
 
 impl Core {
@@ -362,6 +364,7 @@ impl Core {
                 dropped_slot: 0,
                 tx_worker_async_channel,
                 payload_timer_futures: FuturesUnordered::new(),
+                missed_payloads: 0,
             }
             .run()
             .await;
@@ -472,7 +475,7 @@ impl Core {
         if self.synchronizer.missing_payload(&header, sync).await? {
             //println!("Missing payload");
             debug!("Processing of {} suspended: missing payload", header);
-            let timer = PayloadTimer::new(header.clone(), 50);
+            let timer = PayloadTimer::new(header.clone(), 100);
             self.payload_timer_futures.push(Box::pin(timer));
             return Ok(());
         }
@@ -2690,9 +2693,16 @@ impl Core {
 
                 // Payload timers
                 Some(header) = self.payload_timer_futures.next() => {
+                    debug!("Missed payloads are {:?}", self.missed_payloads);
                     for (digest, worker_id) in header.payload.iter() {
                         let key = [digest.as_ref(), &worker_id.to_le_bytes()].concat();
-                        self.store.write(key, Vec::new()).await;
+                        if self.store.read(key.clone()).await.unwrap().is_none() {
+                            self.missed_payloads += 1;
+                            
+                            self.store.write(key, Vec::new()).await;
+                            
+                        }
+                        
                     }
                     Ok(())
                 }
