@@ -215,7 +215,7 @@ impl BatchMaker {
         //NEW:
         //Best-effort broadcast only. Any failure is correlated with the primary operating this node (running on same machine)
         
-        /*let bytes = Bytes::from(serialized.clone());
+        let bytes = Bytes::from(serialized.clone());
         let digest = Digest(Sha512::digest(&serialized).as_slice()[..32].try_into().unwrap());
 
         // Store the batch.
@@ -233,9 +233,9 @@ impl BatchMaker {
             //debug!("sending batch normally");
             let (_, addresses): (Vec<_>, _) = self.workers_addresses.iter().cloned().unzip();
             self.network.broadcast(addresses, bytes).await; 
-        }*/
+        }
         
-        let digest = Digest(Sha512::digest(&serialized).as_slice()[..32].try_into().unwrap());
+        /*let digest = Digest(Sha512::digest(&serialized).as_slice()[..32].try_into().unwrap());
         self.store.write(digest.to_vec(), serialized.clone()).await;
         self.tx_batch.send(serialized.clone()).await.expect("Failed to deliver batch");
 
@@ -254,6 +254,6 @@ impl BatchMaker {
                  handlers: names.into_iter().zip(handlers.into_iter()).collect(),
              })
              .await
-            .expect("Failed to deliver batch");
+            .expect("Failed to deliver batch");*/
     }
 }
