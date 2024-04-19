@@ -2697,12 +2697,12 @@ impl Core {
                     for (digest, worker_id) in header.payload.iter() {
                         let key = [digest.as_ref(), &worker_id.to_le_bytes()].concat();
                         if self.store.read(key.clone()).await.unwrap().is_none() {
+                            debug!("Not reading payload for digest {:?} and worker_id {:?}", digest, worker_id);
                             self.missed_payloads += 1;
-                            
-                            self.store.write(key, Vec::new()).await;
-                            
+                        } else {
+                            debug!("Reading payload for digest {:?} and worker_id {:?}", digest, worker_id);
                         }
-                        
+                        self.store.write(key, Vec::new()).await;
                     }
                     Ok(())
                 }
