@@ -1,9 +1,10 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::worker::SerializedBatchDigestMessage;
 use bytes::Bytes;
-use network::SimpleSender;
+use network::{ReliableSender, SimpleSender};
 use std::net::SocketAddr;
 use tokio::sync::mpsc::Receiver;
+use network::CancelHandler;
 
 // Send batches' digests to the primary.
 pub struct PrimaryConnector {
@@ -12,7 +13,10 @@ pub struct PrimaryConnector {
     /// Input channel to receive the digests to send to the primary.
     rx_digest: Receiver<SerializedBatchDigestMessage>,
     /// A network sender to send the baches' digests to the primary.
-    network: SimpleSender,
+    //network: SimpleSender,
+    network: ReliableSender,
+    // Cancel handlers
+    cancel_handlers: Vec<CancelHandler>,
 }
 
 impl PrimaryConnector {
@@ -21,7 +25,9 @@ impl PrimaryConnector {
             Self {
                 primary_address,
                 rx_digest,
-                network: SimpleSender::new(),
+                //network: SimpleSender::new(),
+                network: ReliableSender::new(),
+                cancel_handlers: Vec::new(),
             }
             .run()
             .await;
@@ -31,9 +37,10 @@ impl PrimaryConnector {
     async fn run(&mut self) {
         while let Some(digest) = self.rx_digest.recv().await {
             // Send the digest through the network.
-            self.network
+            let handler = self.network
                 .send(self.primary_address, Bytes::from(digest))
                 .await;
+            self.cancel_handlers.push(handler);
         }
     }
 }
