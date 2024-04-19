@@ -2696,7 +2696,8 @@ impl Core {
                     debug!("Missed payloads are {:?}", self.missed_payloads);
                     for (digest, worker_id) in header.payload.iter() {
                         let key = [digest.as_ref(), &worker_id.to_le_bytes()].concat();
-                        if self.store.read(key.clone()).await.unwrap().is_none() {
+                        let res = self.store.read(key.clone()).await.expect("should read");
+                        if res.is_none() {
                             debug!("Not reading payload for digest {:?} and worker_id {:?}", digest, worker_id);
                             self.missed_payloads += 1;
                         } else {
