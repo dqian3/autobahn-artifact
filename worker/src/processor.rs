@@ -37,7 +37,7 @@ impl Processor {
             while let Some(batch) = rx_batch.recv().await {
                 // Hash the batch.
                 let digest = Digest(Sha512::digest(&batch).as_slice()[..32].try_into().unwrap());
-                debug!("Received batch {:?}", digest);
+                debug!("Processor received batch {:?}", digest);
 
                 // Store the batch.
                 store.write(digest.to_vec(), batch).await;

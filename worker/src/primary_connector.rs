@@ -1,6 +1,7 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::worker::SerializedBatchDigestMessage;
 use bytes::Bytes;
+use log::debug;
 use network::{ReliableSender, SimpleSender};
 use std::net::SocketAddr;
 use tokio::sync::mpsc::Receiver;
@@ -37,6 +38,7 @@ impl PrimaryConnector {
     async fn run(&mut self) {
         while let Some(digest) = self.rx_digest.recv().await {
             // Send the digest through the network.
+            debug!("Received primary connector batch digest {:?}", digest);
             let handler = self.network
                 .send(self.primary_address, Bytes::from(digest))
                 .await;
