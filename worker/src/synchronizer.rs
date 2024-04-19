@@ -198,6 +198,7 @@ impl Synchronizer {
                 Some(result) = waiting.next() => match result {
                     Ok(Some(digest)) => {
                         // We got the batch, remove it from the pending list.
+                        debug!("Got from helper batch {}", digest);
                         self.pending.remove(&digest);
                         //self.cancel_handlers.remove(&digest);
                     },
