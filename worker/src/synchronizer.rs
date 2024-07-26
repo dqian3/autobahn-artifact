@@ -9,7 +9,7 @@ use log::{debug, error};
 use primary::Height;
 use network::ReliableSender;
 use network::CancelHandler;
-//use network::SimpleSender;
+use network::SimpleSender;
 use primary::PrimaryWorkerMessage;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
