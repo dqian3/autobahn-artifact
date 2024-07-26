@@ -51,8 +51,8 @@ pub struct BatchMaker {
     /// Holds the size of the current batch (in bytes).
     current_batch_size: usize,
     /// A network sender to broadcast the batches to the other workers.
-    //network: SimpleSender,
-    network: ReliableSender,
+    network: SimpleSender,
+    //network: ReliableSender,
     // Currently during asynchrony
     during_simulated_asynchrony: bool,
     // Partition public keys
@@ -87,8 +87,8 @@ impl BatchMaker {
                 workers_addresses,
                 current_batch: Batch::with_capacity(batch_size * 2),
                 current_batch_size: 0,
-                //network: SimpleSender::new(),
-                network: ReliableSender::new(),
+                network: SimpleSender::new(),
+                //network: ReliableSender::new(),
                 during_simulated_asynchrony: false,
                 partition_public_keys,
                 partition_queue: VecDeque::new(),

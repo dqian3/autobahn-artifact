@@ -14,8 +14,8 @@ pub struct PrimaryConnector {
     /// Input channel to receive the digests to send to the primary.
     rx_digest: Receiver<SerializedBatchDigestMessage>,
     /// A network sender to send the baches' digests to the primary.
-    //network: SimpleSender,
-    network: ReliableSender,
+    network: SimpleSender,
+    //network: ReliableSender,
     // Cancel handlers
     cancel_handlers: Vec<CancelHandler>,
 }
@@ -26,8 +26,8 @@ impl PrimaryConnector {
             Self {
                 primary_address,
                 rx_digest,
-                //network: SimpleSender::new(),
-                network: ReliableSender::new(),
+                network: SimpleSender::new(),
+                //network: ReliableSender::new(),
                 cancel_handlers: Vec::new(),
             }
             .run()
@@ -39,10 +39,14 @@ impl PrimaryConnector {
         while let Some(digest) = self.rx_digest.recv().await {
             // Send the digest through the network.
             debug!("Received primary connector batch digest {:?}", digest);
-            let handler = self.network
+            /*let handler = self.network
                 .send(self.primary_address, Bytes::from(digest))
                 .await;
-            self.cancel_handlers.push(handler);
+            self.cancel_handlers.push(handler);*/
+
+            self.network
+                .send(self.primary_address, Bytes::from(digest))
+                .await;
         }
     }
 }

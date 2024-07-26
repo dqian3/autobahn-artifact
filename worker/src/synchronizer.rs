@@ -44,8 +44,8 @@ pub struct Synchronizer {
     /// Input channel to receive the commands from the primary.
     rx_message: Receiver<PrimaryWorkerMessage>,
     /// A network sender to send requests to the other workers.
-    //network: SimpleSender,
-    network: ReliableSender,
+    network: SimpleSender,
+    //network: ReliableSender,
     /// Loosely keep track of the primary's round number (only used for cleanup).
     round: Round,
     /// Keeps the digests (of batches) that are waiting to be processed by the primary. Their
@@ -78,8 +78,8 @@ impl Synchronizer {
                 sync_retry_delay,
                 sync_retry_nodes,
                 rx_message,
-                //network: SimpleSender::new(),
-                network: ReliableSender::new(),
+                network: SimpleSender::new(),
+                //network: ReliableSender::new(),
                 round: Round::default(),
                 pending: HashMap::new(),
                 cancel_handlers: HashMap::new(),
@@ -167,11 +167,13 @@ impl Synchronizer {
 
                         debug!("Requesting sync for missing {:?}, address is {:?}", missing, address);
                         
-                        let handler = self.network.send(address, Bytes::from(serialized)).await;
+                        /*let handler = self.network.send(address, Bytes::from(serialized)).await;
                         self.cancel_handlers
                             .entry(Digest::default()) 
                             .or_insert_with(Vec::new)
-                            .push(handler);
+                            .push(handler);*/
+
+                        self.network.send(address, Bytes::from(serialized)).await;
                         
                     },
                     PrimaryWorkerMessage::Cleanup(round) => {

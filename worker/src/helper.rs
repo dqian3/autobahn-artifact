@@ -24,8 +24,8 @@ pub struct Helper {
     /// Input channel to receive batch requests.
     rx_request: Receiver<(Vec<Digest>, PublicKey)>,
     /// A network sender to send the batches to the other workers.
-    //network: SimpleSender,
-    network: ReliableSender,
+    network: SimpleSender,
+    //network: ReliableSender,
     // Cancel handlers
     cancel_handlers: Vec<CancelHandler>,
 }
@@ -43,8 +43,8 @@ impl Helper {
                 committee,
                 store,
                 rx_request,
-                //network: SimpleSender::new(),
-                network: ReliableSender::new(),
+                network: SimpleSender::new(),
+                //network: ReliableSender::new(),
                 cancel_handlers: Vec::new(),
             }
             .run()
@@ -70,8 +70,9 @@ impl Helper {
                 match self.store.read(digest.to_vec()).await {
                     Ok(Some(data)) => {
                         debug!("have digest {:?} in store", digest);
-                        let handler = self.network.send(address, Bytes::from(data)).await;
-                        self.cancel_handlers.push(handler);
+                        /*let handler = self.network.send(address, Bytes::from(data)).await;
+                        self.cancel_handlers.push(handler);*/
+                        self.network.send(address, Bytes::from(data)).await;
                     },
                     Ok(None) => {
                         debug!("don't have digest {:?} in store", digest);
