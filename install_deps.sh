@@ -8,8 +8,8 @@ sudo apt-get -y install cmake
 
 # Install rust (non-interactive).
 curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source $HOME/.cargo/env'
-rustup default stable'
+source $HOME/.cargo/env
+rustup default stable
 
 # This is missing from the Rocksdb installer (needed for Rocksdb).
 sudo apt-get install -y clang
