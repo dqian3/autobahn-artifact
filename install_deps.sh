@@ -1,4 +1,4 @@
 sudo apt update
-
-wget https://bootstrap.pypa.io/get-pip.py
-sudo python3 get-pip.py
+sudo apt install clang tmux python3-pip
+curl https://sh.rustup.rs -sSf | sh -s -- -y
+export PATH=$PATH:~/.local/bin
