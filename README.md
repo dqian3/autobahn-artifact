@@ -62,16 +62,41 @@ The ReadMe is organized into the following high level sections:
      
 
 ## Installing Dependencies <a name="installing"></a>
-TODO
+TODO: What hardware req. What software env (ubuntu). What installs (Rust, cargo, tokio, rocks. etc..?)
+
+Building code: Cargo build
 
 ## Testing Locally
 i.e. quick local run to get some numbers/see that it works (this might already clear the bar for some of the badges)
+-> fab local 
 
 ## Setting up GCP
 
 TODO: Can we provide alternatives on how to run elsehwere? (if the artifact committee cannot run on GCP)
 
+Detail which machines and configs we used (CPU/SSD...). What geo setup (i.e. where machines are located)
+
 ## Running Experiment
+
 i.e. what scripts to run, what configs to give, and how to collect/interpret results.
+-> fab remote
+
+Explain what parameters to configure in config and what they control. 
+
+Explain what file to look at for results, and which lines/numbers to look for.
 
 ## Reproducing Results
+Provide ALL configs for each experiment. But suggest they only validate the claims.
+
+Exp 1
+- for each system, give our peak numbers + the config. Have them reproduce those
+
+Exp 2
+- for each n, and each system give the numbers (i.e. the whole fig as a table)
+
+Exp 3
+- show the 3s blip in HS, and lack thereof for us (don't think we need to show the other two blips).
+- give the config. Explain how to interpret the data file to see blip duration and hangover duration (Be careful to explain that the numbers can be slightly offset)
+
+Exp 4
+- give the configs and run all. Same same.
