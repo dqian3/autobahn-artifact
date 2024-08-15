@@ -21,4 +21,5 @@ sudo apt-get remove python3-pip
 wget https://bootstrap.pypa.io/get-pip.py
 python3 get-pip.py
 
-export PATH=$PATH:~/.local/bin
+echo 'export PATH=$PATH:~/.local/bin' >> ~/.bashrc
+source ~/.bashrc
