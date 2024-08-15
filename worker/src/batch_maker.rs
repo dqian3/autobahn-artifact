@@ -9,6 +9,8 @@ use crypto::Digest;
 use crypto::PublicKey;
 //#[cfg(feature = "benchmark")]
 use ed25519_dalek::{Digest as _, Sha512};
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use log::debug;
 //#[cfg(feature = "benchmark")]
 use log::info;
@@ -17,11 +19,15 @@ use primary::{Primary, PrimaryWorkerMessage, WorkerPrimaryMessage};
 use std::collections::{HashSet, VecDeque};
 //#[cfg(feature = "benchmark")]
 
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::{sleep, Duration, Instant};
 use store::Store;
 use std::convert::TryInto as _;
+use primary::timer::Timer;
+
 
 #[cfg(test)]
 #[path = "tests/batch_maker_tests.rs"]
@@ -31,6 +37,23 @@ pub mod batch_maker_tests;
 pub type Transaction = Vec<u8>;
 //The message type forwarded to quorum waiters
 pub type Batch = Vec<Transaction>;
+
+/// The view number (of consensus)
+pub type View = u64;
+// The slot (sequence) number of consensus
+pub type Slot = u64;
+
+#[derive(Clone, PartialEq, std::fmt::Debug)]
+pub enum AsyncEffectType {
+    Off = 0,
+    TempBlip = 1, //Send nothing for x seconds, and then release all messages
+    Failure = 2, //Send nothing for x seconds  //TODO: Combine with TempBlip?
+    Partition = 3, //Send nothing to partitioned replicas for x seconds, then release all
+    Egress = 4,  //For x seconds, delay all outbound messages by some amount
+}
+fn uint_to_enum(v: u8) -> AsyncEffectType {
+    unsafe { std::mem::transmute(v) }
+}
 
 /// Assemble clients transactions into batches.
 pub struct BatchMaker {
@@ -62,8 +85,23 @@ pub struct BatchMaker {
     // Store
     store: Store,
     // Quorum waiter
-    tx_message: Sender<QuorumWaiterMessage>
-
+    tx_message: Sender<QuorumWaiterMessage>,
+    //Simulating an async event
+    pub simulate_asynchrony: bool, 
+    //Type of effects: 0 for delay full async duration, 1 for partition, 2 for  failure, 3 for egress delay. Will start #type many blips.
+    pub asynchrony_type: VecDeque<u8>, 
+    //Start of async period   //offset from current time (in seconds) when to start next async effect
+    pub asynchrony_start: VecDeque<u64>,     
+    //Duration of async period
+    pub asynchrony_duration: VecDeque<u64>,  
+    ////first k nodes experience specified async behavior
+    pub affected_nodes: VecDeque<u64>, 
+    ////public keys of the other works
+    pub keys: Vec<PublicKey>,
+    //name of the worker
+    pub name: PublicKey,
+    // async timer futures
+    pub async_timer_futures: FuturesUnordered<Pin<Box<dyn Future<Output = (Slot, View)> + Send>>>,
 }
 
 impl BatchMaker {
@@ -74,8 +112,16 @@ impl BatchMaker {
         tx_message: Sender<QuorumWaiterMessage>, //sender channel to worker.QuorumWaiter
         tx_batch: Sender<Vec<u8>>,   // sender channel to worker.Processor
         workers_addresses: Vec<(PublicKey, SocketAddr)>,
-        partition_public_keys: HashSet<PublicKey>,
+        //partition_public_keys: HashSet<PublicKey>,
         mut store: Store,
+        
+        simulate_asynchrony: bool,
+        asynchrony_type: VecDeque<u8>,
+        asynchrony_start: VecDeque<u64>,
+        asynchrony_duration: VecDeque<u64>,
+        affected_nodes: VecDeque<u64>,
+        keys: Vec<PublicKey>,
+        name: PublicKey,
     ) {
         tokio::spawn(async move {
             Self {
@@ -90,9 +136,18 @@ impl BatchMaker {
                 network: SimpleSender::new(),
                 //network: ReliableSender::new(),
                 during_simulated_asynchrony: false,
-                partition_public_keys,
+                //partition_public_keys,
+                partition_public_keys: HashSet::new(),
                 partition_queue: VecDeque::new(),
                 store,
+                simulate_asynchrony,
+                asynchrony_type,
+                asynchrony_start,
+                asynchrony_duration,
+                affected_nodes,
+                keys,
+                name,
+                async_timer_futures: FuturesUnordered::new(),
             }
             .run()
             .await;
@@ -103,10 +158,52 @@ impl BatchMaker {
     async fn run(&mut self) {
         let timer = sleep(Duration::from_millis(self.max_batch_delay));
         tokio::pin!(timer);
-        let timer1 = sleep(Duration::from_secs(10));
+        
+        if self.simulate_asynchrony {
+            for i in 0..self.asynchrony_start.len() {
+                let start_offset = self.asynchrony_start[i];
+                let end_offset = start_offset +  self.asynchrony_duration[i];
+                            
+                let async_start = Timer::new(0, 0, start_offset);
+                let async_end = Timer::new(0, 0, end_offset);
+
+                self.async_timer_futures.push(Box::pin(async_start));
+                self.async_timer_futures.push(Box::pin(async_end));
+                
+                if uint_to_enum(self.asynchrony_type[i]) == AsyncEffectType::Partition {
+                    self.keys.sort();
+                    let index = self.keys.binary_search(&self.name).unwrap();
+
+                    // Figure out which partition we are in, partition_nodes indicates when the left partition ends
+                    let mut start: usize = 0;
+                    let mut end: usize = 0;
+                
+                    // We are in the right partition
+                    if index > self.affected_nodes[i] as usize - 1 {
+                        start = self.affected_nodes[i] as usize;
+                        end = self.keys.len();
+                    
+                    } else {
+                        // We are in the left partition
+                        start = 0;
+                        end = self.affected_nodes[i] as usize;
+                    }
+
+                    // These are the nodes in our side of the partition
+                    for j in start..end {
+                        self.partition_public_keys.insert(self.keys[j]);
+                    }
+
+                    debug!("partition pks are {:?}", self.partition_public_keys);
+                }
+            }
+        }
+        
+        
+        /*let timer1 = sleep(Duration::from_secs(10));
         tokio::pin!(timer1);
         let timer2 = sleep(Duration::from_secs(30));
-        tokio::pin!(timer2);
+        tokio::pin!(timer2);*/
         let mut current_time = Instant::now();
 
         loop {
@@ -136,8 +233,13 @@ impl BatchMaker {
                     timer.as_mut().reset(Instant::now() + Duration::from_millis(self.max_batch_delay));
                 },
 
+                Some((slot, view)) = self.async_timer_futures.next() => {
+                    self.during_simulated_asynchrony = !self.during_simulated_asynchrony;
+                    debug!("partition queue size is {:?}", self.partition_queue.len());
+                },
+
                 // If the timer triggers, seal the batch even if it contains few transactions.
-                () = &mut timer1 => {
+                /*() = &mut timer1 => {
                     debug!("BatchMaker: partition delay timer 1 triggered");
                     self.during_simulated_asynchrony = true;
                     timer1.as_mut().reset(Instant::now() + Duration::from_secs(100));
@@ -148,18 +250,10 @@ impl BatchMaker {
                     debug!("BatchMaker: partition delay timer 2 triggered");
                     debug!("partition queue size is {:?}", self.partition_queue.len());
                     self.during_simulated_asynchrony = false;
-                    /*while !self.partition_queue.is_empty() {
-                        let message = self.partition_queue.pop_front().unwrap();
-                        let serialized = bincode::serialize(&message).expect("Failed to serialize our own batch");
-                        let bytes = Bytes::from(serialized.clone());
-                        let new_addresses: Vec<_> = self.workers_addresses.iter().filter(|(pk, _)| !self.partition_public_keys.contains(pk)).map(|(_, addr)| addr).cloned().collect();
-                        //let (_, addresses) = new_addresses.iter().cloned().unzip();
-                        debug!("addresses is {:?}", new_addresses);
-                        self.partition_queue.push_back(message);
-                        self.network.broadcast(new_addresses, bytes).await; 
-                    }*/
                     timer2.as_mut().reset(Instant::now() + Duration::from_secs(100));
-                },
+                },*/
+
+
 
             }
 
