@@ -64,17 +64,96 @@ The ReadMe is organized into the following high level sections:
 ## Installing Dependencies <a name="installing"></a>
 TODO: What hardware req. What software env (ubuntu). What installs (Rust, cargo, tokio, rocks. etc..?)
 
-Building code: Cargo build
+Building code: 
+`cargo build`
 
 ## Testing Locally
 i.e. quick local run to get some numbers/see that it works (this might already clear the bar for some of the badges)
 -> fab local 
 
 ## Setting up GCP
-
 TODO: Can we provide alternatives on how to run elsehwere? (if the artifact committee cannot run on GCP)
 
 Detail which machines and configs we used (CPU/SSD...). What geo setup (i.e. where machines are located)
+
+We recommend running on GCP as our experiment scripts are designed to work with GCP. New users to GCP can get $300 worth of free credit, which should be plenty to reproduce our results
+
+### Setup SSH keys
+Run the following command locally to generate ssh keys
+`ssh-keygen -t rsa -f ~/.ssh/KEY_FILENAME -C USERNAME -b 2048`
+
+To add a public SSH key to project metadata using the Google Cloud console, do the following:
+
+1. In the Google Cloud console, go to the Metadata page.
+
+2. Click the SSH keys tab.
+
+3. Click Edit.
+
+4. Click Add item.
+
+5. In the SSH key field that opens, add your public SSH key. The key must be in one of the following formats:
+
+`KEY_VALUE USERNAME`
+
+Replace the following:
+
+KEY_VALUE: the public SSH key value
+USERNAME: your username. For example, cloudysanfrancisco or cloudysanfrancisco_gmail_com.
+For Linux VMs, the USERNAME can't be root, unless you configure your VM to allow root login. For more information, see Connect to Linux VMs as the root user.
+
+For Windows VMs that use Active Directory (AD), the username must be prepended with the AD domain, in the format of DOMAIN\. For example, the user cloudysanfrancisco within the ad.example.com AD has a USERNAME of example\cloudysanfrancisco.
+
+6. Click Save.
+
+### Setup VPC
+
+1. In the Google Cloud console, go to the VPC networks page.
+
+2. Click Create VPC network.
+
+3. Enter a Name for the network (recommend autobahn-vpc).
+
+4. Maximum transmission unit (MTU): Choose 1460 (default)
+
+5. Choose Automatic for the Subnet creation mode.
+
+6. In the Firewall rules section, select zero or more predefined firewall rules. The rules address common use cases for connectivity to instances.
+
+Whether or not you select pre-defined rules, you can create your own firewall rules after you create the network.
+
+Each predefined rule name starts with the name of the VPC network that you are creating, NETWORK. In the IPv4 firewall rules tab, the predefined ingress firewall rule named NETWORK-allow-custom is editable. By default it specifies the source range 10.128.0.0/9, which contains current and future IPv4 ranges for subnets in an auto mode network. The right side of the row that contains the rule, click Edit to select subnets, add additional IPv4 ranges, and specify protocols and ports.
+
+7. Choose the Dynamic routing mode for the VPC network.
+
+8. Click Create.
+
+9. Check that the default 4 firewall rules are there (see `Pre-populated rules in the default network` here https://cloud.google.com/firewall/docs/firewalls)
+
+### Create Instance Templates
+The 4 regions we used are: us-east5, us-east1, us-west1, us-west4. Create one instance template per region as follows:
+
+1. In the Google Cloud console, go to the Instance templates page.
+
+2. Click Create instance template.
+
+3. Give instance template a name
+
+4. Select the Location as follows:
+Choose Regional.
+Select the Region where you want to create your instance template.
+
+5. Select a Machine type.
+Choose t2d-standard-16 (16vCPU, 64 GB of memory) (under General purpose category)
+Choose Spot for VM provisioning model (to save costs)
+Choose 20 GB balanced persistent disk (in the Boot disk section).
+Select ubuntu-2004-focal-v20231101 as the Image
+
+6. Click Create to create the template.
+
+Create one last instance template to serve as the control machine. Pick any of the four regions.
+For this instance template select Standard instead of Spot for VM provisioning model (so it won't be pre-empted while running an experiment).
+We recommend you pick t2d-standard-4 (instead of t2d-standard-16) for the machine type for the control machine to save costs.
 
 ## Running Experiment
 
