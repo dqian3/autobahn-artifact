@@ -20,11 +20,13 @@ This artifact contains, and allows to reproduce, experiments for all figures inc
 It contains a prototype implemententation of Autobahn, as well as the reference implementations used to evaluate baseline systems: VanillaHS, BatchedHS, and Bullshark. Each prototype is located on its *own* branch, named accordingly. Please checkout the corresponding branch when validating claims for a given system.
 
 
-
 Autobahn and all baseline systems are implemented in Rust, using the asynchronous Tokio runtime environment. TCP is used for networking, and ed25519-dalek signatures are used for authentication.
 Replicas persist all messages receives to disk, using RocksDB.
-Client processes connect to *local* Replica machines and submit dummy payload requests (transactions) only to this replica. Replicas distribute payloads to one another -- the specifics depend on the particular system.
-TODO: Say in which modules you can find which code roughly. 
+Client processes connect to *local* Replica machines and submit dummy payload requests (transactions) only to this replica. Replicas distribute payloads to one another -- the specifics depend on the particular system. 
+
+Orienting oneself in the code: 
+Autobahn/Bullshark: The two main modules are "worker" and "primary". The worker layer is responsible for receiving client requests. It forwards data and digests to the primary layer which contains the main consensus logic.
+VanillaHS/BatchedHS: The core module is "consensus"
 
 TODO: Describe also what it doesnt do.
 - e.g. do we have exponential timeouts?
@@ -69,20 +71,31 @@ Building code:
 
 ## Testing Locally
 i.e. quick local run to get some numbers/see that it works (this might already clear the bar for some of the badges)
--> fab local 
+In order to run a quick test locally simple navigate to `benchmark/` and run `fab local`
+
+This will run a simple local experiment, using the parameters provided in `fabfile.py` (in `def local()`)
+Additional instructions can be found in `benchmark/README`.
+> [!WARNING]
+> The Readme in branches Autobahn and Bullshark also contains some instructions to run on AWS. 
+> These are inherited from Narwhal/Bullshark and have NOT BEEN TESTED by us. 
+> We recommend you use the GCP instructions that we have trialed ourselves.
+
 
 ## Setting up GCP
 TODO: Can we provide alternatives on how to run elsehwere? (if the artifact committee cannot run on GCP)
 
 Detail which machines and configs we used (CPU/SSD...). What geo setup (i.e. where machines are located)
 
-We recommend running on GCP as our experiment scripts are designed to work with GCP. New users to GCP can get $300 worth of free credit, which should be plenty to reproduce our results
+We recommend running on GCP as our experiment scripts are designed to work with GCP. 
+New users to GCP can get $300 worth of free credit (https://console.cloud.google.com/welcome/new), which should be sufficient to reproduce our core results.
 
 ### Setup SSH keys
-Run the following command locally to generate ssh keys
+In order to connect to GCP you will need to register an SSH key.
+
+If you do not already have an ssh key-pair, run the following command locally to generate ssh keys.
 `ssh-keygen -t rsa -f ~/.ssh/KEY_FILENAME -C USERNAME -b 2048`
 
-To add a public SSH key to project metadata using the Google Cloud console, do the following:
+To add a public SSH key to the project metadata using the Google Cloud console, do the following:
 
 1. In the Google Cloud console, go to the Metadata page.
 
@@ -106,13 +119,14 @@ For Windows VMs that use Active Directory (AD), the username must be prepended w
 
 6. Click Save.
 
-### Setup VPC
+### Setting up Google Virtual Private Cloud (VPC)
+Next, you will need to create your own Virtual Private Cloud network. To do so: 
 
 1. In the Google Cloud console, go to the VPC networks page.
 
 2. Click Create VPC network.
 
-3. Enter a Name for the network (recommend autobahn-vpc).
+3. Enter a Name for the network (we recommend `autobahn-vpc`).
 
 4. Maximum transmission unit (MTU): Choose 1460 (default)
 
@@ -131,7 +145,10 @@ Each predefined rule name starts with the name of the VPC network that you are c
 9. Check that the default 4 firewall rules are there (see `Pre-populated rules in the default network` here https://cloud.google.com/firewall/docs/firewalls)
 
 ### Create Instance Templates
-The 4 regions we used are: us-east5, us-east1, us-west1, us-west4. Create one instance template per region as follows:
+We're now ready to create an Instance Template for each region we need, containing the respective hardware configurations we will use.
+
+We used the following four regsions in our experiments: us-east5, us-east1, us-west1, us-west4. 
+Create one instance template per region as follows:
 
 1. In the Google Cloud console, go to the Instance templates page.
 
@@ -146,7 +163,7 @@ Select the Region where you want to create your instance template.
 5. Select a Machine type.
 Choose t2d-standard-16 (16vCPU, 64 GB of memory) (under General purpose category)
 Choose Spot for VM provisioning model (to save costs)
-Choose 20 GB balanced persistent disk (in the Boot disk section).
+Choose 20 GB balanced persistent disk (in the Boot disk section). This is important! If you use a HDD then writing to disk may become a bottleneck.
 Select ubuntu-2004-focal-v20231101 as the Image
 
 6. Click Create to create the template.
