@@ -21,14 +21,32 @@ def local(ctx, debug=True):
         'duration': 20,
     }
     node_params = {
-        'timeout_delay': 500,  # ms
-        'header_size': 1_000,  # bytes
+        'timeout_delay': 1_000,  # ms
+        'header_size': 32,  # bytes
         'max_header_delay': 200,  # ms
         'gc_depth': 50,  # rounds
-        'sync_retry_delay': 5_000,  # ms
-        'sync_retry_nodes': 3,  # number of nodes
+        'sync_retry_delay': 1_000,  # ms
+        'sync_retry_nodes': 4,  # number of nodes
         'batch_size': 500_000,  # bytes
-        'max_batch_delay': 200  # ms
+        'max_batch_delay': 200,  # ms
+        'use_optimistic_tips': False,
+        'use_parallel_proposals': True,
+        'k': 1,
+        'use_fast_path': True,
+        'fast_path_timeout': 200,
+        'use_ride_share': False,
+        'car_timeout': 2000,
+
+        'simulate_asynchrony': True,
+        'asynchrony_type': [3],
+
+        'asynchrony_start': [10_000], #ms
+        'asynchrony_duration': [20_000], #ms
+        'affected_nodes': [2],
+        'egress_penalty': 50, #ms
+
+        'use_fast_sync': True,
+        'use_exponential_timeouts': True,
     }
     try:
         ret = LocalBench(bench_params, node_params).run(debug)
@@ -104,34 +122,39 @@ def remote(ctx, debug=True):
         'duration': 20,
         'runs': 1,
 
+        # Unused
         'simulate_partition': True,
         'partition_start': 5,
         'partition_duration': 5,
         'partition_nodes': 1,
     }
     node_params = {
-        'timeout_delay': 5_000,  # ms
+        'timeout_delay': 1_000,  # ms
         'header_size': 32,  # bytes
         'max_header_delay': 200,  # ms
         'gc_depth': 50,  # rounds
-        'sync_retry_delay': 5_000,  # ms
-        'sync_retry_nodes': 3,  # number of nodes
+        'sync_retry_delay': 1_000,  # ms
+        'sync_retry_nodes': 4,  # number of nodes
         'batch_size': 500_000,  # bytes
         'max_batch_delay': 200,  # ms
-        'use_optimistic_tips': True,
+        'use_optimistic_tips': False,
         'use_parallel_proposals': True,
-        'k': 4,
-        'use_fast_path': False,
-        'fast_path_timeout': 500,
+        'k': 1,
+        'use_fast_path': True,
+        'fast_path_timeout': 200,
         'use_ride_share': False,
         'car_timeout': 2000,
 
-        'simulate_asynchrony': False,
-        'asynchrony_type': [0, 1],
-        'asynchrony_start': [2_000, 3_000], #ms
-        'asynchrony_duration': [1_000, 500], #ms
-        'affected_nodes': [0, 0],
-        'egress_penalty': 0, #ms
+        'simulate_asynchrony': True,
+        'asynchrony_type': [3],
+
+        'asynchrony_start': [10_000], #ms
+        'asynchrony_duration': [20_000], #ms
+        'affected_nodes': [2],
+        'egress_penalty': 50, #ms
+
+        'use_fast_sync': True,
+        'use_exponential_timeouts': True,
     }
     try:
         Bench(ctx).run(bench_params, node_params, debug)
