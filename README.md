@@ -89,6 +89,10 @@ Detail which machines and configs we used (CPU/SSD...). What geo setup (i.e. whe
 We recommend running on GCP as our experiment scripts are designed to work with GCP. 
 New users to GCP can get $300 worth of free credit (https://console.cloud.google.com/welcome/new), which should be sufficient to reproduce our core results.
 
+### Creating a project
+The first step is to create a compute engine project. Follow the instructions here:
+https://developers.google.com/workspace/guides/create-project
+
 ### Setup SSH keys
 In order to connect to GCP you will need to register an SSH key.
 
@@ -168,7 +172,7 @@ Select ubuntu-2004-focal-v20231101 as the Image
 
 6. Click Create to create the template.
 
-Create one last instance template to serve as the control machine. Pick any of the four regions.
+Create one last instance template to serve as the control machine. Pick any of the four regions. Name this instance template `autobahn-instance-template` (the scripts assume this is the name of the control machine).
 For this instance template select Standard instead of Spot for VM provisioning model (so it won't be pre-empted while running an experiment).
 We recommend you pick t2d-standard-4 (instead of t2d-standard-16) for the machine type for the control machine to save costs.
 
@@ -176,6 +180,20 @@ We recommend you pick t2d-standard-4 (instead of t2d-standard-16) for the machin
 
 i.e. what scripts to run, what configs to give, and how to collect/interpret results.
 -> fab remote
+
+The GCP config is found in `settings.json`. You will need to change the following:
+1. `key`: change the `name` (name of the private SSH key) and `path` fields to match the key you generated in the prior section
+The `port` field will remain the same (value of 5000).
+2. `repo`: The `name` field will remain the same (value of autobahn-artifact). You will need to change the `url` field to be the url of the artifact github repo. Specifically, you will need to prepend your personal access token to the beginning of the url. The url should be in this format: "https://TOKEN@github.com/neilgiri/autobahn-artifact", where `TOKEN` is the name of your personal access token. `branch` specifies which branch will be run on all the machines. This will determine which system ends up running.
+3. `project_id`: change this to be the name of the project id you created in the prior section
+4. `instances`: `type` (value of t2d-standard-16) and `regions` (value of ["us-east1-b", "us-east5-a", "us-west1-b", "us-west4-a"])will remain the same. If you select different regions then you will need to change the regions field to be the regions you are running in. You will need to change `templates` to be the names of the instance templates you created. The order matters, as they should correspond to the each region. The path should be in the format "projects/PROJECT_ID/regions/REGION_ID/instanceTemplates/TEMPLATE_ID", where PROJECT_ID is the id of the project you created in the prior section, REGION_ID is the name of the region without the subzone (i.e. us-east1 NOT us-east1-a).
+
+Once this is setup you will want to look at `fabfile.py` and the create task specifically. For most experiments you will want to make sure `nodes=1`. This will create 1 node per region specificed in the settings.json file.
+
+Then run `fab create` which will create machines based off your instance templates.
+Next run `fab install` which will install rust and the dependencies on these machines.
+Finally `fab remote` will launch a remote experiment.
+
 
 Explain what parameters to configure in config and what they control. 
 
