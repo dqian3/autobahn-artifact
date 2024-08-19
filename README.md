@@ -52,7 +52,7 @@ The ReadMe is organized into the following high level sections:
 
    To build Autobahn and baseline source code in any of the branches several dependencies must be installed. Refer to section "Installing Dependencies" for detailed instructions on how to install dependencies and compile the code. 
 
-2. *Setting up experiments on Cloudlab* 
+2. *Setting up experiments on GCP* 
 
      To re-run our experiments, you will need to instantiate a distributed and replicated server (and client) configuration using GCP. 
      <!-- We have provided a public profile as well as public disk images that capture the configurations we used to produce our results. Section "Setting up Cloudlab" covers the necessary steps in detail. Alternatively, you may create a profile of your own and generate disk images from scratch (more work) - refer to section "Setting up Cloudlab" as well for more information. Note, that you will need to use the same Cluster (Utah) and machine types (m510) to reproduce our results. -->
@@ -65,6 +65,9 @@ The ReadMe is organized into the following high level sections:
 
 ## Installing Dependencies <a name="installing"></a>
 TODO: What hardware req. What software env (ubuntu). What installs (Rust, cargo, tokio, rocks. etc..?)
+
+Software environment: Ubuntu 20.04 Focal
+Packages: `clang` (version <= 14, do not use version 15 or higher), `tmux`, `rust` (stable 1.80)
 
 Building code: 
 `cargo build`
@@ -278,6 +281,12 @@ When an experiment finishes the logs and output files are downloaded to the cont
 
 #### Autobahn
 Peak throughput is around 234k txn/s, end-to-end latency is around 280 ms. The config to get the peak throughput is found in `autobahn-peak.txt`.
+
+#### Bullshark
+
+#### Batched-HS
+
+#### Vanilla-HS
 
 - for each system, give our peak numbers + the config. Have them reproduce those
 
