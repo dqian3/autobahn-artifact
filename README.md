@@ -87,11 +87,12 @@ TODO: Can we provide alternatives on how to run elsehwere? (if the artifact comm
 Detail which machines and configs we used (CPU/SSD...). What geo setup (i.e. where machines are located)
 
 We recommend running on GCP as our experiment scripts are designed to work with GCP. 
-New users to GCP can get $300 worth of free credit (https://console.cloud.google.com/welcome/new), which should be sufficient to reproduce our core results.
+New users to GCP can get $300 worth of free credit (https://console.cloud.google.com/welcome/new), which should be sufficient to reproduce our core results. The Google Cloud console is the gateway for accessing all GCP services. Most of the time we will use the compute engine service to create and manage VMs but occassionally we will use other services. You can search for other services using the GCP console searchbar.
 
 ### Creating a project
 The first step is to create a compute engine project. Follow the instructions here:
 https://developers.google.com/workspace/guides/create-project
+We recommend you name the project autobahn but you can choose any name you like.
 
 ### Setup SSH keys
 In order to connect to GCP you will need to register an SSH key.
@@ -188,11 +189,80 @@ The `port` field will remain the same (value of 5000).
 3. `project_id`: change this to be the name of the project id you created in the prior section
 4. `instances`: `type` (value of t2d-standard-16) and `regions` (value of ["us-east1-b", "us-east5-a", "us-west1-b", "us-west4-a"])will remain the same. If you select different regions then you will need to change the regions field to be the regions you are running in. You will need to change `templates` to be the names of the instance templates you created. The order matters, as they should correspond to the each region. The path should be in the format "projects/PROJECT_ID/regions/REGION_ID/instanceTemplates/TEMPLATE_ID", where PROJECT_ID is the id of the project you created in the prior section, REGION_ID is the name of the region without the subzone (i.e. us-east1 NOT us-east1-a).
 
-Once this is setup you will want to look at `fabfile.py` and the create task specifically. For most experiments you will want to make sure `nodes=1`. This will create 1 node per region specificed in the settings.json file.
+When running for the first time,  run `fab create` which will create machines based off your instance templates.
+Then run `fab install` which will install rust and the dependencies on these machines.
+Finally `fab remote` will launch a remote experiment. For subsequent experiments you can skip running `fab create` and `fab install`
 
-Then run `fab create` which will create machines based off your instance templates.
-Next run `fab install` which will install rust and the dependencies on these machines.
-Finally `fab remote` will launch a remote experiment.
+## Configuring Parameters
+The parameters for the remote experiment are found in `fabfile.py`. To change the parameters locate the remote task in `fabfile.py`. This task specifies two types of parameters, the benchmark parameters and the nodes parameters. The benchmark parameters look as follows:
+
+`bench_params = {
+    'nodes': 4,
+    'workers': 1,
+    'rate': 50_000,
+    'tx_size': 512,
+    'faults': 0,
+    'duration': 20,
+}`
+
+They specify the number of primaries (nodes) and workers per primary (workers) to deploy, the input rate (tx/s) at which the clients submits transactions to the system (rate), the size of each transaction in bytes (tx_size), the number of faulty nodes ('faults), and the duration of the benchmark in seconds (duration). The minimum transaction size is 9 bytes, this ensure that the transactions of a client are all different. The benchmarking script will deploy as many clients as workers and divide the input rate equally amongst each client. For instance, if you configure the testbed with 4 nodes, 1 worker per node, and an input rate of 1,000 tx/s (as in the example above), the scripts will deploy 4 clients each submitting transactions to one node at a rate of 250 tx/s. When the parameters faults is set to f > 0, the last f nodes and clients are not booted; the system will thus run with n-f nodes (and n-f clients).
+
+The nodes parameters determine the configuration for the primaries and workers:
+
+`node_params = {
+    'header_size': 1_000,
+    'max_header_delay': 100,
+    'gc_depth': 50,
+    'sync_retry_delay': 10_000,
+    'sync_retry_nodes': 3,
+    'batch_size': 500_000,
+    'max_batch_delay': 100,
+    'use_optimistic_tips': True,
+    'use_parallel_proposals': True,
+    'k': 4,
+    'use_fast_path': True,
+    'fast_path_timeout': 200,
+    'use_ride_share': False,
+    'car_timeout': 2000,
+    
+    'simulate_asynchrony': True,
+    'asynchrony_type': [3],
+    'asynchrony_start': [10_000], #ms
+    'asynchrony_duration': [20_000], #ms
+    'affected_nodes': [2],
+    'egress_penalty': 50, #ms
+    
+    'use_fast_sync': True,
+    'use_exponential_timeouts': False,
+}`
+They are defined as follows:
+
+*header_size: The preferred header size. The primary creates a new header when it has enough parents and enough batches' digests to reach header_size. Denominated in bytes.
+*max_header_delay: The maximum delay that the primary waits between generating two headers, even if the header did not reach max_header_size. Denominated in ms.
+*gc_depth: The depth of the garbage collection (Denominated in number of rounds).
+*sync_retry_delay: The delay after which the synchronizer retries to send sync requests. Denominated in ms.
+*sync_retry_nodes: Determine with how many nodes to sync when re-trying to send sync-request. These nodes are picked at random from the committee.
+*batch_size: The preferred batch size. The workers seal a batch of transactions when it reaches this size. Denominated in bytes.
+*max_batch_delay: The delay after which the workers seal a batch of transactions, even if max_batch_size is not reached. Denominated in ms.
+*use_optimistic_tips: Whether to enable optimistic tips optimization. If set to true then non-certified proposals can be sent to consensus
+*use_parallel_proposals: Whether to allow multiple active consensus instances at a time in parallel
+*k: The maximum number of consensus instances allowed to be active at any time.
+*use_fast_path: Whether to enable the 3f+1 fast path for consensus
+*fast_path_timeout: The timeout for waiting for 3f+1 responses on the consensus fast path
+*use_ride_share: Whether to enable the ride-sharing optimization of piggybacking consensus messages on car messages
+*car_timeout: The timeout for sending a car
+*simulate_asynchrony: Whether to allow blips
+*asynchrony_type: The specific type of blip.
+*asynchrony_start: The start times for each blip event
+*asynchrony_duration: The duration of each blip event
+*affected_nodes: How many nodes experience blip behavior
+*egress_penalty: For egress blips how much egress delay is added
+*use_fast_sync: Whether to enable the fast sync optimization. If set to False the recursive sync strategy will be used
+*use_exponential_timeouts: Whether to enable timeout doubling upon timeouts firing
+
+
+
+The configs for each experimented are located the `experiment_configs` folder. To run a specific experiment copy and paste the experiment config into the fab remote task. For all experiments besides the scaling experiment you will want to make sure `nodes=1`. This will create 1 node per region specificed in the settings.json file.
 
 
 Explain what parameters to configure in config and what they control. 
@@ -201,8 +271,14 @@ Explain what file to look at for results, and which lines/numbers to look for.
 
 ## Reproducing Results
 Provide ALL configs for each experiment. But suggest they only validate the claims.
+The experiment configs
 
-Exp 1
+### Performance under ideal conditions
+When an experiment finishes the logs and output files are downloaded to the control machine. The performance results are found in `results/bench-
+
+#### Autobahn
+Peak throughput is around 234k txn/s, end-to-end latency is around 280 ms. The config to get the peak throughput is found in `autobahn-peak.txt`.
+
 - for each system, give our peak numbers + the config. Have them reproduce those
 
 Exp 2
