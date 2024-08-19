@@ -66,15 +66,34 @@ The ReadMe is organized into the following high level sections:
 ## Installing Dependencies <a name="installing"></a>
 TODO: What hardware req. What software env (ubuntu). What installs (Rust, cargo, tokio, rocks. etc..?)
 
-Software environment: Ubuntu 20.04 Focal
-Packages: `clang` (version <= 14, do not use version 15 or higher), `tmux`, `rust` (stable 1.80)
+We provided an install script `install_deps.sh` in the `overview` branch which we recommend for installing any necessary dependencies.
 
-Building code: 
-`cargo build`
+The high-level requirements for compiling Autobahn and the baselines are:
+-Operating System: Ubuntu 20.04, Focal
+    - While it should compile on any operating system, we recommend running on Ubuntu 20.04 as that is what we have tested with
+- Requires python3
+- Requuires rust (recommend 1.80 stable)
+- Requires clang version <= 14 (for building librocksdb, DO NOT use version 15 or higher)
+- tmux
+
+Before beginning the install process make sure to update your distribution:
+1. `sudo apt-get update`
+
+If not using `install_deps.sh` make sure to use the script here: https://bootstrap.pypa.io/get-pip.py and not apt-get, and update the `PATH` environment variable to point to the location of pip.
+
+After installation finishes, navigate to `autobahn-artifact/benchmark` and run `pip install -r requirements.txt`.
+
+### Building code: 
+Finally, you can build the binaries (you will ned to do this anew on each branch):
+Navigate to `autobahn-artifact` directory and build:
+-`cargo build`
 
 ## Testing Locally
 i.e. quick local run to get some numbers/see that it works (this might already clear the bar for some of the badges)
-In order to run a quick test locally simple navigate to `benchmark/` and run `fab local`
+In order to run a quick test locally:
+1. checkout the branch `autobahn-simple-sender` (for a basline checkout the appropriate branch instead)
+2. navigate to `autobahn-artifact/benchmark/`
+3. run `fab local`.
 
 This will run a simple local experiment, using the parameters provided in `fabfile.py` (in `def local()`)
 Additional instructions can be found in `benchmark/README`.
@@ -98,7 +117,7 @@ https://developers.google.com/workspace/guides/create-project
 We recommend you name the project autobahn but you can choose any name you like.
 
 ### Setup SSH keys
-In order to connect to GCP you will need to register an SSH key.
+In order to connect to GCP you will need to register an SSH key. Install ssh if you do not already have it (on Ubuntu this is `sudo apt-get install ssh`)
 
 If you do not already have an ssh key-pair, run the following command locally to generate ssh keys.
 `ssh-keygen -t rsa -f ~/.ssh/KEY_FILENAME -C USERNAME -b 2048`
@@ -184,6 +203,7 @@ We recommend you pick t2d-standard-4 (instead of t2d-standard-16) for the machin
 
 i.e. what scripts to run, what configs to give, and how to collect/interpret results.
 -> fab remote
+Now that you have setup GCP, you are ready to run experiments on GCP!
 
 The GCP config is found in `settings.json`. You will need to change the following:
 1. `key`: change the `name` (name of the private SSH key) and `path` fields to match the key you generated in the prior section
