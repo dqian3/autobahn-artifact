@@ -1,7 +1,7 @@
 # Autobahn: Seamless high speed BFT - SOSP24 Artifact 
 This is the repository for the Artifact Evaluation of SOSP'24 proceeding: "Autobahn: Seamless high speed BFT".
 
-For all questions about the artifact please e-mail Neil Giridharan <giridhn@berkeley.edu> and Florian Suri-Payer <fsp@cs.cornell.edu>. 
+For all questions about the artifact, including troubleshooting, please e-mail Neil Giridharan <giridhn@berkeley.edu> and Florian Suri-Payer <fsp@cs.cornell.edu>. 
 
 
 # Table of Contents
@@ -31,9 +31,9 @@ VanillaHS and BatchedHS consist of main modules `mempool` and `consensus`, which
 ## Concrete claims in the paper
 Autobahn is a Byzantine Fault Tolerant (BFT) consensus protocol that aims to hit a sweet spot between high throughput, low latency, and the ability to recover from asynchrony (seamlessness).
 
-- **Main claim 1**: Autobahn matches the Throughput of Bullshark, while reducing latency by a factor of ca. 2x. 
+- **Main claim 1**: Autobahn matches the Throughput of Bullshark, while reducing latency by a factor of ca. 2x. Autobahn achieves latency comparable to Hotstuff.
 
-- **Main claim 2**: Autobahn avoids protocol-induced hangovers in the presence of blips. 
+- **Main claim 2**: Autobahn avoids protocol-induced hangovers in the presence of blips. This allows Autobahn to reduce hangover times when compared to non-seamless protocols.
 
 
 
@@ -107,7 +107,7 @@ Additional instructions can be found in `benchmark/README`.
 
 > [!NOTE] 
 > We strongly recommend running on GCP as our experiment scripts are designed to work with GCP. 
-> New users to GCP can get $300 worth of free credit (https://console.cloud.google.com/welcome/new), which should be sufficient to reproduce our core claims. Unfortunately, trial access users *cannot* access the machine type used in our evaluation, and must instead use a weaker machine type (more details below). We have NOT evaluated or systems on these machine types. To accurately reproduce our results, we recommend using the same machine types employed in our experiments, and using the `SPOT`-market to save costs.
+> New users to GCP can get $300 worth of free credit (https://console.cloud.google.com/welcome/new), which should be sufficient to reproduce our core claims. Unfortunately, trial access users *cannot* access the machine type used in our evaluation, and must instead use a weaker machine type (more details below). We have NOT evaluated or systems on these machine types. To accurately reproduce our results, we recommend using the same machine types employed in our experiments, and using the SPOT-market to save costs. Re-running only our key data points, using the spot market, should be relatively cheap -- but make sure to terminate machines as soon as you do not need them.
 
 The Google Cloud console is the gateway for accessing all GCP services. You can search for services using the GCP console searchbar.
 
@@ -116,8 +116,8 @@ To create an account:
 2. Enter your account information for step 1 and step 2
 3. Click `Start Free` (blue button)
 4. Optionally complete the survey
-5. Creating an account should automatically create a project called "My First Project". If not follow the instructions here to create a project: https://developers.google.com/workspace/guides/create-project
-6. In the google cloud console search for compute engine API, and click the blue Enable button (this may take some time to complete). Do not worry about creating credentials for the API.
+5. Creating an account should automatically create a project called "My First Project" (you may pick any name you like). If not follow the instructions here to create a project: https://developers.google.com/workspace/guides/create-project
+6. In the google cloud console search for compute engine API, and click the blue Enable button (this may take some time to complete). You do not need to create credentials for the API.
 
 <!-- Most of the time we will use the compute engine service to create and manage VMs but occassionally we will use other services.  -->
 
@@ -168,7 +168,7 @@ Next, you will need to create your own Virtual Private Cloud network. To do so:
 8. Click Create. It may take some time for the vpc network to be created.
 
 ### Create Instance Templates
-We're now ready to create an Instance Template for each region we need, containing the respective hardware configurations we will use.
+We're now ready to create an Instance Template for each region we need, containing the respective hardware configurations we will use. We will require a total of 5 instance templates, one for each of the four regions, and one for a control machine.
 
 We used the following four regsions in our experiments: 
 - us-east5
@@ -192,7 +192,7 @@ Create one instance template per region:
 
 7. For Machine type select t2d-standard-16 (16vCPU, 64 GB of memory)
 > [!NOTE] 
-> Free users will only be able to create t2d-standard-4 instances.
+> In our experience, free users will only be able to create t2d-standard-4 instances as the max CPU limit per region is capped to 8, and the total number of CPUs allowed at a given time is 32. Since you will need at least 5 machines (4 regions + one control), no machine will be able to have more than 32/5=6 cores.
 
 8. Under Availability policies choose Spot for VM provisioning model (to save costs). The default spot VM settings are fine but make sure On VM termination is set to Stop.
 
@@ -370,7 +370,7 @@ The configs for each experimented are located the `experiment_configs` folder. T
 
 
 ## Reading Output Results
-When an experiment finishes the logs and output files are downloaded to the control machine. The experiment results are found in the `autobahn-artifact/benchmark/results` folder. 
+When an experiment finishes the logs output files are downloaded to the control machine. The experiment results are found in the `autobahn-artifact/benchmark/results` folder. Result names are auto-generated based on the input parameters. For example, `bench-0-4-1-True-240000-512.txt` (0 faults, 4 nodes, 1 worker per node, True=co-locate primary/workers, load = 240000, txn_size = 512).
 
 There are two types of experiment results. 
 
