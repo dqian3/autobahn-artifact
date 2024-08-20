@@ -483,6 +483,7 @@ In Fig. 8 we simulate a blip caused by a temporary, partial partition in which r
 The measured blip and hangover durations were roughly:
 > [!NOTE] 
 > Fig. 8 normalizes the blip start times to a common start time.
+
 > [!NOTE] 
 > The latency numbers reported for Autobahn for Fig. 8 in the submission were slightly higher than expected due to some configuration mistakes. We've fixed this for the rebuttal, and include here the numbers from our re-runs (for both Autobahn and Bullshark).
 ```
