@@ -107,7 +107,9 @@ Additional instructions can be found in `benchmark/README`.
 
 > [!NOTE] 
 > We strongly recommend running on GCP as our experiment scripts are designed to work with GCP. 
-> New users to GCP can get $300 worth of free credit (https://console.cloud.google.com/welcome/new), which should be sufficient to reproduce our core claims. Unfortunately, trial access users *cannot* access the machine type used in our evaluation, and must instead use a weaker machine type (more details below). We have NOT evaluated or systems on these machine types. To accurately reproduce our results, we recommend using the same machine types employed in our experiments, and using the SPOT-market to save costs. Re-running only our key data points, using the spot market, should be relatively cheap -- but make sure to terminate machines as soon as you do not need them.
+> New users to GCP can get $300 worth of free credit (https://console.cloud.google.com/welcome/new), which should be sufficient to reproduce our core claims. 
+> To get the free trial you will need to use an email account that has not used GCP before or create a new google email account
+> Unfortunately, trial access users *cannot* access the machine type used in our evaluation, and must instead use a weaker machine type (more details below). We have NOT evaluated or systems on these machine types. To accurately reproduce our results, we recommend using the same machine types employed in our experiments, and using the SPOT-market to save costs. Re-running only our key data points, using the spot market, should be relatively cheap -- but make sure to terminate machines as soon as you do not need them.
 
 The Google Cloud console is the gateway for accessing all GCP services. You can search for services using the GCP console searchbar.
 
