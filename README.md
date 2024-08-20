@@ -277,15 +277,17 @@ Leave `port` unchanged (should be `5000`).
 4. Finally `fab remote` will launch a remote experiment with the parameters specified in `fabfile.py`. The next section will explain how to configure the parameters. The `fab remote` command should show a progress bar of how far along it is until completion. Note that the first time running the command may take a long time but subsequent trials should be faster.
 
 ## Configuring Parameters
-The parameters for the remote experiment are found in `benchmark/fabfile.py`. To change the parameters locate the `remote(ctx, debug=True)` task section in `fabfile.py`. This task specifies two types of parameters, the benchmark parameters and the nodes parameters. 
+The parameters for the remote experiment are found in `benchmark/fabfile.py`. 
+To change the parameters locate the `remote(ctx, debug=True)` task section in `fabfile.py`. This task specifies two types of parameters, the benchmark parameters and the nodes parameters. 
 
 The benchmark parameters look as follows:
 
 ```
 bench_params = {
     'nodes': 4,        
-    'workers': 1,
-    'rate': 50_000,
+    'workers': 1,   //only applicable for Autobahn/Bullshark
+    'co-locate': True,
+    'rate': 50_000, 
     'tx_size': 512,
     'faults': 0,
     'duration': 20,
@@ -293,7 +295,7 @@ bench_params = {
 ```
 
 
-They specify the number of primaries (nodes) and workers per primary (workers) to deploy, the input rate (tx/s) at which the clients submits transactions to the system (rate), the size of each transaction in bytes (tx_size), the number of faulty nodes ('faults), and the duration of the benchmark in seconds (duration). 
+They specify the number of primaries (nodes) and workers per primary (workers) to deploy (and whether to co-locate them), the input rate (tx/s) at which the clients submits transactions to the system (rate), the size of each transaction in bytes (tx_size), the number of faulty nodes ('faults), and the duration of the benchmark in seconds (duration). 
 
 The minimum transaction size is 9 bytes, this ensure that the transactions of a client are all different. 
 
@@ -304,10 +306,11 @@ When the parameters faults is set to f > 0, the last f nodes and clients are not
 
 The nodes parameters differ between each system. We show and example node parameters for Autobahn.
 
-### Autobahn Parameters
+### Autobahn/Bullshark Parameters
 
 ```
 node_params = {
+    'timeout_delay': 1_000,  # ms
     'header_size': 1_000,
     'max_header_delay': 100,
     'gc_depth': 50,
@@ -338,7 +341,8 @@ They are defined as follows.
 > [!NOTE] 
 > To reproduce our experiments you do NOT need to change any parameters. 
 
-Protocol parameters:
+General Protocol parameters:
+- `timeout_delay`: The consensus view change timeout value. 
 - `header_size`: The preferred header size (= Car payload). Car proposals in Autobahn (and analogously DAG proposals in Bullshark) do not contain transactions themselves, but propose digests of mini-batches (see Eval section). The primary creates a new header when it has completed its previous Car (or for Bullshark, when it has enough DAG parents) and enough batch digests to reach header_size. Denominated in bytes.
 - `max_header_delay`: The maximum delay that the primary waits before readying a new header payload, even if the header did not reach max_header_size. Denominated in ms.
 - `gc_depth`: The depth of the garbage collection (Denominated in number of rounds).
@@ -347,6 +351,7 @@ Protocol parameters:
 - `batch_size`: The preferred mini-batch size. The workers seal a batch of transactions when it reaches this size. Denominated in bytes.
 - `max_batch_delay`: The delay after which the workers seal a batch of transactions, even if max_batch_size is not reached. Denominated in ms.
 
+Autobahn specific params
 - `use_optimistic_tips`: Whether to enable Autobahn's optimistic tips optimization. If set to True then non-certified car proposals can be sent to consensus; if False, consensus proposals contain only certified car proposals.
 - `use_parallel_proposals`: Whether to allow multiple active consensus instances at a time in parallel
 - `k`: The maximum number of consensus instances allowed to be active at any time.
@@ -366,7 +371,44 @@ Blip simulation framework:
 - `egress_penalty`: DEPRECATED: For egress blips how much egress delay is added
 
 
-The configs for each experimented are located the `experiment_configs` folder. To run a specific experiment copy and paste the experiment config into the fab remote task. 
+### VanillaHS/BatchedHS Parameters
+
+```
+node_params = {
+    'consensus': {
+        'timeout_delay': 1_000,
+        'sync_retry_delay': 1_000,
+        'max_payload_size': 500,
+        'min_block_delay': 0,
+
+        'simulate_asynchrony': True,
+        'async_type': [3],
+        'asynchrony_start': [10_000],
+        'asynchrony_duration': [20_000],
+        'affected_nodes': [2],
+        'egress_penalty': 50,
+        'use_exponential_timeouts': False,
+    },
+    'mempool': {
+        'queue_capacity': 10_000_000,
+        'sync_retry_delay': 1_000,
+        'max_payload_size': 500_000,
+        'min_block_delay': 0
+    }
+}
+```
+
+Consensus parameters:
+- `timeout_delay`: The consensus view change timeout value. 
+- `sync_retry_delay`: The delay after which the synchronizer (consensus layer) retries to send sync requests in case there was no reply. Denominated in ms.
+- `max_payload_size`: Consensus batch size. For BatchedHS, payload = digests of minibatches. For VanillaHS, payload = raw transactions.
+- `min_block_delay`: IGNORE. Adds delay to consensus.
+
+Mempool params: (only applies to BatchedHS)
+- `queue_capacity`: Maximum buffer size for received mini-batches that have not yet reached agreement. This bounds against Byzantine ddos.
+- `sync_retry_delay`: The delay after which the synchronizer (mempool layer) retries to send sync requests in case there was no reply. Denominated in ms.
+- `max_payload_size`: Mini-batch size, i.e. transactions (in bytes)
+- `min_block_delay`: IGNORE.
 
 
 ## Reading Output Results
@@ -420,7 +462,8 @@ To identify the end of a hangover, search for rows that return latency to their 
 > We note that blip durations are slightly noisy, as 1) latency points are recorded as 1 second averages, and 2) blips may be slightly longer than the specified `asynchrony_duration` depending on the size of the timeout parameter, and the timing of a view change. For instance, when simulating leader failures, a new faulty leader may be elected at the very end of a blip, causing the effective blip duration to be extended by the timeout duration. 
 
 ## Reproducing Results
-The exact configs and corresponding results for each of our eperiments (and *all* their data points) can be found on branch `overview` in folder `autobahn-artifact/paper-results`.
+The exact configs and corresponding results for each of our eperiments (and *all* their data points) can be found on branch `overview`, respectively in folders `experiment_configs` and `paper-results`.
+To run a specific experiment copy and paste the experiment config into the `fabfile.py` `remote` task. 
 
 For convenience, we summarize here only the key results necessary to validate our claims. The respective configs and outputs are found in `autobahn-artifact/reproducing-claims`.
 
