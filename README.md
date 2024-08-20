@@ -114,6 +114,7 @@ New users to GCP can get $300 worth of free credit (https://console.cloud.google
 ### Creating a project
 The first step is to create a compute engine project. Follow the instructions here:
 https://developers.google.com/workspace/guides/create-project
+When you create an account
 We recommend you name the project autobahn but you can choose any name you like.
 
 ### Setup SSH keys
@@ -159,13 +160,9 @@ Next, you will need to create your own Virtual Private Cloud network. To do so:
 
 5. Choose Automatic for the Subnet creation mode.
 
-6. In the Firewall rules section, select zero or more predefined firewall rules. The rules address common use cases for connectivity to instances.
+6. In the Firewall rules section, select the "default-allow-internal", "default-allow-ssh", "default-allow-rdp", "default-allow-icmp". The rules address common use cases for connectivity to instances.
 
-Whether or not you select pre-defined rules, you can create your own firewall rules after you create the network.
-
-Each predefined rule name starts with the name of the VPC network that you are creating, NETWORK. In the IPv4 firewall rules tab, the predefined ingress firewall rule named NETWORK-allow-custom is editable. By default it specifies the source range 10.128.0.0/9, which contains current and future IPv4 ranges for subnets in an auto mode network. The right side of the row that contains the rule, click Edit to select subnets, add additional IPv4 ranges, and specify protocols and ports.
-
-7. Choose the Dynamic routing mode for the VPC network.
+7. Select regional for the Dynamic routing mode for the VPC network.
 
 8. Click Create.
 
@@ -199,22 +196,39 @@ Create one last instance template to serve as the control machine. Pick any of t
 For this instance template select Standard instead of Spot for VM provisioning model (so it won't be pre-empted while running an experiment).
 We recommend you pick t2d-standard-4 (instead of t2d-standard-16) for the machine type for the control machine to save costs.
 
-## Running Experiment
+### Setting up Control Machine
+1. In Google cloud console go to the VM instances page
+2. Select the "Create instance" blue button
+3. On the left sidebar select "New VM instance from template"
+4. Select `autobahn-instance-template` from the list of templates
+5. Change the name field to `autobahn-instance-template`
+6. Double check that the rest of the options match what is in `autobahn-instance-template`
+7. Wait for the instance to start (you can see the status indicator turn green when that is ready)
+8. To connect to this instance from ssh copy the External IP address, and run the following command in the terminal:
+`ssh -i SSH_PRIVATE_KEY_LOCATION USERNAME@EXTERNAL_IP_ADDRESS`, where SSH_PRIVATE_KEY_LOCATION is the path of the corresponding ssh private key, USERNAME is the username of the SSH key (found in the Metadata page under SSH keys), and EXTERNAL_IP_ADDRESS
+9. We highly recommend you create two folders in the home directory on the control machine for convenience: `autobahn-bullshark` and `hotstuff-baselines`. Navigate to the `autobahn-bullshark` folder, clone the `autobahn-artifact` repo, and checkout `autobahn-simple-sender`. Then navigate to the `hotstuff-baselines` folder, clone the `autobahn-artifact` repo, and checkout the `vanilla-hs-framework` branch. Having this structure will allow you to change parameters and run experiments for different baselines much faster than checking out different branches each time.
+10. Follow the Install Dependencies section on the control machine
+
+## Running Experiments
 
 i.e. what scripts to run, what configs to give, and how to collect/interpret results.
 -> fab remote
 Now that you have setup GCP, you are ready to run experiments on GCP!
+Follow the GCP Config instructions for both `autobahn-bullshark` and `hotstuff-baselines` folders.
 
-The GCP config is found in `settings.json`. You will need to change the following:
+### GCP Config
+The GCP config is found in `autobahn-artifact/benchmark/settings.json`. You will need to change the following:
 1. `key`: change the `name` (name of the private SSH key) and `path` fields to match the key you generated in the prior section
 The `port` field will remain the same (value of 5000).
-2. `repo`: The `name` field will remain the same (value of autobahn-artifact). You will need to change the `url` field to be the url of the artifact github repo. Specifically, you will need to prepend your personal access token to the beginning of the url. The url should be in this format: "https://TOKEN@github.com/neilgiri/autobahn-artifact", where `TOKEN` is the name of your personal access token. `branch` specifies which branch will be run on all the machines. This will determine which system ends up running.
+2. `repo`: The `name` field will remain the same (value of autobahn-artifact). You will need to change the `url` field to be the url of the artifact github repo. Specifically, you will need to prepend your personal access token to the beginning of the url. The url should be in this format: "https://TOKEN@github.com/neilgiri/autobahn-artifact", where `TOKEN` is the name of your personal access token. `branch` specifies which branch will be run on all the machines. This will determine which system ends up running. Only select an Autobahn or Bullshark branch if you are under the `autobahn-bullshark` folder. Similarly, only select a Vanilla HotStuff or Batched HotStuff branch if you are under the `hotstuff-baselines` folder.
 3. `project_id`: change this to be the name of the project id you created in the prior section
-4. `instances`: `type` (value of t2d-standard-16) and `regions` (value of ["us-east1-b", "us-east5-a", "us-west1-b", "us-west4-a"])will remain the same. If you select different regions then you will need to change the regions field to be the regions you are running in. You will need to change `templates` to be the names of the instance templates you created. The order matters, as they should correspond to the each region. The path should be in the format "projects/PROJECT_ID/regions/REGION_ID/instanceTemplates/TEMPLATE_ID", where PROJECT_ID is the id of the project you created in the prior section, REGION_ID is the name of the region without the subzone (i.e. us-east1 NOT us-east1-a).
+4. `instances`: `type` (value of t2d-standard-16) and `regions` (value of ["us-east1-b", "us-east5-a", "us-west1-b", "us-west4-a"])will remain the same. If you select different regions then you will need to change the regions field to be the regions you are running in. You will need to change `templates` to be the names of the instance templates you created. The order matters, as they should correspond to the order of each region. The path should be in the format "projects/PROJECT_ID/regions/REGION_ID/instanceTemplates/TEMPLATE_ID", where PROJECT_ID is the id of the project you created in the prior section, REGION_ID is the name of the region without the subzone (i.e. us-east1 NOT us-east1-a).
 
-When running for the first time,  run `fab create` which will create machines based off your instance templates.
-Then run `fab install` which will install rust and the dependencies on these machines.
-Finally `fab remote` will launch a remote experiment. For subsequent experiments you can skip running `fab create` and `fab install`
+### GCP Benchmark commands
+1. If you want to run an Autobahn or Bullshark experiment navigate to `autobahn-bullshark/autobahn-artifact/benchmark`. If you want to run a Vanilla HotStuff or a Batched HotStuff experiment navigate to `hotstuff-baselines/autobahn-artifact/benchmark`.
+2. For the first experiment, run `fab create` which will create machines based off your instance templates. For subsequent experiments, you will not need to run `fab create` as the instances will already have been created. Anytime you delete the VM instances you will need to run `fab create` to recreate them.
+3. Then run `fab install` which will install rust and the dependencies on these machines. Like `fab create` you only need to run this command one time after the creation of the VMs.
+4. Finally `fab remote` will launch a remote experiment with the parameters specified in `fabfile.py`. The next section will show you what each parameter controls. The `fab remote` command should show a progress bar of how far along it is until completion. Note that the first time running the command may take a long time but subsequent trials should be faster.
 
 ## Configuring Parameters
 The parameters for the remote experiment are found in `fabfile.py`. To change the parameters locate the remote task in `fabfile.py`. This task specifies two types of parameters, the benchmark parameters and the nodes parameters. The benchmark parameters look as follows:
@@ -228,9 +242,15 @@ The parameters for the remote experiment are found in `fabfile.py`. To change th
     'duration': 20,
 }`
 
-They specify the number of primaries (nodes) and workers per primary (workers) to deploy, the input rate (tx/s) at which the clients submits transactions to the system (rate), the size of each transaction in bytes (tx_size), the number of faulty nodes ('faults), and the duration of the benchmark in seconds (duration). The minimum transaction size is 9 bytes, this ensure that the transactions of a client are all different. The benchmarking script will deploy as many clients as workers and divide the input rate equally amongst each client. For instance, if you configure the testbed with 4 nodes, 1 worker per node, and an input rate of 1,000 tx/s (as in the example above), the scripts will deploy 4 clients each submitting transactions to one node at a rate of 250 tx/s. When the parameters faults is set to f > 0, the last f nodes and clients are not booted; the system will thus run with n-f nodes (and n-f clients).
 
-The nodes parameters determine the configuration for the primaries and workers:
+They specify the number of primaries (nodes) and workers per primary (workers) to deploy, the input rate (tx/s) at which the clients submits transactions to the system (rate), the size of each transaction in bytes (tx_size), the number of faulty nodes ('faults), and the duration of the benchmark in seconds (duration). 
+The minimum transaction size is 9 bytes, this ensure that the transactions of a client are all different. 
+The benchmarking script will deploy as many clients as workers and divide the input rate equally amongst each client. 
+For instance, if you configure the testbed with 4 nodes, 1 worker per node, and an input rate of 1,000 tx/s (as in the example above), the scripts will deploy 4 clients each submitting transactions to one node at a rate of 250 tx/s. 
+When the parameters faults is set to f > 0, the last f nodes and clients are not booted; the system will thus run with n-f nodes (and n-f clients).
+
+### Autobahn Parameters
+The nodes parameters differ between each system. We first show the node parameters for Autobahn.
 
 `node_params = {
     'header_size': 1_000,
@@ -289,6 +309,9 @@ The configs for each experimented are located the `experiment_configs` folder. T
 
 
 Explain what parameters to configure in config and what they control. 
+
+## Reading Output Results
+The performance numbers are found in the `autobahn-artifact/benchmark/results` folder.
 
 Explain what file to look at for results, and which lines/numbers to look for.
 
