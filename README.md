@@ -240,7 +240,7 @@ We are now ready to set up our experiment controller. Follow these steps to inst
 
 Next, we must setup the control machine environment:
 
-1. Clone the repository. For convenience when running experiments, we highly recommend you create two folders in the home directory on the control machine: `autobahn-bullshark` and `hotstuff-baselines` which will serve as "experiment script hosts". Navigate to the `autobahn-bullshark` folder, clone the `autobahn-artifact` repo, and checkout branch `autobahn-blips`. Then navigate to the `hotstuff-baselines` folder, clone the `autobahn-artifact` repo, and checkout the `vanilla-hs-blips` branch. Once you have done this, you will *never* need to check out a different branch. Instead, you can simply specify, while remaining on the current branch, which branch should be run by an experiment. 
+1. Clone the repository. <a name="exphost"></a> For convenience when running experiments, we highly recommend you create two folders in the home directory on the control machine: `autobahn-bullshark` and `hotstuff-baselines` which will serve as "experiment script hosts". Navigate to the `autobahn-bullshark` folder, clone the `autobahn-artifact` repo, and checkout branch `autobahn-blips`. Then navigate to the `hotstuff-baselines` folder, clone the `autobahn-artifact` repo, and checkout the `vanilla-hs-blips` branch. Once you have done this, you will *never* need to check out a different branch. Instead, you can simply specify, while remaining on the current branch, which branch should be run by an experiment. 
 
 This structure will allow you to change parameters and run experiments for different baselines much faster, as you will not have to stash changes to experiment configs and checkout a different branch each time. You will, however, need separate folders for autobahn-bullshark and hotstuff-baselines because their scripts differ slightly. It is important that you checkout the `-blips` version, since these branches hold the latest (backwards compatible) version of the experiment script.
 
@@ -475,7 +475,7 @@ For simplicity, we summarize here only the key results necessary to validate our
 ## Artifact Overview 
 ### Performance under ideal conditions
 > [!WARNING] 
-> Navigate to the respective experiment host folder (`autobahn-bullshark` or `hotstuff-baselines`) but do not check out a new branch. Instead, configure the [GCP config](#gcpconfig) `repo` field to select the respective system branch (with NO suffix) you want to run. E.g. `autobahn`
+> Navigate to the respective [experiment host folder](#exphost) (`autobahn-bullshark` or `hotstuff-baselines`) but do not check out a new branch. Instead, configure the [GCP config](#gcpconfig) `repo` field to select the respective system branch (with NO suffix) you want to run. E.g. `autobahn`
 All systems were run using `n=4` machines, with one machine located in each region. The configs can be found in `experiment_configs/main-graph/`. 
 
 The reported peak results in Fig. 5 were roughly:
@@ -489,7 +489,7 @@ To reproduce all data points, simply adjust the `rate` parameter (input load).
 
 ### Scalability
 > [!WARNING] 
-> Navigate to the respective experiment host folder (`autobahn-bullshark` or `hotstuff-baselines`) but do not check out a new branch. Instead, configure the [GCP config](#gcpconfig) `repo` field to select the respective system branch (with NO suffix) you want to run. E.g. `autobahn`
+> Navigate to the respective [experiment host folder](#exphost) (`autobahn-bullshark` or `hotstuff-baselines`) but do not check out a new branch. Instead, configure the [GCP config](#gcpconfig) `repo` field to select the respective system branch (with NO suffix) you want to run. E.g. `autobahn`
 We evaluated all systems using the same setup as above, but for different levels of n: `n=4`, `n=12`, and `n=20`. The results for `n=4` follow from Fig. 5.
 
 To configure the scaling factor, one must modify the `create` task in `fabfile.py`: set `create(ctx, nodes=k)`, where k = n/regions. 
@@ -506,7 +506,7 @@ We report only the rough peak results for `n=20`. The associated configs can be 
 
 ### Leader failures
 > [!WARNING] 
-> Navigate to the respective experiment host folder (`autobahn-bullshark` or `hotstuff-baselines`) but do not check out a new branch. Instead, configure the [GCP config](#gcpconfig) `repo` field to select the respective system branch (WITH suffix) you want to run. E.g. `autobahn-blips`
+> Navigate to the respective [experiment host folder](#exphost) (`autobahn-bullshark` or `hotstuff-baselines`) but do not check out a new branch. Instead, configure the [GCP config](#gcpconfig) `repo` field to select the respective system branch (WITH suffix) you want to run. E.g. `autobahn-blips`
 
 In Fig. 7 we simulate blips caused by leader failures.
 
@@ -541,7 +541,7 @@ To instead reproduce the 5s and 1s (no exponential timeout) blips, set `use_expo
 
 ### Partition
 > [!WARNING] 
-> Navigate to the respective experiment host folder (`autobahn-bullshark` or `hotstuff-baselines`) but do not check out a new branch. Instead, configure the [GCP config](#gcpconfig) `repo` field to select the respective system branch (WITH suffix) you want to run. E.g. `autobahn-blips`
+> Navigate to the respective [experiment host folder](#exphost) (`autobahn-bullshark` or `hotstuff-baselines`) but do not check out a new branch. Instead, configure the [GCP config](#gcpconfig) `repo` field to select the respective system branch (WITH suffix) you want to run. E.g. `autobahn-blips`
 
 .. Run from blips, but in gcp set the branch you want..
 //This avoids having to checkout different branches and stash you settings. 
