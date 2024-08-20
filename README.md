@@ -406,10 +406,12 @@ The experiment configs
 When an experiment finishes the logs and output files are downloaded to the control machine. The performance results are found in `results/bench-
 
  Reported peak results were roughly:
+```
       - Autobahn: Throughput: ~234k tx/s, Latency: ~280 ms  
       - Bullshark: Throughput: ~234k tx/s Latency: ~592 ms
       - BatchedHS: Throughput: ~189k tx/s, Latency: ~333 ms
       - VanillaHS: Throughput: ~15k tx/s, Latency: ~365 ms
+```
 
 The config to get the peak throughput is found in `autobahn-peak.txt`.
 
@@ -419,10 +421,12 @@ The config to get the peak throughput is found in `autobahn-peak.txt`.
 n=4 see main graph. We show here just n=20
 
 Reported peak results were roughly (n=20):
+```
       - Autobahn: Throughput: ~230k tx/s, Latency: ~303 ms  
       - Bullshark: Throughput: ~230k tx/s Latency: ~631 ms
       - BatchedHS: Throughput: ~110k tx/s, Latency: ~308 ms
       - VanillaHS: Throughput: ~1.5k tx/s, Latency: ~2002 ms
+```
 
 
 ### Leader failures
@@ -431,8 +435,10 @@ Reported peak results were roughly (n=20):
 
 
 Reported blip and hangover durations were roughly:
+```
       - Autobahn: Blip duration: 7 to 8s, Hangover: /
       - VanillaHS: Blip duration: 7 to 10s, Hangover: 10 to 14s
+```
 
 
 ### Partition
@@ -444,10 +450,11 @@ Reported blip and hangover durations were roughly:
 > ![Note] > GIVE OUR FIXED NUMBERS FROM REBUTTAL. SAY PAPER NUMBERS HAD A BUG..
 
 Reported blip and hangover durations were roughly:
+```
       - Autobahn: Blip duration: 7 to 28s, Hangover: /
-
       - Bullshark:
       - BatchedHS:
       - VanillaHS: Blip duration: 7 to 10s, Hangover: 10 to 14s
+```
 
 
