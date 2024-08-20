@@ -92,7 +92,8 @@ In order to run a quick test locally:
 2. navigate to `autobahn-artifact/benchmark/`
 3. run `fab local`.
 
-This will run a simple local experiment, using the parameters provided in `fabfile.py` (in `def local()`)
+This will run a simple local experiment, using the parameters provided in `fabfile.py` (in `def local()`). 
+By default, the experiment is 20s long and uses 4 replicas. The output contains statistics for throughput, latency, etc.
 Additional instructions can be found in `benchmark/README`.
 > [!WARNING]
 > The Readme in branches Autobahn and Bullshark also contains some instructions to run on AWS. 
@@ -111,9 +112,9 @@ Additional instructions can be found in `benchmark/README`.
 The Google Cloud console is the gateway for accessing all GCP services. You can search for services using the GCP console searchbar.
 
 To create an account:
-1. Click the Try For Free blue button
+1. Select `Try For Free` (blue button)
 2. Enter your account information for step 1 and step 2
-3. Click the Start Free blue button after step 2
+3. Click `Start Free` (blue button)
 4. Optionally complete the survey
 5. Creating an account should automatically create a project called "My First Project". If not follow the instructions here to create a project: https://developers.google.com/workspace/guides/create-project
 6. In the google cloud console search for compute engine API, and click the blue Enable button (this may take some time to complete). Do not worry about creating credentials for the API.
@@ -138,10 +139,10 @@ To add a public SSH key to the project metadata using the Google Cloud console, 
 
 4. In the SSH key field that opens, add the public SSH key you generated earlier. 
 
-The key must be in one of the following formats:
-`KEY_VALUE USERNAME`. Replace the following:
--KEY_VALUE: the public SSH key value
--USERNAME: your username. For example, cloudysanfrancisco or cloudysanfrancisco_gmail_com. Note the USERNAME can't be root.
+> [!NOTE] 
+> The key must be of the format: `KEY_VALUE USERNAME`.
+> KEY_VALUE := the public SSH key value
+> USERNAME := your username. For example, cloudysanfrancisco or cloudysanfrancisco_gmail_com. Note the USERNAME can't be root.
 
 5. Click Save.
 
@@ -164,75 +165,116 @@ Next, you will need to create your own Virtual Private Cloud network. To do so:
 
 7. Select Regional for the Dynamic routing mode for the VPC network.
 
-8. Click Create.
-
-Beware that it may take some time for the vpc network to be created.
+8. Click Create. It may take some time for the vpc network to be created.
 
 ### Create Instance Templates
 We're now ready to create an Instance Template for each region we need, containing the respective hardware configurations we will use.
 
-We used the following four regsions in our experiments: us-east5, us-east1, us-west1, us-west4. 
-Create one instance template per region as follows:
+We used the following four regsions in our experiments: 
+- us-east5
+- us-east1
+- us-west1
+- us-west4. 
+
+Create one instance template per region:
 
 1. In the Google Cloud console, go to the Instance templates page.
 
 2. Click Create instance template.
 
-3. Give instance template a name
+3. Give instance template a name of your choice
 
 4. Select the Location as follows: Choose Regional.
 
 5. Select the Region where you want to create your instance template (one of us-east5, us-east1, us-west1, or us-west4).
 
 6. Under Machine configuration select the T2D series (under General purpose category)
+
 7. For Machine type select t2d-standard-16 (16vCPU, 64 GB of memory)
+> [!NOTE] 
+> Free users will only be able to create t2d-standard-4 instances.
+
 8. Under Availability policies choose Spot for VM provisioning model (to save costs). The default spot VM settings are fine but make sure On VM termination is set to Stop.
+
 9. Scroll down to Boot disk and click Change. For Operating system select Ubuntu. For Version make sure Ubunu 20.04 LTS is selected. For Boot disk type select Balanced persistent disk. This is important! If you use a HDD then writing to disk may become a bottleneck. For size put 20 GB. No need to change anything in advanced configuration.
+
 10. Under Identity and API access select the "Allow full access to all Cloud APIs" option
+
 11. The default Firewall options are fine (unchecked all boxes)
+
 12. Under Network interfaces change the network interface to "autobahn-vpc". Subnetwork is Auto subnet. IP stack type is IPv4. External IPv4 address is Ephemeral. The Network Service Tier is Premium. Don't enable DNS PTR Record.
+
 13. No need to add any additional disks
+
 14. Under Security make sure Turn on vTPM and Turn on Integrity Monitoring is checked. Make sure "Block project-wide SSH keys" is unchecked
+
 15. No need to change anything in the Management or Sole-tenancy sections
 
-Create one last instance template to serve as the control machine. Pick `us-central1` for the region. Name this instance template `autobahn-instance-template` (the scripts assume this is the name of the control machine).
-For this instance template select Standard instead of Spot for VM provisioning model (so it won't be pre-empted while running an experiment).
-We recommend you pick t2d-standard-4 (instead of t2d-standard-16) for the machine type for the control machine to save costs.
+Finally, create one additional instance template to serve as the control machine. Make the following adjustments:
+- Select `us-central1` as the region. 
+- Name this instance template `autobahn-instance-template` (the scripts assume this is the name of the control machine).
+- For this instance template select Standard instead of Spot for VM provisioning model (so it won't be pre-empted while running an experiment).
+- We recommend you pick t2d-standard-4 (instead of t2d-standard-16) for the machine type for the control machine to save costs.
 
 ### Setting up Control Machine
-1. In Google cloud console go to the VM instances page
-2. Select the "Create instance" blue button
+We are now ready to set up our experiment controller. Follow these steps to instantiate the controller instance template:
+
+1. In the Google cloud console go to the VM instances page
+
+2. Select "Create instance" (blue button)
+
 3. On the left sidebar select "New VM instance from template"
+
+
 4. Select `autobahn-instance-template` from the list of templates
+
 5. Change the name field to `autobahn-instance-template`
-6. Double check that the rest of the options match what is in `autobahn-instance-template`
+
+6. Double check that the rest of the options match the configurations in `autobahn-instance-template`
+
 7. Wait for the instance to start (you can see the status indicator turn green when that is ready)
+
 8. To connect to this instance from ssh copy the External IP address, and run the following command in the terminal:
-`ssh -i SSH_PRIVATE_KEY_LOCATION USERNAME@EXTERNAL_IP_ADDRESS`, where SSH_PRIVATE_KEY_LOCATION is the path of the corresponding ssh private key, USERNAME is the username of the SSH key (found in the Metadata page under SSH keys), and EXTERNAL_IP_ADDRESS
-9. We highly recommend you create two folders in the home directory on the control machine for convenience: `autobahn-bullshark` and `hotstuff-baselines`. Navigate to the `autobahn-bullshark` folder, clone the `autobahn-artifact` repo, and checkout `autobahn-simple-sender`. Then navigate to the `hotstuff-baselines` folder, clone the `autobahn-artifact` repo, and checkout the `vanilla-hs-framework` branch. Having this structure will allow you to change parameters and run experiments for different baselines much faster than checking out different branches each time.
-10. Follow the Install Dependencies section on the control machine
-11. Follow the Generate SSH Keys section on the control machine to generate a new SSH keypair on the control machine and add it to the metadata console
+
+`ssh -i SSH_PRIVATE_KEY_LOCATION USERNAME@EXTERNAL_IP_ADDRESS`, where SSH_PRIVATE_KEY_LOCATION is the path of the corresponding ssh private key, USERNAME is the username of the SSH key (found in the Metadata page under SSH keys), and EXTERNAL_IP_ADDRESS is the ip address of the control machine.
+
+Next, we must setup the control machine environment:
+
+1. Clone the repository. For convenience, we highly recommend you create two folders in the home directory on the control machine: `autobahn-bullshark` and `hotstuff-baselines`. Navigate to the `autobahn-bullshark` folder, clone the `autobahn-artifact` repo, and checkout branch `autobahn`. Then navigate to the `hotstuff-baselines` folder, clone the `autobahn-artifact` repo, and checkout the `vanilla-hs` branch. Having this structure will allow you to change parameters and run experiments for different baselines much faster than checking out different branches each time as Autobahn and Bullshark (and analogously VanillaHS and BatchedHS) share common parameter structure.
+
+2. Install all required dependencies on the control machine. Follow the Install Dependencies section.
+
+3. Generate new SSH keypairs for the control machine and add them to the metadata console. Follow the Generate SSH Keys section.
 
 ## Running Experiments
 
-i.e. what scripts to run, what configs to give, and how to collect/interpret results.
--> fab remote
+<!-- i.e. what scripts to run, what configs to give, and how to collect/interpret results.
+-> fab remote -->
+
 Now that you have setup GCP, you are ready to run experiments on GCP!
-Follow the GCP Config instructions for both `autobahn-bullshark` and `hotstuff-baselines` folders.
+Follow the GCP Config instructions for both the `autobahn-bullshark` and `hotstuff-baselines` folders.
 
 ### GCP Config
 The GCP config is found in `autobahn-artifact/benchmark/settings.json`. You will need to change the following:
 1. `key`: change the `name` (name of the private SSH key) and `path` fields to match the key you generated in the prior section
-The `port` field will remain the same (value of 5000).
-2. `repo`: The `name` field will remain the same (value of autobahn-artifact). You will need to change the `url` field to be the url of the artifact github repo. Specifically, you will need to prepend your personal access token to the beginning of the url. The url should be in this format: "https://TOKEN@github.com/neilgiri/autobahn-artifact", where `TOKEN` is the name of your personal access token. `branch` specifies which branch will be run on all the machines. This will determine which system ends up running. Only select an Autobahn or Bullshark branch if you are under the `autobahn-bullshark` folder. Similarly, only select a Vanilla HotStuff or Batched HotStuff branch if you are under the `hotstuff-baselines` folder.
-3. `project_id`: the project id is found by clicking the the dropdown of "My First Project" on the top left side, and looking at the ID field.
-4. `instances`: `type` (value of t2d-standard-16) and `regions` (value of ["us-east1-b", "us-east5-a", "us-west1-b", "us-west4-a"])will remain the same. If you select different regions then you will need to change the regions field to be the regions you are running in. You will need to change `templates` to be the names of the instance templates you created. The order matters, as they should correspond to the order of each region. The path should be in the format "projects/PROJECT_ID/regions/REGION_ID/instanceTemplates/TEMPLATE_ID", where PROJECT_ID is the id of the project you created in the prior section, REGION_ID is the name of the region without the subzone (i.e. us-east1 NOT us-east1-a).
+Leave `port` unchanged (should be `5000`).
+
+2. `repo`: Leave `name` unchanged (should be `autobahn-artifact`). You will need to change the `url` field to be the url of the artifact github repo. Specifically, you will need to prepend your personal access token to the beginning of the url. The url should be in this format: "https://TOKEN@github.com/neilgiri/autobahn-artifact", where `TOKEN` is the name of your personal access token. `branch` specifies which branch will be run on all the machines. This will determine which system ends up running. Only select an Autobahn or Bullshark branch if you are in the `autobahn-bullshark` folder. Similarly, only select a Vanilla HotStuff or Batched HotStuff branch if you are in the `hotstuff-baselines` folder.
+
+3. `project_id`: the project id is found by clicking the the dropdown of your project (e.g. "My First Project") on the top left side, and looking at the ID field.
+
+4. `instances`: `type` (value of t2d-standard-16) and `regions` (value of ["us-east1-b", "us-east5-a", "us-west1-b", "us-west4-a"]) should remain unchanged. If you select different regions then you will need to change the regions field to be the regions you are running in. You will need to change `templates` to be the names of the instance templates you created. The order matters, as they should correspond to the order of each region. The path should be in the format "projects/PROJECT_ID/regions/REGION_ID/instanceTemplates/TEMPLATE_ID", where PROJECT_ID is the id of the project you created in the prior section, REGION_ID is the name of the region without the subzone (i.e. us-east1 NOT us-east1-a).
 
 ### GCP Benchmark commands
 1. If you want to run an Autobahn or Bullshark experiment navigate to `autobahn-bullshark/autobahn-artifact/benchmark`. If you want to run a Vanilla HotStuff or a Batched HotStuff experiment navigate to `hotstuff-baselines/autobahn-artifact/benchmark`.
-2. For the first experiment, run `fab create` which will create machines based off your instance templates. For subsequent experiments, you will not need to run `fab create` as the instances will already have been created. Anytime you delete the VM instances you will need to run `fab create` to recreate them.
+
+2. For the first experiment, run `fab create` which will instantiate machines based off your instance templates. For subsequent experiments, you will not need to run `fab create` as the instances will already have been created. Anytime you delete the VM instances you will need to run `fab create` to recreate them. 
+> [!NOTE] 
+> Spot machines, although cheaper, are not reliable and may be terminated by GCP at any time. If this happens (perhaps an experiment fails), delete all other running instances and re-run `fab create`.
+
 3. Then run `fab install` which will install rust and the dependencies on these machines. Like `fab create` you only need to run this command one time after the creation of the VMs.
-4. Finally `fab remote` will launch a remote experiment with the parameters specified in `fabfile.py`. The next section will show you what each parameter controls. The `fab remote` command should show a progress bar of how far along it is until completion. Note that the first time running the command may take a long time but subsequent trials should be faster.
+
+4. Finally `fab remote` will launch a remote experiment with the parameters specified in `fabfile.py`. The next section will explain how to configure the parameters. The `fab remote` command should show a progress bar of how far along it is until completion. Note that the first time running the command may take a long time but subsequent trials should be faster.
 
 ## Configuring Parameters
 The parameters for the remote experiment are found in `fabfile.py`. To change the parameters locate the remote task in `fabfile.py`. This task specifies two types of parameters, the benchmark parameters and the nodes parameters. The benchmark parameters look as follows:
