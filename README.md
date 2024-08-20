@@ -405,62 +405,49 @@ The experiment configs
 ### Performance under ideal conditions
 When an experiment finishes the logs and output files are downloaded to the control machine. The performance results are found in `results/bench-
 
-#### Autobahn
-Peak throughput is around 234k txn/s, end-to-end latency is around 280 ms. The config to get the peak throughput is found in `autobahn-peak.txt`.
+ Reported peak results were roughly:
+      - Autobahn: Throughput: ~234k tx/s, Latency: ~280 ms  
+      - Bullshark: Throughput: ~234k tx/s Latency: ~592 ms
+      - BatchedHS: Throughput: ~189k tx/s, Latency: ~333 ms
+      - VanillaHS: Throughput: ~15k tx/s, Latency: ~365 ms
 
-#### Bullshark
-Peak throughput is around 234k txn/s, end-to-end latency is around 592 ms. 
-
-#### Batched-HS
-Peak throughput is around 189k txn/s, end-to-end latency is around 333 ms. 
-
-#### Vanilla-HS
-Peak throughput is around 15k txn/s, end-to-end latency is around 365 ms. 
-
-- for each system, give our peak numbers + the config. Have them reproduce those
+The config to get the peak throughput is found in `autobahn-peak.txt`.
 
 ### Scalability
 - for each n, and each system give the numbers (i.e. the whole fig as a table)
 
 n=4 see main graph. We show here just n=20
 
-#### Autobahn
-Peak throughput is around 230 txn/s, end-to-end latency is around 303 ms. 
+Reported peak results were roughly (n=20):
+      - Autobahn: Throughput: ~230k tx/s, Latency: ~303 ms  
+      - Bullshark: Throughput: ~230k tx/s Latency: ~631 ms
+      - BatchedHS: Throughput: ~110k tx/s, Latency: ~308 ms
+      - VanillaHS: Throughput: ~1.5k tx/s, Latency: ~2002 ms
 
-#### Bullshark
-Peak throughput is around 230k txn/s, end-to-end latency is around 631 ms. 
-
-#### Batched-HS
-Peak throughput is around 110k txn/s, end-to-end latency is around 308 ms. 
-
-#### Vanilla-HS
-Peak throughput is around 1.5k txn/s, end-to-end latency is around 2002 ms. 
 
 ### Leader failures
 - show the 3s blip in HS, and lack thereof for us (don't think we need to show the other two blips).
 - give the config. Explain how to interpret the data file to see blip duration and hangover duration (Be careful to explain that the numbers can be slightly offset)
 
-#### Autobahn
-Blip duration: 1s (from 7 to 8?). Hangover: 0s
 
-#### Vanilla-HS
-Blip duration: 3s. Hangover: 4s
+Reported blip and hangover durations were roughly:
+      - Autobahn: Blip duration: 7 to 8s, Hangover: /
+      - VanillaHS: Blip duration: 7 to 10s, Hangover: 10 to 14s
 
 
 ### Partition
 - give the configs and run all. Same same.
 
 #### Autobahn
-Blip from 8 to 28. Hangover...  Measured lat.. (slightly higher than normal. Something with framework. Same for bullshark)
+> ![Note] > Lat slightly higher than normal. Something with framework. Same for bullshark)
 
-NOTE: GIVE OUR FIXED NUMBERS FROM REBUTTAL. SAY PAPER NUMBERS HAD A BUG..
+> ![Note] > GIVE OUR FIXED NUMBERS FROM REBUTTAL. SAY PAPER NUMBERS HAD A BUG..
 
-#### Bullshark
+Reported blip and hangover durations were roughly:
+      - Autobahn: Blip duration: 7 to 28s, Hangover: /
 
-
-#### Batched-HS
-
-
-#### Vanilla-HS
+      - Bullshark:
+      - BatchedHS:
+      - VanillaHS: Blip duration: 7 to 10s, Hangover: 10 to 14s
 
 
