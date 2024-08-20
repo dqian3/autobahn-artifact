@@ -111,11 +111,13 @@ Detail which machines and configs we used (CPU/SSD...). What geo setup (i.e. whe
 We recommend running on GCP as our experiment scripts are designed to work with GCP. 
 New users to GCP can get $300 worth of free credit (https://console.cloud.google.com/welcome/new), which should be sufficient to reproduce our core results. The Google Cloud console is the gateway for accessing all GCP services. Most of the time we will use the compute engine service to create and manage VMs but occassionally we will use other services. You can search for other services using the GCP console searchbar.
 
-### Creating a project
-The first step is to create a compute engine project. Follow the instructions here:
-https://developers.google.com/workspace/guides/create-project
-When you create an account
-We recommend you name the project autobahn but you can choose any name you like.
+1. Click the Try For Free blue button
+2. Enter your account information for step 1 and step 2
+3. Click the Start Free blue button after step 2
+4. Optionally complete the survey
+5. Creating an account should automatically create a project called "My First Project". If not follow the instructions here to create a project: https://developers.google.com/workspace/guides/create-project
+6. In the google cloud console search for compute engine API, and click the blue Enable button (beware this may take a long time). Do not worry about creating credentials for the API.
+
 
 ### Setup SSH keys
 In order to connect to GCP you will need to register an SSH key. Install ssh if you do not already have it (on Ubuntu this is `sudo apt-get install ssh`)
@@ -129,23 +131,16 @@ To add a public SSH key to the project metadata using the Google Cloud console, 
 
 2. Click the SSH keys tab.
 
-3. Click Edit.
+3. Click Add SSH Key.
 
-4. Click Add item.
+4. In the SSH key field that opens, add the public SSH key you generated earlier. The key must be in one of the following formats:
+`KEY_VALUE USERNAME`. Replace the following:
+-KEY_VALUE: the public SSH key value
+-USERNAME: your username. For example, cloudysanfrancisco or cloudysanfrancisco_gmail_com. Note the USERNAME can't be root.
 
-5. In the SSH key field that opens, add your public SSH key. The key must be in one of the following formats:
+5. Click Save.
 
-`KEY_VALUE USERNAME`
-
-Replace the following:
-
-KEY_VALUE: the public SSH key value
-USERNAME: your username. For example, cloudysanfrancisco or cloudysanfrancisco_gmail_com.
-For Linux VMs, the USERNAME can't be root, unless you configure your VM to allow root login. For more information, see Connect to Linux VMs as the root user.
-
-For Windows VMs that use Active Directory (AD), the username must be prepended with the AD domain, in the format of DOMAIN\. For example, the user cloudysanfrancisco within the ad.example.com AD has a USERNAME of example\cloudysanfrancisco.
-
-6. Click Save.
+6. Remember the Username field (you will need it later for setting up the control machine)
 
 ### Setting up Google Virtual Private Cloud (VPC)
 Next, you will need to create your own Virtual Private Cloud network. To do so: 
@@ -154,19 +149,19 @@ Next, you will need to create your own Virtual Private Cloud network. To do so:
 
 2. Click Create VPC network.
 
-3. Enter a Name for the network (we recommend `autobahn-vpc`).
+3. Enter a Name for the network (we recommend `autobahn-vpc`). The description field is optional.
 
 4. Maximum transmission unit (MTU): Choose 1460 (default)
 
 5. Choose Automatic for the Subnet creation mode.
 
-6. In the Firewall rules section, select the "default-allow-internal", "default-allow-ssh", "default-allow-rdp", "default-allow-icmp". The rules address common use cases for connectivity to instances.
+6. In the Firewall rules section, select the "autobahn-vpc-allow-internal", "autobahn-vpc-allow-ssh", "autobahn-vpc-allow-rdp", "autobahn-vpc-allow-icmp". The rules address common use cases for connectivity to instances.
 
-7. Select regional for the Dynamic routing mode for the VPC network.
+7. Select Regional for the Dynamic routing mode for the VPC network.
 
 8. Click Create.
 
-9. Check that the default 4 firewall rules are there (see `Pre-populated rules in the default network` here https://cloud.google.com/firewall/docs/firewalls)
+Beware that it may take some time for the vpc network to be created.
 
 ### Create Instance Templates
 We're now ready to create an Instance Template for each region we need, containing the respective hardware configurations we will use.
@@ -180,17 +175,20 @@ Create one instance template per region as follows:
 
 3. Give instance template a name
 
-4. Select the Location as follows:
-Choose Regional.
-Select the Region where you want to create your instance template.
+4. Select the Location as follows: Choose Regional.
 
-5. Select a Machine type.
-Choose t2d-standard-16 (16vCPU, 64 GB of memory) (under General purpose category)
-Choose Spot for VM provisioning model (to save costs)
-Choose 20 GB balanced persistent disk (in the Boot disk section). This is important! If you use a HDD then writing to disk may become a bottleneck.
-Select ubuntu-2004-focal-v20231101 as the Image
+5. Select the Region where you want to create your instance template (one of us-east5, us-east1, us-west1, or us-west4).
 
-6. Click Create to create the template.
+6. Under Machine configuration select the T2D series (under General purpose category)
+7. For Machine type select t2d-standard-16 (16vCPU, 64 GB of memory)
+8. Under Availability policies choose Spot for VM provisioning model (to save costs). The default spot VM settings are fine but make sure On VM termination is set to Stop.
+9. Scroll down to Boot disk and click Change. For Operating system select Ubuntu. For Version make sure Ubunu 20.04 LTS is selected. For Boot disk type select Balanced persistent disk. This is important! If you use a HDD then writing to disk may become a bottleneck. For size put 20 GB. No need to change anything in advanced configuration.
+10. Under Identity and API access select the "Allow full access to all Cloud APIs" option
+11. The default Firewall options are fine (unchecked all boxes)
+12. Under Network interfaces change the network interface to "autobahn-vpc". Subnetwork is Auto subnet. IP stack type is IPv4. External IPv4 address is Ephemeral. The Network Service Tier is Premium. Don't enable DNS PTR Record.
+13. No need to add any additional disks
+14. Under Security make sure Turn on vTPM and Turn on Integrity Monitoring is checked. Make sure "Block project-wide SSH keys" is unchecked
+15. No need to change anything in the Management or Sole-tenancy sections
 
 Create one last instance template to serve as the control machine. Pick any of the four regions. Name this instance template `autobahn-instance-template` (the scripts assume this is the name of the control machine).
 For this instance template select Standard instead of Spot for VM provisioning model (so it won't be pre-empted while running an experiment).
@@ -208,6 +206,7 @@ We recommend you pick t2d-standard-4 (instead of t2d-standard-16) for the machin
 `ssh -i SSH_PRIVATE_KEY_LOCATION USERNAME@EXTERNAL_IP_ADDRESS`, where SSH_PRIVATE_KEY_LOCATION is the path of the corresponding ssh private key, USERNAME is the username of the SSH key (found in the Metadata page under SSH keys), and EXTERNAL_IP_ADDRESS
 9. We highly recommend you create two folders in the home directory on the control machine for convenience: `autobahn-bullshark` and `hotstuff-baselines`. Navigate to the `autobahn-bullshark` folder, clone the `autobahn-artifact` repo, and checkout `autobahn-simple-sender`. Then navigate to the `hotstuff-baselines` folder, clone the `autobahn-artifact` repo, and checkout the `vanilla-hs-framework` branch. Having this structure will allow you to change parameters and run experiments for different baselines much faster than checking out different branches each time.
 10. Follow the Install Dependencies section on the control machine
+11. Follow the Generate SSH Keys section on the control machine
 
 ## Running Experiments
 
@@ -221,7 +220,7 @@ The GCP config is found in `autobahn-artifact/benchmark/settings.json`. You will
 1. `key`: change the `name` (name of the private SSH key) and `path` fields to match the key you generated in the prior section
 The `port` field will remain the same (value of 5000).
 2. `repo`: The `name` field will remain the same (value of autobahn-artifact). You will need to change the `url` field to be the url of the artifact github repo. Specifically, you will need to prepend your personal access token to the beginning of the url. The url should be in this format: "https://TOKEN@github.com/neilgiri/autobahn-artifact", where `TOKEN` is the name of your personal access token. `branch` specifies which branch will be run on all the machines. This will determine which system ends up running. Only select an Autobahn or Bullshark branch if you are under the `autobahn-bullshark` folder. Similarly, only select a Vanilla HotStuff or Batched HotStuff branch if you are under the `hotstuff-baselines` folder.
-3. `project_id`: change this to be the name of the project id you created in the prior section
+3. `project_id`: the project id is found by clicking the the dropdown of "My First Project" on the top left side, and looking at the ID field.
 4. `instances`: `type` (value of t2d-standard-16) and `regions` (value of ["us-east1-b", "us-east5-a", "us-west1-b", "us-west4-a"])will remain the same. If you select different regions then you will need to change the regions field to be the regions you are running in. You will need to change `templates` to be the names of the instance templates you created. The order matters, as they should correspond to the order of each region. The path should be in the format "projects/PROJECT_ID/regions/REGION_ID/instanceTemplates/TEMPLATE_ID", where PROJECT_ID is the id of the project you created in the prior section, REGION_ID is the name of the region without the subzone (i.e. us-east1 NOT us-east1-a).
 
 ### GCP Benchmark commands
