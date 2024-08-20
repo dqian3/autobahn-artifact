@@ -380,7 +380,7 @@ End-to-end latency captures the time from a replica first receiving a transactio
 
 We measure end-to-end latency from the moment the transaction arrives at the mempool (i.e. the client-local replica receives the transaction), to the moment the request executes.
 
-> ![Note] > The latency does not include the latency of a reply to the client. 
+> [!Note] > The latency does not include the latency of a reply to the client. 
 > This is an artefact from the Narwhal framework, and was not trivially to change so we stuck with it. They did this to align the experimental framework with production deployments (e.g. Aptos/Mysten, or CCF) in which servers do not respond to client requests, but instead clients poll for “state”. Since applications are typically smart contracts, the client does not wait for a result (as would be common for RPCs). For such apps, end-to-end “ends” at the replicas.
 > Notably though, extra client-latencies are constant, small, and are a cost shared with all other protocols. It does not depend on the type of protocol. Since clients are co-located with a proposing replica the client-to-mempool latency adds only an in-data center ping latency (ca. 15us), while the reply would incur the tail latency of the f+1th closest replica (i.e. 19/28ms in our setup), or only the ping latency if the local replica is trusted (as is common in blockchains). This overhead is thus arguably negligible compared to the overall consensus latencies.
 
@@ -415,7 +415,7 @@ A given row describes the *average* `latency` of transactions that started at `s
 
 In order to identify a blip start, search for the first row that shows a spike in latency (in this case row 3). Blip starts correspond roughly to the `asynchrony` start specified in the fabfile.py parameters, but may deviate several seconds due to various start-up overheads. 
 To identify the end of a hangover, search for rows that return latency to their pre-blip value (in this case row 7). The difference constitutes the `blip + hangover` duration (in this case ca 1.1s). To isolate the hangover duration, subtract from the `blip + hangover` duration the `asynchrony_duration` specified in the fabfile.py parameters. 
->![Note] > We note that blip durations are slightly noisy, as 1) latency points are recorded as 1 second averages, and 2) blips may be slightly longer than the specified `asynchrony_duration` depending on the size of the timeout parameter, and the timing of a view change. For instance, when simulating leader failures, a new faulty leader may be elected at the very end of a blip, causing the effective blip duration to be extended by the timeout duration. 
+>[!Note] > We note that blip durations are slightly noisy, as 1) latency points are recorded as 1 second averages, and 2) blips may be slightly longer than the specified `asynchrony_duration` depending on the size of the timeout parameter, and the timing of a view change. For instance, when simulating leader failures, a new faulty leader may be elected at the very end of a blip, causing the effective blip duration to be extended by the timeout duration. 
 
 ## Reproducing Results
 The exact configs and corresponding results for each of our eperiments (and *all* their data points) can be found on branch `overview` in folder `autobahn-artifact/paper-results`.
@@ -437,7 +437,7 @@ The reported peak results in Fig. 5 were roughly:
 We evaluated all systems using the same setup as above, but for different levels of n: `n=4`, `n=12`, and `n=20`. The results for `n=4` follow from Fig. 5.
 
 To configure the scaling factor, one simply modifies the `create` task in `fabfile.py`. Our provided configs are ALREADY configured, so no changes are needed.
-> ![Note] > To configure the scaling factor one must set create(ctx, nodes=k), where k = n/regions. For example, for n=4, set nodes=1; for n=20, use nodes=5.  
+> [!Note] > To configure the scaling factor one must set create(ctx, nodes=k), where k = n/regions. For example, for n=4, set nodes=1; for n=20, use nodes=5.  
 
 
 The reported peak results for `n=20` were roughly: 
@@ -454,7 +454,7 @@ In Fig. 7 we simulate blips caused by leader failures.
 
 We summarize the results for the Blip in Fig.1 / the first blip in Fig. 7.
 The measured blip and hangover durations were roughly:
-> ![Note] > Fig. 7 normalizes the blip start times to a common start time.
+> [!Note] > Fig. 7 normalizes the blip start times to a common start time.
 ```
       - Autobahn:   (220kload-1-fault-exp-timeout.txt) REPLACE
             Blip duration: 1s
@@ -469,15 +469,15 @@ The measured blip and hangover durations were roughly:
             Hangover end: 31.4s
             -> Hangover ~4.9 (minus 0-1s blip noise)
 ```
-> ![Note]> VannillaHS experiences some noisy latency at the beginning due to nodes not booting at the same time, ignore this
+> [!Note]> VannillaHS experiences some noisy latency at the beginning due to nodes not booting at the same time, ignore this
 
 
 ### Partition
 In Fig. 8 we simulate a blip caused by a temporary, partial partition in which regions us-west and us-east are cut off from one another. 
 
 The measured blip and hangover durations were roughly:
-> ![Note] > Fig. 8 normalizes the blip start times to a common start time.
-> ![Note] > The latency numbers reported for Autobahn for Fig. 8 in the submission were slightly higher than expected due to some configuration mistakes. We've fixed this for the rebuttal, and include here the numbers from our re-runs (for both Autobahn and Bullshark).
+> [!Note] > Fig. 8 normalizes the blip start times to a common start time.
+> [!Note] > The latency numbers reported for Autobahn for Fig. 8 in the submission were slightly higher than expected due to some configuration mistakes. We've fixed this for the rebuttal, and include here the numbers from our re-runs (for both Autobahn and Bullshark).
 ```
       - Autobahn: (ab_simple_sender_250bs_opt_tips_k4.txt) REPLACE
             Blip duration: 20s
