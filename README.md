@@ -507,19 +507,22 @@ The configs can be found in `experiment_configs/blips-graph/`.
 
 The measured blip and hangover durations were roughly:
 ```
-      - Autobahn:   (`220kload-1-fault-exp-timeout.txt`) 
+      - Autobahn:   
             Blip duration: 1s
             Blip start: 22.4s
             Hangover end: 23.5s
             -> Hangover ~0.1 (minus 0-1s blip noise, so effectively 0)
 
           
-      - VanillaHS:  (`15kload-1fault-exponential-1stimeout.txt`) 
+      - VanillaHS: 
             Blip duration: 1s  (but HS is subject to Double blip behavior, so effetively 3s blip)
             Blip start: 23.5s
             Hangover end: 31.4s
             -> Hangover ~4.9 (minus 0-1s blip noise)
 ```
+<!-- (`220kload-1-fault-exp-timeout.txt`)  -->
+<!-- (`15kload-1fault-exponential-1stimeout.txt`)  -->
+
 > [!NOTE]
 > VannillaHS experiences some noisy latency at the beginning due to nodes not booting at the same time, ignore this
 
@@ -535,30 +538,33 @@ The measured blip and hangover durations were roughly:
 > [!NOTE] 
 > The latency numbers reported for Autobahn for Fig. 8 in the submission were slightly higher than expected due to some configuration mistakes. We've fixed this for the rebuttal, and include here the numbers from our re-runs (for both Autobahn and Bullshark).
 ```
-      - Autobahn: (ab_simple_sender_250bs_opt_tips_k4.txt) 
+      - Autobahn:
             Blip duration: 20s
             Blip start: 7.9s
             Hangover end: 29.6s
             -> Hangover ~1.7s (minus 0-1s blip noise)
 
-      - Bullshark: (bullshark_250bs_opt_tips_k4.txt) REPLACE
+      - Bullshark: 
             start: 7.1   end 36.2 -> 29.1 blip - 28. => 8 sec hangover
             Blip duration: 20s
             Blip start: 7.1s
             Hangover end: 36.2s
             -> Hangover ~9.1s (minus 0-1s blip noise)
 
-      - BatchedHS: (batchedhs-partition-500batch-15kload.txt) REPLACE
+      - BatchedHS: 
             Blip duration: 20s
             Blip start: 5.5s
             Hangover end: 35s
             -> Hangover ~9.5s (minus 0-1s blip noise)
 
-      - VanillaHS: (2node-partition-20s-15kload.txt) REPLACE
+      - VanillaHS: 
             Blip duration: 20s
             Blip start: 8.6s
             Hangover end: 49s
             -> Hangover ~20.4s (minus 0-1s blip noise)
 ```
-
+<!-- (ab_simple_sender_250bs_opt_tips_k4.txt)  -->
+<!-- (bullshark_250bs_opt_tips_k4.txt) -->
+<!-- (batchedhs-partition-500batch-15kload.txt) -->
+<!-- (2node-partition-20s-15kload.txt) -->
 
