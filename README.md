@@ -64,7 +64,7 @@ The ReadMe is organized into the following high level sections:
 We recommend running on Ubuntu 20.04 LTS as this is the environment we have used for our tests. This said, the code should compile and work on most operating systems.
 
 We require several software dependencies. 
-- python3
+- python3, python3-pip
 - rust (recommend 1.80 stable)
 - clang version <= 14 (for building librocksdb, DO NOT use version 15 or higher)
 - tmux
@@ -74,9 +74,9 @@ For convenience, we have provided an install script `install_deps.sh` in the `ov
 After installation finishes, navigate to `autobahn-artifact/benchmark` and run `pip install -r requirements.txt`.
 
 #### Manual installation
-If not using `install_deps.sh` make sure to:
+If not using `install_deps.sh`, but installing the dependencies manually, make sure to:
 - update your distribution: `sudo apt-get update`
-- use the script here: https://bootstrap.pypa.io/get-pip.py and not apt-get, and update the `PATH` environment variable to point to the location of pip.
+- pip might already be installed. Remove it, and install it from here: https://bootstrap.pypa.io/get-pip.py. Do not use apt-get. Update the `PATH` environment variable to point to the location of pip.
 
 
 ### Building code: 
@@ -339,7 +339,7 @@ They are defined as follows.
 > To reproduce our experiments you do NOT need to change any parameters. 
 
 Protocol parameters:
-- `header_size`: The preferred header size (= Car payload). Car proposals in Autobahn (and analogously DAG proposals in Bullshark) do not contain transactions themselves, but propose digests of mini-batches (see Eval section). The primary creates a new header when it has completed its previous Car (or for Bullshark, when it has enough DAG parents) and enough batches' digests to reach header_size. Denominated in bytes.
+- `header_size`: The preferred header size (= Car payload). Car proposals in Autobahn (and analogously DAG proposals in Bullshark) do not contain transactions themselves, but propose digests of mini-batches (see Eval section). The primary creates a new header when it has completed its previous Car (or for Bullshark, when it has enough DAG parents) and enough batch digests to reach header_size. Denominated in bytes.
 - `max_header_delay`: The maximum delay that the primary waits before readying a new header payload, even if the header did not reach max_header_size. Denominated in ms.
 - `gc_depth`: The depth of the garbage collection (Denominated in number of rounds).
 - `sync_retry_delay`: The delay after which the synchronizer retries to send sync requests in case there was no reply. Denominated in ms.
@@ -353,8 +353,8 @@ Protocol parameters:
 - `use_fast_path`: Whether to enable the 3f+1 fast path for consensus
 - `fast_path_timeout`: The timeout for waiting for 3f+1 responses on the consensus fast path
 - `use_ride_share`: DEPRECATED: Whether to enable the ride-sharing optimization of piggybacking consensus messages on car messages (see Autobahn supplemental material)
-- `car_timeout`: The timeout for sending a car
-- `use_fast_sync`: Whether to enable the fast sync optimization. If set to False, Autobahn will use the default recursive sync strategy utilized by DAG protocols
+- `car_timeout`: DEPRECATED: Used for ride-sharing.
+- `use_fast_sync`: Whether to enable the single-round fast sync optimization. If set to False, Autobahn will use the default recursive sync strategy utilized by DAG protocols
 - `use_exponential_timeouts`: Whether to enable timeout doubling upon timeouts firing and triggering a View change
 
 Blip simulation framework:
@@ -366,8 +366,7 @@ Blip simulation framework:
 - `egress_penalty`: DEPRECATED: For egress blips how much egress delay is added
 
 
-The configs for each experimented are located the `experiment_configs` folder. To run a specific experiment copy and paste the experiment config into the fab remote task. For all experiments besides the scaling experiment you will want to make sure `nodes=1`. This will create 1 node per region specificed in the settings.json file.
-
+The configs for each experimented are located the `experiment_configs` folder. To run a specific experiment copy and paste the experiment config into the fab remote task. 
 
 
 ## Reading Output Results
@@ -387,7 +386,9 @@ Autobahn example: 200k tput. Consensus lat = from time it was proposed for conse
 
  Blip graphs more difficult to read: Latency over time.
 
-left number: time?, middle???   right number: latency in seconds? 
+left number: start time, end-time.   right number:  (diff) latency in seconds? 
+
+Identify blip start = where latency first spikes. This is roughly where we specified it would start, but not exactly because of start up delays (+ averaging creates some noise)
 
  5.748999834060669,6.148999929428101,0.40000009536743164
 5.786999940872192,6.256999969482422,0.4700000286102295
@@ -418,6 +419,9 @@ The config to get the peak throughput is found in `autobahn-peak.txt`.
 ### Scalability
 - for each n, and each system give the numbers (i.e. the whole fig as a table)
 
+To configure the scaling factor, you need change the create task in fabfile.py from nodes=1 to n/regions, e.g. nodes=1 for n=4, nodes=5 for n=20
+For all experiments besides the scaling experiment you will want to make sure `nodes=1`. This will create 1 node per region specificed in the settings.json file.
+
 n=4 see main graph. We show here just n=20
 
 Reported peak results were roughly (n=20):
@@ -437,7 +441,13 @@ Reported peak results were roughly (n=20):
 Reported blip and hangover durations were roughly:
 ```
       - Autobahn: Blip duration: 7 to 8s, Hangover: /
+            220kload-1-fault-exp-timeout.txt
+            22.4 -> 23.5 -> 1s blip, 0 hangover
       - VanillaHS: Blip duration: 7 to 10s, Hangover: 10 to 14s
+            15kload-1fault-exponential-1stimeout.txt
+            23.5 -> 31.4 => 7.9 => 3 blip, 5 hangover
+
+        Note: HS has some high lat at the beginning (nodes not booted at same time) , ignore this
 ```
 
 
@@ -451,10 +461,21 @@ Reported blip and hangover durations were roughly:
 
 Reported blip and hangover durations were roughly:
 ```
-      - Autobahn: Blip duration: 7 to 28s, Hangover: /
+      - Autobahn: 
+            ab_simple_sender_250bs_opt_tips_k4.txt
+            start: 7.8   29.6 -> ca 21.8 blip +-1 (because averaging + when view change hits) => ca 1 sec hangover.
+
       - Bullshark:
+            bullshark_250bs_opt_tips_k4.txt
+            start: 7.1   end 36.2 -> 29.1 blip - 28. => 8 sec hangover
       - BatchedHS:
-      - VanillaHS: Blip duration: 7 to 10s, Hangover: 10 to 14s
+            batchedhs-partition-500batch-15kload.txt
+            5.5/5.7 end 35 => 9 sec hangover
+      - VanillaHS: Blip duration: 
+            2node-partition-20s-15kload.txt
+            8.6   -> 49 => ca 20s hangover
 ```
+
+In our graph we normalized the start times
 
 
