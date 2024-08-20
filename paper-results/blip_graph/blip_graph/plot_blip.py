@@ -18,13 +18,13 @@ def adjust_file(file_name, offset):
         
 
 
-hs_file_name_1 = '15kload-1fault-1stimeout-processed'
-hs_file_name_2 = '15kload-1fault-exponential-1stimeout-processed'
-hs_file_name_3 = '15kload-1fault-5stimeout-processed'
+hs_file_name_1 = 'vanilla-hs/15kload-1fault-1stimeout-processed'
+hs_file_name_2 = 'vanilla-hs/15kload-1fault-exponential-1stimeout-processed'
+hs_file_name_3 = 'vanilla-hs/15kload-1fault-5stimeout-processed'
 
-motorway_file_name_1 = '220kload-1fault-1stimeout'
-motorway_file_name_2 = '220kload-1-fault-exp-timeout'
-motorway_file_name_3 = '220kload-1fault-5stimeout'
+motorway_file_name_1 = 'autobahn/220kload-1fault-1stimeout'
+motorway_file_name_2 = 'autobahn/220kload-1-fault-exp-timeout'
+motorway_file_name_3 = 'autobahn/220kload-1fault-5stimeout'
 
 output_file_name = 'blips.pdf'
 
