@@ -277,16 +277,20 @@ Leave `port` unchanged (should be `5000`).
 4. Finally `fab remote` will launch a remote experiment with the parameters specified in `fabfile.py`. The next section will explain how to configure the parameters. The `fab remote` command should show a progress bar of how far along it is until completion. Note that the first time running the command may take a long time but subsequent trials should be faster.
 
 ## Configuring Parameters
-The parameters for the remote experiment are found in `fabfile.py`. To change the parameters locate the remote task in `fabfile.py`. This task specifies two types of parameters, the benchmark parameters and the nodes parameters. The benchmark parameters look as follows:
+The parameters for the remote experiment are found in `benchmark/fabfile.py`. To change the parameters locate the `remote(ctx, debug=True)` task section in `fabfile.py`. This task specifies two types of parameters, the benchmark parameters and the nodes parameters. 
 
-`bench_params = {
+The benchmark parameters look as follows:
+
+```
+bench_params = {
     'nodes': 4,
     'workers': 1,
     'rate': 50_000,
     'tx_size': 512,
     'faults': 0,
     'duration': 20,
-}`
+}
+```
 
 
 They specify the number of primaries (nodes) and workers per primary (workers) to deploy, the input rate (tx/s) at which the clients submits transactions to the system (rate), the size of each transaction in bytes (tx_size), the number of faulty nodes ('faults), and the duration of the benchmark in seconds (duration). 
