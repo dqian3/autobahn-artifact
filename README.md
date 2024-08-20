@@ -280,6 +280,10 @@ Leave `port` unchanged (should be `5000`).
 The parameters for the remote experiment are found in `benchmark/fabfile.py`. 
 To change the parameters locate the `remote(ctx, debug=True)` task section in `fabfile.py`. This task specifies two types of parameters, the benchmark parameters and the nodes parameters. 
 
+> [!NOTE] 
+> To reproduce our experiments you do NOT need to change any parameters. This section serves entirely explanation purposes.
+> To reproduce a specific experiment simply copy a config of choice from `experiment_configs` into the `fabfile.py` `remote` task. 
+
 The benchmark parameters look as follows:
 
 ```
@@ -338,8 +342,6 @@ node_params = {
 }
 ```
 They are defined as follows.
-> [!NOTE] 
-> To reproduce our experiments you do NOT need to change any parameters. 
 
 General Protocol parameters:
 - `timeout_delay`: The consensus view change timeout value. 
