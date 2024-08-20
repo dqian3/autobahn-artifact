@@ -17,34 +17,29 @@ For all questions about the artifact please e-mail Neil Giridharan <giridhn@berk
 
 This artifact contains, and allows to reproduce, experiments for all figures included in the paper "Autobahn: Seamless high speed BFT". 
 
-It contains a prototype implemententation of Autobahn, as well as the reference implementations used to evaluate baseline systems: VanillaHS, BatchedHS, and Bullshark. Each prototype is located on its *own* branch, named accordingly. Please checkout the corresponding branch when validating claims for a given system.
-
+It contains a prototype implemententation of Autobahn, as well as the reference implementations used to evaluate baseline systems: VanillaHS, BatchedHS, and Bullshark. Each prototype is located on its *own* branch, named accordingly. For each system, we have provided *two* branches: one containing the base system (e.g. `autobahn`), and another that contains a version modified to simulate blips (e.g. `autobahn-blips`).
+Please checkout the corresponding branch when validating claims for a given system and experiment.
 
 Autobahn and all baseline systems are implemented in Rust, using the asynchronous Tokio runtime environment. TCP is used for networking, and ed25519-dalek signatures are used for authentication.
 Replicas persist all messages receives to disk, using RocksDB.
 Client processes connect to *local* Replica machines and submit dummy payload requests (transactions) only to this replica. Replicas distribute payloads to one another -- the specifics depend on the particular system. 
 
 Orienting oneself in the code: 
-Autobahn/Bullshark: The two main modules are "worker" and "primary". The worker layer is responsible for receiving client requests. It forwards data and digests to the primary layer which contains the main consensus logic.
-VanillaHS/BatchedHS: The core module is "consensus"
-
-TODO: Describe also what it doesnt do.
-- e.g. do we have exponential timeouts?
-
-
+For Autobahn and Bullshark, the two main code modules are `worker` and `primary`. The worker layer is responsible for receiving client requests. It forwards data and digests to the primary layer which contains the main consensus logic. The consensus logic is event driven: the core event loop is located in `primary/src/core.rs`, message reception is managed in `primary/src/primary.rs`. 
+VanillaHS and BatchedHS consist of main modules `mempool` and `consensus`, which operate analogously: `mempool/src/core.rs` receives and forwards data, and `consensus/src/core.rs` contains the main consensus logic. 
 
 ## Concrete claims in the paper
 Autobahn is a Byzantine Fault Tolerant (BFT) consensus protocol that aims to hit a sweet spot between high throughput, low latency, and the ability to recover from asynchrony (seamlessness).
 
-- **Main claim 1**: Autobahn matches the Throughput of Bullshark, while reducing latency by a factor of 2x. 
+- **Main claim 1**: Autobahn matches the Throughput of Bullshark, while reducing latency by a factor of ca. 2x. 
 
-- **Main claim 2**: Autobahn avoids hangovers in the presence of blips.
+- **Main claim 2**: Autobahn avoids protocol-induced hangovers in the presence of blips. 
 
 
 
 ## Validating the Claims - Overview <a name="validating"></a>
 
-All our experiments were run using Google Cloud Platform (GCP) (TODO: add link). To reproduce our results and validate our claims, you will need to 1) instantiate a matching GCP experiment, 2) build the prototype binaries, and 3) run the provided experiment scripts with the (supplied) configs we used to generate our results.
+All our experiments were run using Google Cloud Platform (GCP) (https://console.cloud.google.com/welcome/). To reproduce our results and validate our claims, you will need to 1) instantiate a matching GCP experiment, 2) build the prototype binaries, and 3) run the provided experiment scripts with the (supplied) configs we used to generate our results.
 
 The ReadMe is organized into the following high level sections:
 
@@ -64,34 +59,36 @@ The ReadMe is organized into the following high level sections:
      
 
 ## Installing Dependencies <a name="installing"></a>
-TODO: What hardware req. What software env (ubuntu). What installs (Rust, cargo, tokio, rocks. etc..?)
 
-We provided an install script `install_deps.sh` in the `overview` branch which we recommend for installing any necessary dependencies.
+### Pre-requisites
+We recommend running on Ubuntu 20.04 LTS as this is the environment we have used for our tests. This said, the code should compile and work on most operating systems.
 
-The high-level requirements for compiling Autobahn and the baselines are:
--Operating System: Ubuntu 20.04, Focal
-    - While it should compile on any operating system, we recommend running on Ubuntu 20.04 as that is what we have tested with
-- Requires python3
-- Requuires rust (recommend 1.80 stable)
-- Requires clang version <= 14 (for building librocksdb, DO NOT use version 15 or higher)
+We require several software dependencies. 
+- python3
+- rust (recommend 1.80 stable)
+- clang version <= 14 (for building librocksdb, DO NOT use version 15 or higher)
 - tmux
 
-Before beginning the install process make sure to update your distribution:
-1. `sudo apt-get update`
-
-If not using `install_deps.sh` make sure to use the script here: https://bootstrap.pypa.io/get-pip.py and not apt-get, and update the `PATH` environment variable to point to the location of pip.
+For convenience, we have provided an install script `install_deps.sh` in the `overview` branch that automatically installs the required dependencies.
 
 After installation finishes, navigate to `autobahn-artifact/benchmark` and run `pip install -r requirements.txt`.
 
+#### Manual installation
+If not using `install_deps.sh` make sure to:
+- update your distribution: `sudo apt-get update`
+- use the script here: https://bootstrap.pypa.io/get-pip.py and not apt-get, and update the `PATH` environment variable to point to the location of pip.
+
+
 ### Building code: 
 Finally, you can build the binaries (you will ned to do this anew on each branch):
-Navigate to `autobahn-artifact` directory and build:
--`cargo build`
+Navigate to `autobahn-artifact` directory and build using `cargo build`.
+Note: The experiment scripts will automatically build the binaries if they have not been yet. However, we recommend doing it separately to troubleshoot more easily.
 
 ## Testing Locally
-i.e. quick local run to get some numbers/see that it works (this might already clear the bar for some of the badges)
+To quickly confirm that the installation and build succeeded you may run a simple local experiment. 
+
 In order to run a quick test locally:
-1. checkout the branch `autobahn-simple-sender` (for a basline checkout the appropriate branch instead)
+1. checkout the branch `autobahn` (or checkout the appropriate branch for the system of your choice)
 2. navigate to `autobahn-artifact/benchmark/`
 3. run `fab local`.
 
@@ -104,26 +101,32 @@ Additional instructions can be found in `benchmark/README`.
 
 
 ## Setting up GCP
-TODO: Can we provide alternatives on how to run elsehwere? (if the artifact committee cannot run on GCP)
+<!-- TODO: Can we provide alternatives on how to run elsehwere? (if the artifact committee cannot run on GCP) -->
+<!-- Detail which machines and configs we used (CPU/SSD...). What geo setup (i.e. where machines are located) -->
 
-Detail which machines and configs we used (CPU/SSD...). What geo setup (i.e. where machines are located)
+> [!NOTE] 
+> We strongly recommend running on GCP as our experiment scripts are designed to work with GCP. 
+> New users to GCP can get $300 worth of free credit (https://console.cloud.google.com/welcome/new), which should be sufficient to reproduce our core claims. Unfortunately, trial access users *cannot* access the machine type used in our evaluation, and must instead use a weaker machine type (more details below). We have NOT evaluated or systems on these machine types. To accurately reproduce our results, we recommend using the same machine types employed in our experiments, and using the `SPOT`-market to save costs.
 
-We recommend running on GCP as our experiment scripts are designed to work with GCP. 
-New users to GCP can get $300 worth of free credit (https://console.cloud.google.com/welcome/new), which should be sufficient to reproduce our core results. The Google Cloud console is the gateway for accessing all GCP services. Most of the time we will use the compute engine service to create and manage VMs but occassionally we will use other services. You can search for other services using the GCP console searchbar.
+The Google Cloud console is the gateway for accessing all GCP services. You can search for services using the GCP console searchbar.
 
+To create an account:
 1. Click the Try For Free blue button
 2. Enter your account information for step 1 and step 2
 3. Click the Start Free blue button after step 2
 4. Optionally complete the survey
 5. Creating an account should automatically create a project called "My First Project". If not follow the instructions here to create a project: https://developers.google.com/workspace/guides/create-project
-6. In the google cloud console search for compute engine API, and click the blue Enable button (beware this may take a long time). Do not worry about creating credentials for the API.
+6. In the google cloud console search for compute engine API, and click the blue Enable button (this may take some time to complete). Do not worry about creating credentials for the API.
+
+<!-- Most of the time we will use the compute engine service to create and manage VMs but occassionally we will use other services.  -->
 
 
 ### Setup SSH keys
-In order to connect to GCP you will need to register an SSH key. Install ssh if you do not already have it (on Ubuntu this is `sudo apt-get install ssh`)
+In order to connect to GCP you will need to register an SSH key. 
 
-If you do not already have an ssh key-pair, run the following command locally to generate ssh keys.
-`ssh-keygen -t rsa -f ~/.ssh/KEY_FILENAME -C USERNAME -b 2048`
+Install ssh if you do not already have it (on Ubuntu this is `sudo apt-get install ssh`)
+
+If you do not already have an ssh key-pair, run the following command locally to generate ssh keys: `ssh-keygen -t rsa -f ~/.ssh/KEY_FILENAME -C USERNAME -b 2048`
 
 To add a public SSH key to the project metadata using the Google Cloud console, do the following:
 
@@ -133,7 +136,9 @@ To add a public SSH key to the project metadata using the Google Cloud console, 
 
 3. Click Add SSH Key.
 
-4. In the SSH key field that opens, add the public SSH key you generated earlier. The key must be in one of the following formats:
+4. In the SSH key field that opens, add the public SSH key you generated earlier. 
+
+The key must be in one of the following formats:
 `KEY_VALUE USERNAME`. Replace the following:
 -KEY_VALUE: the public SSH key value
 -USERNAME: your username. For example, cloudysanfrancisco or cloudysanfrancisco_gmail_com. Note the USERNAME can't be root.
