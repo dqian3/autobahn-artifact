@@ -18,22 +18,22 @@ def adjust_file(file_name, offset):
         
 
 
-hs_file_name = '2node-partition-20s-15kload'
-motorway_file_name = '75kload-partition-updated-figure'
+hs_file_name = 'vanilla-hs/2node-partition-20s-15kload'
+motorway_file_name = 'autobahn/75kload-partition-updated-figure'
 #motorway_file_name is used
 #motorway_file_name2 = '15kload-2node-partition-autobahn'
-motorway_file_name2 = 'ab_simple_sender_250bs_opt_tips_k4'
+motorway_file_name2 = 'autobahn/ab_simple_sender_250bs_opt_tips_k4'
 #motorway_file_name = '2node-partition-20s-220kload-1stimeout'
 
 #bullshark_file_name = 'bullshark-2node-partition-15kload-5-cap-only-yourself'
-bullshark_file_name = 'bullshark_250bs_opt_tips_k4'
+bullshark_file_name = 'bullshark/bullshark_250bs'
 
 # Not used
 #bullshark_file_name = 'bullshark-15kload-5cap-partition'
 #bullshark_file_name = 'bullshark-15kload-10cap-partition'
 
-batch_hs_file_name = 'batchedhs-partition-500batch-15kload'
-batch_hs_file_name2 = 'batchedhs-partition-500batch-75kload'
+batch_hs_file_name = 'batched-hs/batchedhs-partition-500batch-15kload'
+batch_hs_file_name2 = 'batched-hs/batchedhs-partition-500batch-75kload'
 
 output_file_name = '2node-partition_all.pdf'
 
