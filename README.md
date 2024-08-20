@@ -256,7 +256,7 @@ This structure will allow you to change parameters and run experiments for diffe
 Now that you have setup GCP, you are ready to run experiments on GCP!
 Follow the GCP Config instructions for both the `autobahn-bullshark` and `hotstuff-baselines` folders.
 
-### GCP Config
+### GCP Config <a name="gcpconfig"></a>
 The GCP config is found in `autobahn-artifact/benchmark/settings.json`. You will need to change the following:
 1. `key`: change the `name` (name of the private SSH key) and `path` fields to match the key you generated in the prior section
 Leave `port` unchanged (should be `5000`).
@@ -471,9 +471,11 @@ To run a specific experiment copy and paste an experiment config into the `fabfi
 
 For simplicity, we summarize here only the key results necessary to validate our claims. The respective outputs are included in `experiment_configs` for convenience.
 
+
+## Artifact Overview 
 ### Performance under ideal conditions
 > [!WARNING] 
-> Navigate to the respective experiment host folder (`autobahn-bullshark` or `hotstuff-baselines`) but do not check out a new branch. Instead, configure the GCP config `repo` field to select the respective system branch (with NO suffix) you want to run. E.g. `autobahn`
+> Navigate to the respective experiment host folder (`autobahn-bullshark` or `hotstuff-baselines`) but do not check out a new branch. Instead, configure the [GCP config](#gcpconfig) `repo` field to select the respective system branch (with NO suffix) you want to run. E.g. `autobahn`
 All systems were run using `n=4` machines, with one machine located in each region. The configs can be found in `experiment_configs/main-graph/`. 
 
 The reported peak results in Fig. 5 were roughly:
@@ -487,7 +489,7 @@ To reproduce all data points, simply adjust the `rate` parameter (input load).
 
 ### Scalability
 > [!WARNING] 
-> Navigate to the respective experiment host folder (`autobahn-bullshark` or `hotstuff-baselines`) but do not check out a new branch. Instead, configure the GCP config `repo` field to select the respective system branch (with NO suffix) you want to run. E.g. `autobahn`
+> Navigate to the respective experiment host folder (`autobahn-bullshark` or `hotstuff-baselines`) but do not check out a new branch. Instead, configure the [GCP config](#gcpconfig) `repo` field to select the respective system branch (with NO suffix) you want to run. E.g. `autobahn`
 We evaluated all systems using the same setup as above, but for different levels of n: `n=4`, `n=12`, and `n=20`. The results for `n=4` follow from Fig. 5.
 
 To configure the scaling factor, one must modify the `create` task in `fabfile.py`: set `create(ctx, nodes=k)`, where k = n/regions. 
@@ -504,7 +506,7 @@ We report only the rough peak results for `n=20`. The associated configs can be 
 
 ### Leader failures
 > [!WARNING] 
-> Navigate to the respective experiment host folder (`autobahn-bullshark` or `hotstuff-baselines`) but do not check out a new branch. Instead, configure the GCP config `repo` field to select the respective system branch (WITH suffix) you want to run. E.g. `autobahn-blips`
+> Navigate to the respective experiment host folder (`autobahn-bullshark` or `hotstuff-baselines`) but do not check out a new branch. Instead, configure the [GCP config](#gcpconfig) `repo` field to select the respective system branch (WITH suffix) you want to run. E.g. `autobahn-blips`
 
 In Fig. 7 we simulate blips caused by leader failures.
 
@@ -539,7 +541,7 @@ To instead reproduce the 5s and 1s (no exponential timeout) blips, set `use_expo
 
 ### Partition
 > [!WARNING] 
-> Navigate to the respective experiment host folder (`autobahn-bullshark` or `hotstuff-baselines`) but do not check out a new branch. Instead, configure the GCP config `repo` field to select the respective system branch (WITH suffix) you want to run. E.g. `autobahn-blips`
+> Navigate to the respective experiment host folder (`autobahn-bullshark` or `hotstuff-baselines`) but do not check out a new branch. Instead, configure the [GCP config](#gcpconfig) `repo` field to select the respective system branch (WITH suffix) you want to run. E.g. `autobahn-blips`
 
 .. Run from blips, but in gcp set the branch you want..
 //This avoids having to checkout different branches and stash you settings. 
