@@ -470,6 +470,7 @@ To run a specific experiment copy and paste an experiment config into the `fabfi
 For simplicity, we summarize here only the key results necessary to validate our claims. The respective outputs are included in `experiment_configs` for convenience.
 
 ### Performance under ideal conditions
+> [!WARNING] Check out the respective system branch (with NO suffix). E.g. `autobahn`
 All systems were run using `n=4` machines, with one machine located in each region. The configs can be found in `experiment_configs/main-graph/`. 
 
 The reported peak results in Fig. 5 were roughly:
@@ -482,6 +483,7 @@ The reported peak results in Fig. 5 were roughly:
 To reproduce all data points, simply adjust the `rate` parameter (input load).
 
 ### Scalability
+> [!WARNING] Check out the respective system branch (with NO suffix). E.g. `autobahn`
 We evaluated all systems using the same setup as above, but for different levels of n: `n=4`, `n=12`, and `n=20`. The results for `n=4` follow from Fig. 5.
 
 To configure the scaling factor, one must modify the `create` task in `fabfile.py`: set `create(ctx, nodes=k)`, where k = n/regions. 
@@ -497,11 +499,13 @@ We report only the rough peak results for `n=20`. The associated configs can be 
 
 
 ### Leader failures
+> [!WARNING] Check out the respective system branch with suffix `-blip`. E.g. `autobahn-blips`
+
 In Fig. 7 we simulate blips caused by leader failures.
 
 
 We summarize the results for the Blip in Fig.1 / the first blip in Fig. 7.
-The configs can be found in `experiment_configs/blips-graph/`. 
+The configs and associated results can be found in `experiment_configs/blips-graph/`. 
 > [!NOTE] 
 > Fig. 7 normalizes the blip start times to a common start time.
 
@@ -526,11 +530,14 @@ The measured blip and hangover durations were roughly:
 > [!NOTE]
 > VannillaHS experiences some noisy latency at the beginning due to nodes not booting at the same time, ignore this
 
+To instead reproduce the 5s and 1s (no exponential timeout) blips, set `use_exponential_timeouts: False` and `timeout_delay: t` to the respective timeout value. 
 
 ### Partition
+> [!WARNING] Check out the respective system branch with suffix `-blip`. E.g. `autobahn-blips`
+
 In Fig. 8 we simulate a blip caused by a temporary, partial partition in which regions us-west and us-east are cut off from one another. 
 
-The configs can be found in `experiment_configs/partition_graph/`
+The configs and associated results can be found in `experiment_configs/partition_graph/`
 > [!NOTE] 
 > Fig. 8 normalizes the blip start times to a common start time.
 
