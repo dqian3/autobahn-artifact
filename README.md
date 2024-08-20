@@ -21,7 +21,7 @@ It contains a prototype implemententation of Autobahn, as well as the reference 
 Please **specify** the corresponding branch when validating claims for a given system and experiment (see GCP config).
 
 Autobahn and all baseline systems are implemented in Rust, using the asynchronous Tokio runtime environment. TCP is used for networking, and ed25519-dalek signatures are used for authentication.
-Replicas persist all messages receives to disk, using RocksDB.
+Replicas persist all messages received to disk, using RocksDB.
 Client processes connect to *local* Replica machines and submit dummy payload requests (transactions) only to this replica. Replicas distribute payloads to one another -- the specifics depend on the particular system. 
 
 Orienting oneself in the code: 
@@ -80,12 +80,12 @@ If not using `install_deps.sh`, but installing the dependencies manually, make s
 
 
 ### Building code: 
-Finally, you can build the binaries (you will ned to do this anew on each branch):
+Finally, you can build the binaries (you will need to do this anew on each branch):
 Navigate to `autobahn-artifact` directory and build using `cargo build`.
 Note: The experiment scripts will automatically build the binaries if they have not been yet. However, we recommend doing it separately to troubleshoot more easily.
 
 ## Testing Locally
-To quickly confirm that the installation and build succeeded you may run a simple local experiment. 
+To quickly confirm that the installation and build succeeded you may run a simple local experiment using [Fabric](https://www.fabfile.org/).
 
 In order to run a quick test locally:
 1. checkout the branch `autobahn` (or checkout the appropriate branch for the system of your choice)
@@ -258,12 +258,12 @@ Follow the GCP Config instructions for both the `autobahn-bullshark` and `hotstu
 
 ### GCP Config <a name="gcpconfig"></a>
 The GCP config is found in `autobahn-artifact/benchmark/settings.json`. You will need to change the following:
-1. `key`: change the `name` (name of the private SSH key) and `path` fields to match the key you generated in the prior section
+1. `key`: change the `name` (name of the private SSH key) and `path` fields to match the key you generated in the prior section.
 Leave `port` unchanged (should be `5000`).
 
-2. `repo`: Leave `name` unchanged (should be `autobahn-artifact`). You will need to change the `url` field to be the url of the artifact github repo. Specifically, you will need to prepend your personal access token to the beginning of the url. The url should be in this format: "https://TOKEN@github.com/neilgiri/autobahn-artifact", where `TOKEN` is the name of your personal access token. `branch` specifies which branch will be run on all the machines. This will determine which system ends up running. Only select an Autobahn or Bullshark branch if you are in the `autobahn-bullshark` folder. Similarly, only select a Vanilla HotStuff or Batched HotStuff branch if you are in the `hotstuff-baselines` folder.
+2. `repo`: Leave `name` unchanged (should be `autobahn-artifact`). You will need to change the `url` field to be the url of the artifact github repo. Specifically, you will need to prepend your personal access token to the beginning of the url. The url should be in this format: "https://TOKEN@github.com/neilgiri/autobahn-artifact", where `TOKEN` is the name of your [personal access token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens). `branch` specifies which branch will be run on all the machines. This will determine which system ends up running. Only select an Autobahn or Bullshark branch if you are in the `autobahn-bullshark` folder. Similarly, only select a Vanilla HotStuff or Batched HotStuff branch if you are in the `hotstuff-baselines` folder.
 
-3. `project_id`: the project id is found by clicking the the dropdown of your project (e.g. "My First Project") on the top left side, and looking at the ID field.
+3. `project_id`: the project id is found by clicking the dropdown of your project (e.g. "My First Project") on the top left side, and looking at the ID field.
 
 4. `instances`: `type` (value of t2d-standard-16) and `regions` (value of ["us-east1-b", "us-east5-a", "us-west1-b", "us-west4-a"]) should remain unchanged. If you select different regions then you will need to change the regions field to be the regions you are running in. You will need to change `templates` to be the names of the instance templates you created. The order matters, as they should correspond to the order of each region. The path should be in the format "projects/PROJECT_ID/regions/REGION_ID/instanceTemplates/TEMPLATE_ID", where PROJECT_ID is the id of the project you created in the prior section, REGION_ID is the name of the region without the subzone (i.e. us-east1 NOT us-east1-a).
 
