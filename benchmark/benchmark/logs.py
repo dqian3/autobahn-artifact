@@ -37,7 +37,6 @@ class LogParser:
         self.size, self.rate, self.start, misses, self.sent_samples \
             = zip(*results)
         self.misses = sum(misses)
-        print('Past clients')
 
         # Parse the primaries logs.
         try:
@@ -107,7 +106,6 @@ class LogParser:
         tmp = [(d, self._to_posix(t)) for t, d in tmp]
         commits = self._merge_results([tmp])
 
-        print('Before primary log config')
         configs = {
             #'timeout_delay': int(
             #    search(r'Timeout delay .* (\d+)', log).group(1)
@@ -134,7 +132,6 @@ class LogParser:
                 search(r'Max batch delay .* (\d+)', log).group(1)
             ),
         }
-        print('After primary log config')
 
         ip = search(r'booted on (\d+.\d+.\d+.\d+)', log).group(1)
 
@@ -184,13 +181,26 @@ class LogParser:
 
     def _end_to_end_latency(self):
         latency = []
+        list_latencies = []
+        first_start = 0
+        set_first = True
         for sent, received in zip(self.sent_samples, self.received_samples):
             for tx_id, batch_id in received.items():
                 if batch_id in self.commits:
                     assert tx_id in sent  # We receive txs that we sent.
                     start = sent[tx_id]
                     end = self.commits[batch_id]
+                    if set_first:
+                        first_start = start
+                        first_end = end
+                        set_first = False
                     latency += [end-start]
+                    list_latencies += [(start-first_start, end-first_start, end-start)]
+
+        list_latencies.sort(key=lambda tup: tup[0])
+        with open('latencies.txt', 'w') as f:
+            for line in list_latencies:
+                f.write(str(line[0]) + ',' + str(line[1]) + ',' + str((line[2])) + '\n')
         return mean(latency) if latency else 0
 
     def result(self):
@@ -254,17 +264,14 @@ class LogParser:
         clients = []
         for filename in sorted(glob(join(directory, 'client-*.log'))):
             with open(filename, 'r') as f:
-                print('client')
                 clients += [f.read()]
         primaries = []
         for filename in sorted(glob(join(directory, 'primary-*.log'))):
             with open(filename, 'r') as f:
-                print('primary')
                 primaries += [f.read()]
         workers = []
         for filename in sorted(glob(join(directory, 'worker-*.log'))):
             with open(filename, 'r') as f:
-                print('worker')
                 workers += [f.read()]
 
         return cls(clients, primaries, workers, faults=faults)
