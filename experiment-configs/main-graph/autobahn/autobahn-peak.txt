@@ -3,7 +3,7 @@ bench_params = {
         'nodes': [4],
         'workers': 1,
         'co-locate': True,
-        'rate': [250_000],
+        'rate': [240_000],
         'tx_size': 512,
         'duration': 20,
         'runs': 1,
