@@ -464,20 +464,20 @@ To identify the end of a hangover, search for rows that return latency to their 
 > We note that blip durations are slightly noisy, as 1) latency points are recorded as 1 second averages, and 2) blips may be slightly longer than the specified `asynchrony_duration` depending on the size of the timeout parameter, and the timing of a view change. For instance, when simulating leader failures, a new faulty leader may be elected at the very end of a blip, causing the effective blip duration to be extended by the timeout duration. 
 
 ## Reproducing Results
-The exact configs and corresponding results for each of our eperiments (and *all* their data points) can be found on branch `overview`, respectively in folders `experiment_configs` and `paper-results`.
-To run a specific experiment copy and paste the experiment config into the `fabfile.py` `remote` task. 
+The exact configs (peak points) and results (all data points) for each of our eperiments can be found on branch `overview`, respectively in folders `experiment_configs` and `paper-results`.
+To run a specific experiment copy and paste an experiment config into the `fabfile.py` `remote` task. 
 
-For convenience, we summarize here only the key results necessary to validate our claims. The respective configs and outputs are found in `autobahn-artifact/reproducing-claims`.
+For simplicity, we summarize here only the key results necessary to validate our claims. The respective outputs are included in `experiment_configs` for convenience.
 
 ### Performance under ideal conditions
 All systems were run using `n=4` machines, with one machine located in each region. 
 
 The reported peak results in Fig. 5 were roughly:
 ```
-      - Autobahn: Throughput: ~234k tx/s, Latency: ~280 ms  
-      - Bullshark: Throughput: ~234k tx/s Latency: ~592 ms
-      - BatchedHS: Throughput: ~189k tx/s, Latency: ~333 ms
-      - VanillaHS: Throughput: ~15k tx/s, Latency: ~365 ms
+      - Autobahn: Throughput: ~234k tx/s, Latency: ~280 ms    (config REPLACE)
+      - Bullshark: Throughput: ~234k tx/s Latency: ~592 ms     (config REPLACE)
+      - BatchedHS: Throughput: ~189k tx/s, Latency: ~333 ms     (config REPLACE)
+      - VanillaHS: Throughput: ~15k tx/s, Latency: ~365 ms       (config REPLACE)
 ```
 
 ### Scalability
@@ -490,10 +490,10 @@ To configure the scaling factor, one simply modifies the `create` task in `fabfi
 
 The reported peak results for `n=20` were roughly: 
 ```
-      - Autobahn: Throughput: ~227k tx/s, Latency: ~303 ms  (230,000 load)
-      - Bullshark: Throughput: ~227k tx/s Latency: ~631 ms  (232,500 load)
-      - BatchedHS: Throughput: ~112k tx/s, Latency: ~308 ms  (112,500 load)
-      - VanillaHS: Throughput: ~1.5k tx/s, Latency: ~2002 ms (1,600 load)
+      - Autobahn: Throughput: ~227k tx/s, Latency: ~303 ms  (230,000 load)   (config REPLACE)
+      - Bullshark: Throughput: ~227k tx/s Latency: ~631 ms  (232,500 load)    (config REPLACE)
+      - BatchedHS: Throughput: ~112k tx/s, Latency: ~308 ms  (112,500 load)    (config REPLACE)
+      - VanillaHS: Throughput: ~1.5k tx/s, Latency: ~2002 ms (1,600 load)       (config REPLACE)
 ```
 
 
