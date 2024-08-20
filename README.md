@@ -283,7 +283,7 @@ The benchmark parameters look as follows:
 
 ```
 bench_params = {
-    'nodes': 4,
+    'nodes': 4,        
     'workers': 1,
     'rate': 50_000,
     'tx_size': 512,
@@ -294,15 +294,20 @@ bench_params = {
 
 
 They specify the number of primaries (nodes) and workers per primary (workers) to deploy, the input rate (tx/s) at which the clients submits transactions to the system (rate), the size of each transaction in bytes (tx_size), the number of faulty nodes ('faults), and the duration of the benchmark in seconds (duration). 
+
 The minimum transaction size is 9 bytes, this ensure that the transactions of a client are all different. 
+
 The benchmarking script will deploy as many clients as workers and divide the input rate equally amongst each client. 
 For instance, if you configure the testbed with 4 nodes, 1 worker per node, and an input rate of 1,000 tx/s (as in the example above), the scripts will deploy 4 clients each submitting transactions to one node at a rate of 250 tx/s. 
+
 When the parameters faults is set to f > 0, the last f nodes and clients are not booted; the system will thus run with n-f nodes (and n-f clients).
 
-### Autobahn Parameters
-The nodes parameters differ between each system. We first show the node parameters for Autobahn.
+The nodes parameters differ between each system. We show and example node parameters for Autobahn.
 
-`node_params = {
+### Autobahn Parameters
+
+```
+node_params = {
     'header_size': 1_000,
     'max_header_delay': 100,
     'gc_depth': 50,
@@ -327,45 +332,73 @@ The nodes parameters differ between each system. We first show the node paramete
     
     'use_fast_sync': True,
     'use_exponential_timeouts': False,
-}`
-They are defined as follows:
+}
+```
+They are defined as follows.
+> [!NOTE] 
+> To reproduce our experiments you do NOT need to change any parameters. 
 
-*header_size: The preferred header size. The primary creates a new header when it has enough parents and enough batches' digests to reach header_size. Denominated in bytes.
-*max_header_delay: The maximum delay that the primary waits between generating two headers, even if the header did not reach max_header_size. Denominated in ms.
-*gc_depth: The depth of the garbage collection (Denominated in number of rounds).
-*sync_retry_delay: The delay after which the synchronizer retries to send sync requests. Denominated in ms.
-*sync_retry_nodes: Determine with how many nodes to sync when re-trying to send sync-request. These nodes are picked at random from the committee.
-*batch_size: The preferred batch size. The workers seal a batch of transactions when it reaches this size. Denominated in bytes.
-*max_batch_delay: The delay after which the workers seal a batch of transactions, even if max_batch_size is not reached. Denominated in ms.
-*use_optimistic_tips: Whether to enable optimistic tips optimization. If set to true then non-certified proposals can be sent to consensus
-*use_parallel_proposals: Whether to allow multiple active consensus instances at a time in parallel
-*k: The maximum number of consensus instances allowed to be active at any time.
-*use_fast_path: Whether to enable the 3f+1 fast path for consensus
-*fast_path_timeout: The timeout for waiting for 3f+1 responses on the consensus fast path
-*use_ride_share: Whether to enable the ride-sharing optimization of piggybacking consensus messages on car messages
-*car_timeout: The timeout for sending a car
-*simulate_asynchrony: Whether to allow blips
-*asynchrony_type: The specific type of blip.
-*asynchrony_start: The start times for each blip event
-*asynchrony_duration: The duration of each blip event
-*affected_nodes: How many nodes experience blip behavior
-*egress_penalty: For egress blips how much egress delay is added
-*use_fast_sync: Whether to enable the fast sync optimization. If set to False the recursive sync strategy will be used
-*use_exponential_timeouts: Whether to enable timeout doubling upon timeouts firing
+Protocol parameters:
+- `header_size`: The preferred header size (= Car payload). Car proposals in Autobahn (and analogously DAG proposals in Bullshark) do not contain transactions themselves, but propose digests of mini-batches (see Eval section). The primary creates a new header when it has completed its previous Car (or for Bullshark, when it has enough DAG parents) and enough batches' digests to reach header_size. Denominated in bytes.
+- `max_header_delay`: The maximum delay that the primary waits before readying a new header payload, even if the header did not reach max_header_size. Denominated in ms.
+- `gc_depth`: The depth of the garbage collection (Denominated in number of rounds).
+- `sync_retry_delay`: The delay after which the synchronizer retries to send sync requests in case there was no reply. Denominated in ms.
+- `sync_retry_nodes`: Determine with how many nodes to sync when re-trying to send sync-request. These nodes are picked at random from the committee.
+- `batch_size`: The preferred mini-batch size. The workers seal a batch of transactions when it reaches this size. Denominated in bytes.
+- `max_batch_delay`: The delay after which the workers seal a batch of transactions, even if max_batch_size is not reached. Denominated in ms.
 
+- `use_optimistic_tips`: Whether to enable Autobahn's optimistic tips optimization. If set to True then non-certified car proposals can be sent to consensus; if False, consensus proposals contain only certified car proposals.
+- `use_parallel_proposals`: Whether to allow multiple active consensus instances at a time in parallel
+- `k`: The maximum number of consensus instances allowed to be active at any time.
+- `use_fast_path`: Whether to enable the 3f+1 fast path for consensus
+- `fast_path_timeout`: The timeout for waiting for 3f+1 responses on the consensus fast path
+- `use_ride_share`: DEPRECATED: Whether to enable the ride-sharing optimization of piggybacking consensus messages on car messages (see Autobahn supplemental material)
+- `car_timeout`: The timeout for sending a car
+- `use_fast_sync`: Whether to enable the fast sync optimization. If set to False, Autobahn will use the default recursive sync strategy utilized by DAG protocols
+- `use_exponential_timeouts`: Whether to enable timeout doubling upon timeouts firing and triggering a View change
+
+Blip simulation framework:
+- `simulate_asynchrony`: Whether to simulate blips
+- `asynchrony_type`: The specific type of blip.
+- `asynchrony_start`: The start times for each blip event
+- `asynchrony_duration`: The duration of each blip event
+- `affected_nodes`: How many nodes experience blip behavior
+- `egress_penalty`: DEPRECATED: For egress blips how much egress delay is added
 
 
 The configs for each experimented are located the `experiment_configs` folder. To run a specific experiment copy and paste the experiment config into the fab remote task. For all experiments besides the scaling experiment you will want to make sure `nodes=1`. This will create 1 node per region specificed in the settings.json file.
 
 
-Explain what parameters to configure in config and what they control. 
 
 ## Reading Output Results
-The performance numbers are found in the `autobahn-artifact/benchmark/results` folder.
+The experiment performance results are found in the `autobahn-artifact/benchmark/results` folder. 
 
 Explain what file to look at for results, and which lines/numbers to look for.
 
+Autobahn example: 200k tput. Consensus lat = from time it was proposed for consensus? End to end = from time it was received by replica?
+ + RESULTS:
+  Consensus TPS: 199,119 tx/s
+ Consensus BPS: 101,948,918 B/s
+ Consensus latency: 190 ms
+
+ End-to-end TPS: 199,096 tx/s
+ End-to-end BPS: 101,937,133 B/s
+ End-to-end latency: 231 ms
+
+ Blip graphs more difficult to read: Latency over time.
+
+left number: time?, middle???   right number: latency in seconds? 
+
+ 5.748999834060669,6.148999929428101,0.40000009536743164
+5.786999940872192,6.256999969482422,0.4700000286102295
+5.786999940872192,6.194999933242798,0.40799999237060547
+5.787999868392944,6.07699990272522,0.2890000343322754
+
+
 ## Reproducing Results
+The exact configs and corresponding results for each of our eperiments can be found on branch `overview` in folder `autobahn-artifact/paper-results`.
+
+
 Provide ALL configs for each experiment. But suggest they only validate the claims.
 The experiment configs
 
@@ -376,19 +409,58 @@ When an experiment finishes the logs and output files are downloaded to the cont
 Peak throughput is around 234k txn/s, end-to-end latency is around 280 ms. The config to get the peak throughput is found in `autobahn-peak.txt`.
 
 #### Bullshark
+Peak throughput is around 234k txn/s, end-to-end latency is around 592 ms. 
 
 #### Batched-HS
+Peak throughput is around 189k txn/s, end-to-end latency is around 333 ms. 
 
 #### Vanilla-HS
+Peak throughput is around 15k txn/s, end-to-end latency is around 365 ms. 
 
 - for each system, give our peak numbers + the config. Have them reproduce those
 
-Exp 2
+### Scalability
 - for each n, and each system give the numbers (i.e. the whole fig as a table)
 
-Exp 3
+n=4 see main graph. We show here just n=20
+
+#### Autobahn
+Peak throughput is around 230 txn/s, end-to-end latency is around 303 ms. 
+
+#### Bullshark
+Peak throughput is around 230k txn/s, end-to-end latency is around 631 ms. 
+
+#### Batched-HS
+Peak throughput is around 110k txn/s, end-to-end latency is around 308 ms. 
+
+#### Vanilla-HS
+Peak throughput is around 1.5k txn/s, end-to-end latency is around 2002 ms. 
+
+### Leader failures
 - show the 3s blip in HS, and lack thereof for us (don't think we need to show the other two blips).
 - give the config. Explain how to interpret the data file to see blip duration and hangover duration (Be careful to explain that the numbers can be slightly offset)
 
-Exp 4
+#### Autobahn
+Blip duration: 1s (from 7 to 8?). Hangover: 0s
+
+#### Vanilla-HS
+Blip duration: 3s. Hangover: 4s
+
+
+### Partition
 - give the configs and run all. Same same.
+
+#### Autobahn
+Blip from 8 to 28. Hangover...  Measured lat.. (slightly higher than normal. Something with framework. Same for bullshark)
+
+NOTE: GIVE OUR FIXED NUMBERS FROM REBUTTAL. SAY PAPER NUMBERS HAD A BUG..
+
+#### Bullshark
+
+
+#### Batched-HS
+
+
+#### Vanilla-HS
+
+
