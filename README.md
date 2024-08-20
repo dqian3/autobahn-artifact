@@ -190,7 +190,7 @@ Create one instance template per region as follows:
 14. Under Security make sure Turn on vTPM and Turn on Integrity Monitoring is checked. Make sure "Block project-wide SSH keys" is unchecked
 15. No need to change anything in the Management or Sole-tenancy sections
 
-Create one last instance template to serve as the control machine. Pick any of the four regions. Name this instance template `autobahn-instance-template` (the scripts assume this is the name of the control machine).
+Create one last instance template to serve as the control machine. Pick `us-central1` for the region. Name this instance template `autobahn-instance-template` (the scripts assume this is the name of the control machine).
 For this instance template select Standard instead of Spot for VM provisioning model (so it won't be pre-empted while running an experiment).
 We recommend you pick t2d-standard-4 (instead of t2d-standard-16) for the machine type for the control machine to save costs.
 
@@ -206,7 +206,7 @@ We recommend you pick t2d-standard-4 (instead of t2d-standard-16) for the machin
 `ssh -i SSH_PRIVATE_KEY_LOCATION USERNAME@EXTERNAL_IP_ADDRESS`, where SSH_PRIVATE_KEY_LOCATION is the path of the corresponding ssh private key, USERNAME is the username of the SSH key (found in the Metadata page under SSH keys), and EXTERNAL_IP_ADDRESS
 9. We highly recommend you create two folders in the home directory on the control machine for convenience: `autobahn-bullshark` and `hotstuff-baselines`. Navigate to the `autobahn-bullshark` folder, clone the `autobahn-artifact` repo, and checkout `autobahn-simple-sender`. Then navigate to the `hotstuff-baselines` folder, clone the `autobahn-artifact` repo, and checkout the `vanilla-hs-framework` branch. Having this structure will allow you to change parameters and run experiments for different baselines much faster than checking out different branches each time.
 10. Follow the Install Dependencies section on the control machine
-11. Follow the Generate SSH Keys section on the control machine
+11. Follow the Generate SSH Keys section on the control machine to generate a new SSH keypair on the control machine and add it to the metadata console
 
 ## Running Experiments
 
