@@ -470,49 +470,51 @@ To run a specific experiment copy and paste an experiment config into the `fabfi
 For simplicity, we summarize here only the key results necessary to validate our claims. The respective outputs are included in `experiment_configs` for convenience.
 
 ### Performance under ideal conditions
-All systems were run using `n=4` machines, with one machine located in each region. 
+All systems were run using `n=4` machines, with one machine located in each region. The configs can be found in `experiment_configs/main-graph/`. 
 
 The reported peak results in Fig. 5 were roughly:
 ```
-      - Autobahn: Throughput: ~234k tx/s, Latency: ~280 ms    (config REPLACE)
-      - Bullshark: Throughput: ~234k tx/s Latency: ~592 ms     (config REPLACE)
-      - BatchedHS: Throughput: ~189k tx/s, Latency: ~333 ms     (config REPLACE)
-      - VanillaHS: Throughput: ~15k tx/s, Latency: ~365 ms       (config REPLACE)
+      - Autobahn: Throughput: ~234k tx/s, Latency: ~280 ms    
+      - Bullshark: Throughput: ~234k tx/s Latency: ~592 ms     
+      - BatchedHS: Throughput: ~189k tx/s, Latency: ~333 ms    
+      - VanillaHS: Throughput: ~15k tx/s, Latency: ~365 ms       
 ```
+To reproduce all data points, simply adjust the `rate` parameter (input load).
 
 ### Scalability
 We evaluated all systems using the same setup as above, but for different levels of n: `n=4`, `n=12`, and `n=20`. The results for `n=4` follow from Fig. 5.
 
-To configure the scaling factor, one simply modifies the `create` task in `fabfile.py`. Our provided configs are ALREADY configured, so no changes are needed.
-> [!NOTE] 
-> To configure the scaling factor one must set create(ctx, nodes=k), where k = n/regions. For example, for n=4, set nodes=1; for n=20, use nodes=5.  
+To configure the scaling factor, one must modify the `create` task in `fabfile.py`: set `create(ctx, nodes=k)`, where k = n/regions. 
+For example, for n=4, set nodes=1; for n=20, use nodes=5.  
 
-
-The reported peak results for `n=20` were roughly: 
+We report only the rough peak results for `n=20`. The associated configs can be found in `experiment_configs/scaling-graph/`.
 ```
-      - Autobahn: Throughput: ~227k tx/s, Latency: ~303 ms  (230,000 load)   (config REPLACE)
-      - Bullshark: Throughput: ~227k tx/s Latency: ~631 ms  (232,500 load)    (config REPLACE)
-      - BatchedHS: Throughput: ~112k tx/s, Latency: ~308 ms  (112,500 load)    (config REPLACE)
-      - VanillaHS: Throughput: ~1.5k tx/s, Latency: ~2002 ms (1,600 load)       (config REPLACE)
+      - Autobahn: Throughput: ~227k tx/s, Latency: ~303 ms  (233,000 load)   
+      - Bullshark: Throughput: ~227k tx/s Latency: ~631 ms  (232,500 load)    
+      - BatchedHS: Throughput: ~112k tx/s, Latency: ~308 ms  (112,500 load)    
+      - VanillaHS: Throughput: ~1.5k tx/s, Latency: ~2002 ms (1,600 load)       
 ```
 
 
 ### Leader failures
 In Fig. 7 we simulate blips caused by leader failures.
 
+
 We summarize the results for the Blip in Fig.1 / the first blip in Fig. 7.
-The measured blip and hangover durations were roughly:
+The configs can be found in `experiment_configs/blips-graph/`. 
 > [!NOTE] 
 > Fig. 7 normalizes the blip start times to a common start time.
+
+The measured blip and hangover durations were roughly:
 ```
-      - Autobahn:   (220kload-1-fault-exp-timeout.txt) REPLACE
+      - Autobahn:   (`220kload-1-fault-exp-timeout.txt`) 
             Blip duration: 1s
             Blip start: 22.4s
             Hangover end: 23.5s
             -> Hangover ~0.1 (minus 0-1s blip noise, so effectively 0)
 
           
-      - VanillaHS:  (15kload-1fault-exponential-1stimeout.txt) REPLACE
+      - VanillaHS:  (`15kload-1fault-exponential-1stimeout.txt`) 
             Blip duration: 1s  (but HS is subject to Double blip behavior, so effetively 3s blip)
             Blip start: 23.5s
             Hangover end: 31.4s
@@ -525,14 +527,15 @@ The measured blip and hangover durations were roughly:
 ### Partition
 In Fig. 8 we simulate a blip caused by a temporary, partial partition in which regions us-west and us-east are cut off from one another. 
 
-The measured blip and hangover durations were roughly:
+The configs can be found in `experiment_configs/partition_graph/`
 > [!NOTE] 
 > Fig. 8 normalizes the blip start times to a common start time.
 
+The measured blip and hangover durations were roughly:
 > [!NOTE] 
 > The latency numbers reported for Autobahn for Fig. 8 in the submission were slightly higher than expected due to some configuration mistakes. We've fixed this for the rebuttal, and include here the numbers from our re-runs (for both Autobahn and Bullshark).
 ```
-      - Autobahn: (ab_simple_sender_250bs_opt_tips_k4.txt) REPLACE
+      - Autobahn: (ab_simple_sender_250bs_opt_tips_k4.txt) 
             Blip duration: 20s
             Blip start: 7.9s
             Hangover end: 29.6s
