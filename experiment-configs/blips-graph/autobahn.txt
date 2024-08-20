@@ -3,7 +3,7 @@ bench_params = {
         'nodes': [4],
         'workers': 1,
         'co-locate': True,
-        'rate': [15_000],
+        'rate': [220_000],
         'tx_size': 512,
         'duration': 60,
         'runs': 1,
@@ -21,7 +21,7 @@ bench_params = {
         'gc_depth': 50,  # rounds
         'sync_retry_delay': 1_000,  # ms
         'sync_retry_nodes': 4,  # number of nodes
-        'batch_size': 250_000,  # bytes
+        'batch_size': 500_000,  # bytes
         'max_batch_delay': 200,  # ms
         'use_optimistic_tips': True,
         'use_parallel_proposals': True,
@@ -32,11 +32,11 @@ bench_params = {
         'car_timeout': 2000,
 
         'simulate_asynchrony': True,
-        'asynchrony_type': [3],
+        'asynchrony_type': [2],
 
         'asynchrony_start': [10_000], #ms
         'asynchrony_duration': [20_000], #ms
-        'affected_nodes': [2],
+        'affected_nodes': [1],
         'egress_penalty': 50, #ms
 
         'use_fast_sync': True,
