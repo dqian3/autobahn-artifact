@@ -370,43 +370,62 @@ The configs for each experimented are located the `experiment_configs` folder. T
 
 
 ## Reading Output Results
-The experiment performance results are found in the `autobahn-artifact/benchmark/results` folder. 
+When an experiment finishes the logs and output files are downloaded to the control machine. The experiment results are found in the `autobahn-artifact/benchmark/results` folder. 
 
-Explain what file to look at for results, and which lines/numbers to look for.
+There are two types of experiment results. 
 
-Autobahn example: 200k tput. Consensus lat = from time it was proposed for consensus? End to end = from time it was received by replica?
+For Throughput/Latency (Fig. 5) and Scalability (Fig. 6) experiments the scripts produce simple result summaries containing Throughput and Latency averages.
+We distinguish between Consensus latency and End-To-End latency.
+End-to-end latency captures the time from a replica first receiving a transaction, until the time a transaction is ready for execution. Consensus Latency, in contrast, captures only the time from when a transaction is included in a car proposal. We never report Consensus Latency in the paper, so you can ignore it for the remainder of the document. The difference between End-to-end and consensus latency captures batching latency, and wait time for the next car to be available.
+
+We measure end-to-end latency from the moment the transaction arrives at the mempool (i.e. the client-local replica receives the transaction), to the moment the request executes.
+
+> ![Note] > The latency does not include the latency of a reply to the client. 
+> This is an artefact from the Narwhal framework, and was not trivially to change so we stuck with it. They did this to align the experimental framework with production deployments (e.g. Aptos/Mysten, or CCF) in which servers do not respond to client requests, but instead clients poll for “state”. Since applications are typically smart contracts, the client does not wait for a result (as would be common for RPCs). For such apps, end-to-end “ends” at the replicas.
+> Notably though, extra client-latencies are constant, small, and are a cost shared with all other protocols. It does not depend on the type of protocol. Since clients are co-located with a proposing replica the client-to-mempool latency adds only an in-data center ping latency (ca. 15us), while the reply would incur the tail latency of the f+1th closest replica (i.e. 19/28ms in our setup), or only the ping latency if the local replica is trusted (as is common in blockchains). This overhead is thus arguably negligible compared to the overall consensus latencies.
+
+
+A throughput latency summary looks as follows: 
+
+```
+Example for Autobahn, using 200k tx/s supplied load. 
  + RESULTS:
-  Consensus TPS: 199,119 tx/s
+ Consensus TPS: 199,119 tx/s
  Consensus BPS: 101,948,918 B/s
  Consensus latency: 190 ms
 
  End-to-end TPS: 199,096 tx/s
  End-to-end BPS: 101,937,133 B/s
  End-to-end latency: 231 ms
+```
 
- Blip graphs more difficult to read: Latency over time.
+For Blip experiments (Fig. 7 and Fig. 8) we instead record Latency over Time. An example output excerpt looks as follows:
+```
+---- start-time  ----- end-time ------ latency (diff)
+22.39800000190735,22.634999990463257,0.2369999885559082
+22.401000022888184,22.634999990463257,0.23399996757507324
+22.424000024795532,23.784000158309937,1.3600001335144043
+...
+23.424000024795532,24.31000018119812,0.8860001564025879
+23.426000118255615,23.782999992370605,0.35699987411499023
+23.526000022888184,23.782999992370605,0.2569999694824219
+23.54800009727478,23.784000158309937,0.23600006103515625
+```
+A given row describes the *average* `latency` of transactions that started at `start-time`.
 
-left number: start time, end-time.   right number:  (diff) latency in seconds? 
-
-Identify blip start = where latency first spikes. This is roughly where we specified it would start, but not exactly because of start up delays (+ averaging creates some noise)
-
- 5.748999834060669,6.148999929428101,0.40000009536743164
-5.786999940872192,6.256999969482422,0.4700000286102295
-5.786999940872192,6.194999933242798,0.40799999237060547
-5.787999868392944,6.07699990272522,0.2890000343322754
-
+In order to identify a blip start, search for the first row that shows a spike in latency (in this case row 3). Blip starts correspond roughly to the `asynchrony` start specified in the fabfile.py parameters, but may deviate several seconds due to various start-up overheads. 
+To identify the end of a hangover, search for rows that return latency to their pre-blip value (in this case row 7). The difference constitutes the `blip + hangover` duration (in this case ca 1.1s). To isolate the hangover duration, subtract from the `blip + hangover` duration the `asynchrony_duration` specified in the fabfile.py parameters. 
+>![Note] > We note that blip durations are slightly noisy, as 1) latency points are recorded as 1 second averages, and 2) blips may be slightly longer than the specified `asynchrony_duration` depending on the size of the timeout parameter, and the timing of a view change. For instance, when simulating leader failures, a new faulty leader may be elected at the very end of a blip, causing the effective blip duration to be extended by the timeout duration. 
 
 ## Reproducing Results
-The exact configs and corresponding results for each of our eperiments can be found on branch `overview` in folder `autobahn-artifact/paper-results`.
+The exact configs and corresponding results for each of our eperiments (and *all* their data points) can be found on branch `overview` in folder `autobahn-artifact/paper-results`.
 
-
-Provide ALL configs for each experiment. But suggest they only validate the claims.
-The experiment configs
+For convenience, we summarize here only the key results necessary to validate our claims. The respective configs and outputs are found in `autobahn-artifact/reproducing-claims`.
 
 ### Performance under ideal conditions
-When an experiment finishes the logs and output files are downloaded to the control machine. The performance results are found in `results/bench-
+All systems were run using `n=4` machines, with one machine located in each region. 
 
- Reported peak results were roughly:
+The reported peak results in Fig. 5 were roughly:
 ```
       - Autobahn: Throughput: ~234k tx/s, Latency: ~280 ms  
       - Bullshark: Throughput: ~234k tx/s Latency: ~592 ms
@@ -414,68 +433,76 @@ When an experiment finishes the logs and output files are downloaded to the cont
       - VanillaHS: Throughput: ~15k tx/s, Latency: ~365 ms
 ```
 
-The config to get the peak throughput is found in `autobahn-peak.txt`.
-
 ### Scalability
-- for each n, and each system give the numbers (i.e. the whole fig as a table)
+We evaluated all systems using the same setup as above, but for different levels of n: `n=4`, `n=12`, and `n=20`. The results for `n=4` follow from Fig. 5.
 
-To configure the scaling factor, you need change the create task in fabfile.py from nodes=1 to n/regions, e.g. nodes=1 for n=4, nodes=5 for n=20
-For all experiments besides the scaling experiment you will want to make sure `nodes=1`. This will create 1 node per region specificed in the settings.json file.
+To configure the scaling factor, one simply modifies the `create` task in `fabfile.py`. Our provided configs are ALREADY configured, so no changes are needed.
+> ![Note] > To configure the scaling factor one must set create(ctx, nodes=k), where k = n/regions. For example, for n=4, set nodes=1; for n=20, use nodes=5.  
 
-n=4 see main graph. We show here just n=20
 
-Reported peak results were roughly (n=20):
+The reported peak results for `n=20` were roughly: 
 ```
-      - Autobahn: Throughput: ~230k tx/s, Latency: ~303 ms  
-      - Bullshark: Throughput: ~230k tx/s Latency: ~631 ms
-      - BatchedHS: Throughput: ~110k tx/s, Latency: ~308 ms
-      - VanillaHS: Throughput: ~1.5k tx/s, Latency: ~2002 ms
+      - Autobahn: Throughput: ~227k tx/s, Latency: ~303 ms  (230,000 load)
+      - Bullshark: Throughput: ~227k tx/s Latency: ~631 ms  (232,500 load)
+      - BatchedHS: Throughput: ~112k tx/s, Latency: ~308 ms  (112,500 load)
+      - VanillaHS: Throughput: ~1.5k tx/s, Latency: ~2002 ms (1,600 load)
 ```
 
 
 ### Leader failures
-- show the 3s blip in HS, and lack thereof for us (don't think we need to show the other two blips).
-- give the config. Explain how to interpret the data file to see blip duration and hangover duration (Be careful to explain that the numbers can be slightly offset)
+In Fig. 7 we simulate blips caused by leader failures.
 
-
-Reported blip and hangover durations were roughly:
+We summarize the results for the Blip in Fig.1 / the first blip in Fig. 7.
+The measured blip and hangover durations were roughly:
+> ![Note] > Fig. 7 normalizes the blip start times to a common start time.
 ```
-      - Autobahn: Blip duration: 7 to 8s, Hangover: /
-            220kload-1-fault-exp-timeout.txt
-            22.4 -> 23.5 -> 1s blip, 0 hangover
-      - VanillaHS: Blip duration: 7 to 10s, Hangover: 10 to 14s
-            15kload-1fault-exponential-1stimeout.txt
-            23.5 -> 31.4 => 7.9 => 3 blip, 5 hangover
+      - Autobahn:   (220kload-1-fault-exp-timeout.txt) REPLACE
+            Blip duration: 1s
+            Blip start: 22.4s
+            Hangover end: 23.5s
+            -> Hangover ~0.1 (minus 0-1s blip noise, so effectively 0)
 
-        Note: HS has some high lat at the beginning (nodes not booted at same time) , ignore this
+          
+      - VanillaHS:  (15kload-1fault-exponential-1stimeout.txt) REPLACE
+            Blip duration: 1s  (but HS is subject to Double blip behavior, so effetively 3s blip)
+            Blip start: 23.5s
+            Hangover end: 31.4s
+            -> Hangover ~4.9 (minus 0-1s blip noise)
 ```
+> ![Note]> VannillaHS experiences some noisy latency at the beginning due to nodes not booting at the same time, ignore this
 
 
 ### Partition
-- give the configs and run all. Same same.
+In Fig. 8 we simulate a blip caused by a temporary, partial partition in which regions us-west and us-east are cut off from one another. 
 
-#### Autobahn
-> ![Note] > Lat slightly higher than normal. Something with framework. Same for bullshark)
-
-> ![Note] > GIVE OUR FIXED NUMBERS FROM REBUTTAL. SAY PAPER NUMBERS HAD A BUG..
-
-Reported blip and hangover durations were roughly:
+The measured blip and hangover durations were roughly:
+> ![Note] > Fig. 8 normalizes the blip start times to a common start time.
+> ![Note] > The latency numbers reported for Autobahn for Fig. 8 in the submission were slightly higher than expected due to some configuration mistakes. We've fixed this for the rebuttal, and include here the numbers from our re-runs (for both Autobahn and Bullshark).
 ```
-      - Autobahn: 
-            ab_simple_sender_250bs_opt_tips_k4.txt
-            start: 7.8   29.6 -> ca 21.8 blip +-1 (because averaging + when view change hits) => ca 1 sec hangover.
+      - Autobahn: (ab_simple_sender_250bs_opt_tips_k4.txt) REPLACE
+            Blip duration: 20s
+            Blip start: 7.9s
+            Hangover end: 29.6s
+            -> Hangover ~1.7s (minus 0-1s blip noise)
 
-      - Bullshark:
-            bullshark_250bs_opt_tips_k4.txt
+      - Bullshark: (bullshark_250bs_opt_tips_k4.txt) REPLACE
             start: 7.1   end 36.2 -> 29.1 blip - 28. => 8 sec hangover
-      - BatchedHS:
-            batchedhs-partition-500batch-15kload.txt
-            5.5/5.7 end 35 => 9 sec hangover
-      - VanillaHS: Blip duration: 
-            2node-partition-20s-15kload.txt
-            8.6   -> 49 => ca 20s hangover
-```
+            Blip duration: 20s
+            Blip start: 7.1s
+            Hangover end: 36.2s
+            -> Hangover ~9.1s (minus 0-1s blip noise)
 
-In our graph we normalized the start times
+      - BatchedHS: (batchedhs-partition-500batch-15kload.txt) REPLACE
+            Blip duration: 20s
+            Blip start: 5.5s
+            Hangover end: 35s
+            -> Hangover ~9.5s (minus 0-1s blip noise)
+
+      - VanillaHS: (2node-partition-20s-15kload.txt) REPLACE
+            Blip duration: 20s
+            Blip start: 8.6s
+            Hangover end: 49s
+            -> Hangover ~20.4s (minus 0-1s blip noise)
+```
 
 
