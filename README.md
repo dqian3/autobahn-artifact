@@ -31,7 +31,7 @@ VanillaHS and BatchedHS consist of main modules `mempool` and `consensus`, which
 ## Concrete claims in the paper
 Autobahn is a Byzantine Fault Tolerant (BFT) consensus protocol that aims to hit a sweet spot between high throughput, low latency, and the ability to recover from asynchrony (seamlessness).
 
-- **Main claim 1**: Autobahn matches the Throughput of Bullshark, while reducing latency by a factor of ca. 2x. Autobahn achieves latency comparable to Hotstuff.
+- **Main claim 1**: Autobahn matches the throughput of Bullshark, while reducing latency by a factor of ca. 2x. Autobahn achieves latency comparable to Hotstuff.
 
 - **Main claim 2**: Autobahn avoids protocol-induced hangovers in the presence of blips. This allows Autobahn to reduce hangover times when compared to non-seamless protocols.
 
@@ -250,6 +250,8 @@ This structure will allow you to change parameters and run experiments for diffe
 2. Install all required dependencies on the control machine. Follow the Install Dependencies section.
 
 3. Generate new SSH keypairs for the control machine and add them to the metadata console. Follow the Generate SSH Keys section.
+> [!WARNING] 
+> The control machine only supports RSA keys. Use the key generation command found in the Generate SSH Keys section.
 
 ## Running Experiments
 
@@ -260,9 +262,10 @@ Now that you have setup GCP, you are ready to run experiments on GCP!
 Follow the GCP Config instructions for both the `autobahn-bullshark` and `hotstuff-baselines` folders.
 
 ### GCP Config <a name="gcpconfig"></a>
-The GCP config is found in `autobahn-artifact/benchmark/settings.json`. You will need to change the following:
+The GCP config that is used is found in `autobahn-artifact/benchmark/settings.json`. We provided examples for Autobahn/Bullshark config in `autobahn-artifact/benchmark/settings-autobahn-bullshark.json` and Vanilla HotStuff/Batched HotStuff in `autobahn-artifact/benchmark/settings-hotstuff-baselines.json`. You will need to change the following:
 1. `key`: change the `name` (name of the private SSH key) and `path` fields to match the key you generated in the prior section.
 Leave `port` unchanged (should be `5000`).
+For HotStuff/Batched HotStuff leave `ports` unchanged.
 
 2. `repo`: Leave `name` unchanged (should be `autobahn-artifact`). You will need to change the `url` field to be the url of the artifact github repo. Specifically, you will need to prepend your personal access token to the beginning of the url. The url should be in this format: "https://TOKEN@github.com/neilgiri/autobahn-artifact", where `TOKEN` is the name of your [personal access token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens). `branch` specifies which branch will be run on all the machines. This will determine which system ends up running. Only select an Autobahn or Bullshark branch if you are in the `autobahn-bullshark` folder. Similarly, only select a Vanilla HotStuff or Batched HotStuff branch if you are in the `hotstuff-baselines` folder.
 

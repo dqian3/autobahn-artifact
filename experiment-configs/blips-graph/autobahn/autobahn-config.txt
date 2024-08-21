@@ -34,8 +34,8 @@ bench_params = {
         'simulate_asynchrony': True,
         'asynchrony_type': [2],
 
-        'asynchrony_start': [10_000], #ms
-        'asynchrony_duration': [20_000], #ms
+        'asynchrony_start': [25_000], #ms
+        'asynchrony_duration': [1_000], #ms
         'affected_nodes': [1],
         'egress_penalty': 50, #ms
 
