@@ -8,7 +8,7 @@ class SettingsError(Exception):
 
 class Settings:
     def __init__(self, key_name, key_path, base_port, repo_name, repo_url,
-                 branch, instance_type, aws_regions, project_id, templates):
+                 branch, instance_type, aws_regions, project_id, templates, username):
         inputs_str = [
             key_name, key_path, repo_name, repo_url, branch, instance_type
         ]
@@ -36,6 +36,7 @@ class Settings:
         self.gcp_zones = regions
         self.project_id = project_id
         self.templates = templates
+        self.username = username
 
     @classmethod
     def load(cls, filename):
@@ -54,6 +55,7 @@ class Settings:
                 data['instances']['regions'],
                 data['project_id'],
                 data['instances']['templates'],
+                data['username'],
             )
         except (OSError, JSONDecodeError) as e:
             raise SettingsError(str(e))
