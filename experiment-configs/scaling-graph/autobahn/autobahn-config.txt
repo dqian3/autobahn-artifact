@@ -5,7 +5,7 @@ bench_params = {
         'co-locate': True,
         'rate': [233_000],
         'tx_size': 512,
-        'duration': 20,
+        'duration': 60,
         'runs': 1,
 
         # Unused

@@ -1,6 +1,6 @@
 bench_params = {
         'nodes': [4],
-        'rate': [15_000],
+        'rate': [190_000],
         'tx_size': 512,
         'faults': 0,
         'duration': 60,

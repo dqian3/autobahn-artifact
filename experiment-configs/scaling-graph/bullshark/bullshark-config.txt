@@ -5,7 +5,7 @@ bench_params = {
         'co-locate': True,
         'rate': [232_500],
         'tx_size': 512,
-        'duration': 20,
+        'duration': 60,
         'runs': 1,
 
         # Unused
@@ -23,14 +23,7 @@ bench_params = {
         'sync_retry_nodes': 3,  # number of nodes
         'batch_size': 500_000,  # bytes
         'max_batch_delay': 20,  # ms
-        'use_optimistic_tips': True,
-        'use_parallel_proposals': True,
-        'k': 4,
-        'use_fast_path': True,
-        'fast_path_timeout': 5_000,
-        'use_ride_share': False,
-        'car_timeout': 5_000,
-
+        
         'simulate_asynchrony': False,
         'asynchrony_start': 15_000, #ms
         'asynchrony_duration': 3_000, #ms
