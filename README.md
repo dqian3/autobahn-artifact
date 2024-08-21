@@ -277,11 +277,16 @@ Leave `port` unchanged (should be `5000`).
 
 2. For the first experiment, run `fab create` which will instantiate machines based off your instance templates. For subsequent experiments, you will not need to run `fab create` as the instances will already have been created. Anytime you delete the VM instances you will need to run `fab create` to recreate them. 
 > [!NOTE] 
-> Spot machines, although cheaper, are not reliable and may be terminated by GCP at any time. If this happens (perhaps an experiment fails), delete all other running instances and re-run `fab create`.
+> Spot machines, although cheaper, are not reliable and may be terminated by GCP at any time. If this happens delete all other running instances and re-run `fab create`.
 
-3. Then run `fab install` which will install rust and the dependencies on these machines. Like `fab create` you only need to run this command one time after the creation of the VMs.
+3. Wait a few seconds after `fab create` finishes. Then run `fab install` which will install rust and the dependencies on these machines. Like `fab create` you only need to run this command one time after the creation of the VMs.
+> [!NOTE] 
+> If a spot machine fails during the step, delete the other running instances, re-run `fab create` and run `fab install` again.
+> If an error about not being able to connect to port 22 appears, then wait for a few seconds and re-run `fab install` again.
 
 4. Finally `fab remote` will launch a remote experiment with the parameters specified in `fabfile.py`. The next section will explain how to configure the parameters. The `fab remote` command should show a progress bar of how far along it is until completion. Note that the first time running the command may take a long time but subsequent trials should be faster.
+> [!NOTE] 
+> If a spot machine stops during an experiment then go to the google cloud console VM instances page and start it again. Once it has successfully started again you can re-run `fab remote`.
 
 ## Configuring Parameters
 The parameters for the remote experiment are found in `benchmark/fabfile.py`. 

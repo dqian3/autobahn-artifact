@@ -40,7 +40,7 @@ bench_params = {
         'egress_penalty': 50, #ms
 
         'use_fast_sync': True,
-        'use_exponential_timeouts': False,
+        'use_exponential_timeouts': True,
 
         # Unused
         #'simulate_partition': False,
