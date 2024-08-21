@@ -263,7 +263,7 @@ Follow the GCP Config instructions for both the `autobahn-bullshark` and `hotstu
 
 ### GCP Config <a name="gcpconfig"></a>
 The GCP config that is used is found in `autobahn-artifact/benchmark/settings.json`. We provided examples for Autobahn/Bullshark config in `autobahn-artifact/benchmark/settings-autobahn-bullshark.json` and Vanilla HotStuff/Batched HotStuff in `autobahn-artifact/benchmark/settings-hotstuff-baselines.json`. You will need to change the following:
-1. `key`: change the `name` (name of the private SSH key) and `path` fields to match the key you generated in the prior section.
+1. `key`: change the `name` (name of the private SSH key) and `path` (full path including private key file name) fields to match the key you generated in the prior section.
 Leave `port` unchanged (should be `5000`).
 For HotStuff/Batched HotStuff leave `ports` unchanged.
 

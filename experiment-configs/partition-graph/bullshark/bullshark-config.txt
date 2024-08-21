@@ -33,6 +33,7 @@ bench_params = {
         'egress_penalty': 50, #ms
 
         'use_exponential_timeouts': False,
+        'use_fast_sync': False,
 
         # Unused
         #'simulate_partition': False,
