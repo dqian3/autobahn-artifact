@@ -496,14 +496,14 @@ The reported peak results in Fig. 5 were roughly:
 To reproduce all data points, simply adjust the `rate` parameter (input load).
 
 #### Using free trial machines <a name="freemachines"></a>
-We have, for convenience, also re-run the above experiment using the `t2d-standard-4` machine type available to free users. These machines have fewer CPU resources, and thus approach the throughput ceiling sooner. Latencies remain consistent with our paper results.
+We have, for convenience, also re-run the above experiment using the `t2d-standard-4` machine type available to free users. These machines have fewer CPU resources, and thus approach the throughput ceiling sooner. Latencies remain consistent with our paper results. The configs and results can be found in `experiment_configs/free-trial/`.
 
 The peak results, using `t2d-standard-4` machines are roughly:
 ```
-      - Autobahn: Throughput: ~212k tx/s, Latency: ~280 ms    
-      - Bullshark: Throughput: ~212k tx/s Latency: ~592 ms     
-      - BatchedHS: Throughput: ~150k tx/s, Latency: ~333 ms    
-      - VanillaHS: Throughput: ~9k tx/s, Latency: ~365 ms       
+      - Autobahn: Throughput: ~215k tx/s, Latency: ~274 ms    
+      - Bullshark: Throughput: ~212k tx/s Latency: ~606 ms     
+      - BatchedHS: Throughput: ~174k tx/s, Latency: ~348 ms    
+      - VanillaHS: Throughput: ~9k tx/s, Latency: ~367 ms       
 ```
 
 ### Scalability
