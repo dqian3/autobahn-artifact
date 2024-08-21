@@ -105,11 +105,12 @@ Additional instructions can be found in `benchmark/README`.
 <!-- TODO: Can we provide alternatives on how to run elsehwere? (if the artifact committee cannot run on GCP) -->
 <!-- Detail which machines and configs we used (CPU/SSD...). What geo setup (i.e. where machines are located) -->
 
+
 > [!NOTE] 
 > We strongly recommend running on GCP as our experiment scripts are designed to work with GCP. 
 > New users to GCP can get $300 worth of free credit (https://console.cloud.google.com/welcome/new), which should be sufficient to reproduce our core claims. 
-> To get the free trial you will need to use an email account that has not used GCP before or create a new google email account
-> Unfortunately, trial access users *cannot* access the machine type used in our evaluation, and must instead use a weaker machine type (more details below). We have NOT evaluated or systems on these machine types. To accurately reproduce our results, we recommend using the same machine types employed in our experiments, and using the SPOT-market to save costs. Re-running only our key data points, using the spot market, should be relatively cheap -- but make sure to terminate machines as soon as you do not need them.
+> To get the free trial you will need to use an email account that has not used GCP before (e.g. you may create a new gmail account or use https://www.mail.com/mail/create-email-account/).
+> Unfortunately, trial access users *cannot* access the machine type used in our evaluation, and must instead use a weaker machine type (more details below). We have NOT thoroughly evaluated or systems on these machine types, but provide a [sample run that validates claim (1)](#freemachines). To accurately reproduce our *paper* results, we recommend using the same machine types employed in our experiments, and using the SPOT-market to save costs. Re-running only our key data points, using the spot market, should be relatively cheap -- but make sure to terminate machines as soon as you do not need them. Failing this, please send an anonymous comment, we are investiagting ways to securely add you to our own GCP account and specify an allowance.
 
 The Google Cloud console is the gateway for accessing all GCP services. You can search for services using the GCP console searchbar.
 
@@ -267,7 +268,7 @@ Leave `port` unchanged (should be `5000`).
 
 3. `project_id`: the project id is found by clicking the dropdown of your project (e.g. "My First Project") on the top left side, and looking at the ID field.
 
-4. `instances`: `type` (value of t2d-standard-16) and `regions` (value of ["us-east1-b", "us-east5-a", "us-west1-b", "us-west4-a"]) should remain unchanged. If you select different regions then you will need to change the regions field to be the regions you are running in. You will need to change `templates` to be the names of the instance templates you created. The order matters, as they should correspond to the order of each region. The path should be in the format "projects/PROJECT_ID/regions/REGION_ID/instanceTemplates/TEMPLATE_ID", where PROJECT_ID is the id of the project you created in the prior section, REGION_ID is the name of the region without the subzone (i.e. us-east1 NOT us-east1-a).
+4. `instances`: `type` (value of t2d-standard-16; t2d-standard-4 if using free trial) and `regions` (value of ["us-east1-b", "us-east5-a", "us-west1-b", "us-west4-a"]) should remain unchanged. If you select different regions then you will need to change the regions field to be the regions you are running in. You will need to change `templates` to be the names of the instance templates you created. The order matters, as they should correspond to the order of each region. The path should be in the format "projects/PROJECT_ID/regions/REGION_ID/instanceTemplates/TEMPLATE_ID", where PROJECT_ID is the id of the project you created in the prior section, REGION_ID is the name of the region without the subzone (i.e. us-east1 NOT us-east1-a).
 
 ### GCP Benchmark commands
 1. If you want to run an Autobahn or Bullshark experiment navigate to `autobahn-bullshark/autobahn-artifact/benchmark`. If you want to run a Vanilla HotStuff or a Batched HotStuff experiment navigate to `hotstuff-baselines/autobahn-artifact/benchmark`.
@@ -473,8 +474,6 @@ To run a specific experiment copy and paste an experiment config into the `fabfi
 
 For simplicity, we summarize here only the key results necessary to validate our claims. The respective outputs are included in `experiment_configs` for convenience.
 
-
-## Artifact Overview 
 ### Performance under ideal conditions
 > [!WARNING] 
 > Navigate to the respective [experiment host folder](#exphost) (`autobahn-bullshark` or `hotstuff-baselines`) but do not check out a new branch. Instead, configure the [GCP config](#gcpconfig) `repo` field to select the respective system branch (with NO suffix) you want to run. E.g. `autobahn`
@@ -488,6 +487,17 @@ The reported peak results in Fig. 5 were roughly:
       - VanillaHS: Throughput: ~15k tx/s, Latency: ~365 ms       
 ```
 To reproduce all data points, simply adjust the `rate` parameter (input load).
+
+#### Using free trial machines <a name="freemachines"></a>
+We have, for convenience, also re-run the above experiment using the `t2d-standard-4` machine type available to free users. These machines have fewer CPU resources, and thus approach the throughput ceiling sooner. Latencies remain consistent with our paper results.
+
+The peak results, using `t2d-standard-4` machines are roughly:
+```
+      - Autobahn: Throughput: ~212k tx/s, Latency: ~280 ms    
+      - Bullshark: Throughput: ~212k tx/s Latency: ~592 ms     
+      - BatchedHS: Throughput: ~150k tx/s, Latency: ~333 ms    
+      - VanillaHS: Throughput: ~9k tx/s, Latency: ~365 ms       
+```
 
 ### Scalability
 > [!WARNING] 
