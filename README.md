@@ -267,7 +267,7 @@ The GCP config that is used is found in `autobahn-artifact/benchmark/settings.js
 Leave `port` unchanged (should be `5000`).
 For HotStuff/Batched HotStuff leave `ports` unchanged.
 
-2. `repo`: Leave `name` unchanged (should be `autobahn-artifact`). You will need to change the `url` field to be the url of the artifact github repo. Specifically, you will need to prepend your personal access token to the beginning of the url. The url should be in this format: "https://TOKEN@github.com/neilgiri/autobahn-artifact", where `TOKEN` is the name of your [personal access token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens). `branch` specifies which branch will be run on all the machines. This will determine which system ends up running. Only select an Autobahn or Bullshark branch if you are in the `autobahn-bullshark` folder. Similarly, only select a Vanilla HotStuff or Batched HotStuff branch if you are in the `hotstuff-baselines` folder.
+2. `repo`: Leave `name` unchanged (should be `autobahn-artifact`). Leave url unchanged (should be `https://github.com/neilgiri/autobahn-artifact.git`). `branch` specifies which branch will be run on all the machines. This will determine which system ends up running. Only select an Autobahn or Bullshark branch if you are in the `autobahn-bullshark` folder. Similarly, only select a Vanilla HotStuff or Batched HotStuff branch if you are in the `hotstuff-baselines` folder.
 
 3. `project_id`: the project id is found by clicking the dropdown of your project (e.g. "My First Project") on the top left side, and looking at the ID field.
 
