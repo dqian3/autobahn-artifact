@@ -110,7 +110,7 @@ Additional instructions can be found in `benchmark/README`.
 > We strongly recommend running on GCP as our experiment scripts are designed to work with GCP. 
 > New users to GCP can get $300 worth of free credit (https://console.cloud.google.com/welcome/new), which should be sufficient to reproduce our core claims. 
 > To get the free trial you will need to use an email account that has not used GCP before (e.g. you may create a new gmail account or use https://www.mail.com/mail/create-email-account/).
-> Unfortunately, trial access users *cannot* access the machine type used in our evaluation, and must instead use a weaker machine type (more details below). We have NOT thoroughly evaluated or systems on these machine types, but provide a [sample run that validates claim (1)](#freemachines). To accurately reproduce our *paper* results, we recommend using the same machine types employed in our experiments, and using the SPOT-market to save costs. Re-running only our key data points, using the spot market, should be relatively cheap -- but make sure to terminate machines as soon as you do not need them. Failing this, please send an anonymous comment, we are investiagting ways to securely add you to our own GCP account and specify an allowance.
+> Unfortunately, trial access users *cannot* access the machine type used in our evaluation, and must instead use a weaker machine type (more details below). We have NOT thoroughly evaluated or systems on these machine types, but provide [sample runs that validates our claims](#freemachines). To accurately reproduce our *paper* results, we recommend using the same machine types employed in our experiments, and using the SPOT-market to save costs. Re-running only our key data points, using the spot market, should be relatively cheap -- but make sure to terminate machines as soon as you do not need them. Failing this, please send an anonymous comment, we are investiagting ways to securely add you to our own GCP account and specify an allowance.
 
 The Google Cloud console is the gateway for accessing all GCP services. You can search for services using the GCP console searchbar.
 
@@ -499,7 +499,7 @@ The reported peak results in Fig. 5 were roughly:
 To reproduce all data points, simply adjust the `rate` parameter (input load).
 
 #### Using free trial machines <a name="freemachines"></a>
-We have, for convenience, also re-run the above experiment using the `t2d-standard-4` machine type available to free users. These machines have fewer CPU resources, and thus approach the throughput ceiling sooner. Latencies remain consistent with our paper results. The configs and results can be found in `experiment_configs/free-trial/`.
+We have, for convenience, also re-run the above experiment using the `t2d-standard-4` machine type available to free users. These machines have fewer CPU resources, and thus approach the throughput ceiling sooner. Latencies remain consistent with our paper results. The configs and results can be found in `experiment_configs/main-graph/free-trial/`.
 
 The peak results, using `t2d-standard-4` machines are roughly:
 ```
@@ -603,6 +603,10 @@ The measured blip and hangover durations were roughly:
             Hangover end: 49s
             -> Hangover ~20.4s (minus 0-1s blip noise)
 ```
+
+#### Using free trial machines <a name="freemachines"></a>
+We have re-run the above experiment using the `t2d-standard-4` machine type available to free users, and reproduced essentially identical results. Since the machine type reduces the peak throughput of VanillaHS we ran it with only 9k load (all other systems were still run with 15k load). The configs and results can be found in `experiment_configs/partition-graph/free-trial/`.
+
 <!-- (ab_simple_sender_250bs_opt_tips_k4.txt)  -->
 <!-- (bullshark_250bs_opt_tips_k4.txt) -->
 <!-- (batchedhs-partition-500batch-15kload.txt) -->
