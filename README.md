@@ -605,7 +605,7 @@ The measured blip and hangover durations were roughly:
 ```
 
 #### Using free trial machines <a name="freemachines"></a>
-We have re-run the above experiment using the `t2d-standard-4` machine type available to free users, and reproduced essentially identical results. Since the machine type reduces the peak throughput of VanillaHS we ran it with only 9k load (all other systems were still run with 15k load). The configs and results can be found in `experiment_configs/partition-graph/free-trial/`.
+We have re-run the above experiment using the `t2d-standard-4` machine type available to free users, and reproduced essentially identical results. Since the machine type reduces the peak throughput of VanillaHS we ran it with only 8.5k load (all other systems were still run with 15k load). The configs and results can be found in `experiment_configs/partition-graph/free-trial/`.
 
 <!-- (ab_simple_sender_250bs_opt_tips_k4.txt)  -->
 <!-- (bullshark_250bs_opt_tips_k4.txt) -->
