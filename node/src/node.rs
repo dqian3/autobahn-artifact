@@ -8,23 +8,6 @@ use store::{Store, StoreError};
 use thiserror::Error;
 use tokio::sync::mpsc::{channel, Receiver};
 
-#[derive(Error, Debug)]
-pub enum NodeError {
-    #[error("Failed to read config file '{file}': {message}")]
-    ReadError { file: String, message: String },
-
-    #[error("Failed to write config file '{file}': {message}")]
-    WriteError { file: String, message: String },
-
-    #[error("Store error: {0}")]
-    StoreError(#[from] StoreError),
-
-    #[error(transparent)]
-    ConsensusError(#[from] ConsensusError),
-
-    #[error(transparent)]
-    MempoolError(#[from] MempoolError),
-}
 
 pub struct Node {
     pub commit: Receiver<Block>,

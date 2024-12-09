@@ -1,4 +1,3 @@
-use crate::node::NodeError;
 use consensus::{Committee as ConsensusCommittee, Parameters as ConsensusParameters};
 use crypto::{generate_keypair, generate_production_keypair, PublicKey, SecretKey};
 use mempool::{Committee as MempoolCommittee, Parameters as MempoolParameters};
@@ -9,6 +8,18 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::BufWriter;
 use std::io::Write as _;
+
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum NodeError {
+    #[error("Failed to read config file '{file}': {message}")]
+    ReadError { file: String, message: String },
+
+    #[error("Failed to write config file '{file}': {message}")]
+    WriteError { file: String, message: String },
+}
+
 
 pub trait Export: Serialize + DeserializeOwned {
     fn read(path: &str) -> Result<Self, NodeError> {

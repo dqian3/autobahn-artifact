@@ -1,4 +1,8 @@
 use consensus::messages::Transaction;
+use crypto::{Hash, Signature, SignatureService};
+use ed25519_dalek::ed25519;
+
+
 use futures::stream::StreamExt as _;
 use log::{debug, warn};
 use std::net::SocketAddr;
@@ -9,11 +13,12 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 pub struct Front {
     address: SocketAddr,
     deliver: Sender<Transaction>,
+    signature_service: SignatureService
 }
 
 impl Front {
-    pub fn new(address: SocketAddr, deliver: Sender<Transaction>) -> Self {
-        Self { address, deliver }
+    pub fn new(address: SocketAddr, deliver: Sender<Transaction>, signature_service: SignatureService) -> Self {
+        Self { address, deliver, signature_service }
     }
 
     // For each incoming request, we spawn a new worker responsible to receive
@@ -42,7 +47,25 @@ impl Front {
             let mut transport = Framed::new(socket, LengthDelimitedCodec::new());
             while let Some(frame) = transport.next().await {
                 match frame {
-                    Ok(x) => deliver.send(x.to_vec()).await.expect("Core channel closed"),
+                    Ok(x) => {
+                        // Verify client signature here
+                        let (msg, sig) = x.split_at(x.len() - 64); 
+                        
+                        let digest = msg.digest();
+
+                        let signature = ed25519::signature::Signature::from_bytes(sig).expect("Failed to create sig");
+                        let key = ed25519_dalek::PublicKey::from_bytes(b"").expect("Failed to load pub key");
+                        
+                        match key.verify_strict(&digest.0, &signature) {
+                            Ok(()) => {
+                                deliver.send(x.to_vec()).await.expect("Core channel closed");
+                            }
+                            Err(e) => {
+                                warn!("Failed to verify client transaction {}", e);
+                                return;
+                            }
+                        }
+                    }
                     Err(e) => {
                         warn!("Failed to receive client transaction: {}", e);
                         return;
