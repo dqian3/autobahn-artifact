@@ -11,7 +11,12 @@ use std::net::SocketAddr;
 use tokio::net::TcpStream;
 use tokio::time::{interval, sleep, Duration, Instant};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
-use crypto::{Digest, PublicKey, SignatureService};
+
+mod config;
+
+use crypto::SignatureService;
+use crate::config::{Export, Secret};
+use crypto::Hash;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -61,7 +66,6 @@ async fn main() -> Result<()> {
     let key_file = matches.value_of("keys").unwrap();
     
 
-
     info!("Node address: {}", target);
     info!("Transactions size: {} B", size);
     info!("Transactions rate: {} tx/s", rate);
@@ -75,7 +79,7 @@ async fn main() -> Result<()> {
     // Make the data store.
     let signature_service = SignatureService::new(secret_key);
     
-    let client = Client {
+    let mut client = Client {
         target,
         size,
         rate,
@@ -103,14 +107,14 @@ struct Client {
 
 impl Client {
 
-    async fn sign(&self, tx: &mut BytesMut)
+    async fn sign(&mut self, tx: &BytesMut) -> [u8; 64]
     {
-        let digest = tx.digest();
+        let digest = tx.as_ref().digest();
         let signature = self.signature_service.request_signature(digest).await;
-        signature
+        signature.flatten()
     }
 
-    pub async fn send(&self) -> Result<()> {
+    pub async fn send(&mut self) -> Result<()> {
         const PRECISION: u64 = 20; // Sample precision.
         const BURST_DURATION: u64 = 1000 / PRECISION;
 
@@ -152,7 +156,7 @@ impl Client {
                     tx.resize(self.size, 0u8);
 
                     
-                    for b in self.sign(&mut tx).await {
+                    for b in self.sign(&tx).await {
                         tx.put_u8(b);
                     }
 
@@ -164,7 +168,9 @@ impl Client {
                     tx.put_u64(r); // Ensures all clients send different txs.
                     tx.resize(self.size, 0u8);
 
-                    self.sign(&mut tx).await;
+                    for b in self.sign(&tx).await {
+                        tx.put_u8(b);
+                    }
 
                     tx.split().freeze()
                 };
