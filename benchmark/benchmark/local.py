@@ -80,12 +80,15 @@ class LocalBench:
             rate_share = ceil(rate / nodes)
             timeout = self.node_parameters.timeout_delay
             client_logs = [PathMaker.client_log_file(i) for i in range(nodes)]
-            for addr, log_file in zip(addresses, client_logs):
+            for addr, log_file, key in zip(addresses, client_logs, key_files):
                 cmd = CommandMaker.run_client(
                     addr,
                     self.tx_size,
                     rate_share,
-                    timeout
+                    timeout,
+                    nodes=[],
+                    key=key
+
                 )
                 self._background_run(cmd, log_file)
 

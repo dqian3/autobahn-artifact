@@ -34,8 +34,9 @@ class CommandMaker:
         return (f'./node {v} run --keys {keys} --committee {committee} '
                 f'--store {store} --parameters {parameters}')
 
+
     @staticmethod
-    def run_client(address, size, rate, timeout, nodes=[]):
+    def run_client(address, size, rate, timeout, nodes=[], key=''):
         assert isinstance(address, str)
         assert isinstance(size, int) and size > 0
         assert isinstance(rate, int) and rate >= 0
@@ -43,7 +44,7 @@ class CommandMaker:
         assert all(isinstance(x, str) for x in nodes)
         nodes = f'--nodes {" ".join(nodes)}' if nodes else ''
         return (f'./client {address} --size {size} '
-                f'--rate {rate} --timeout {timeout} {nodes}')
+                f'--rate {rate} --timeout {timeout} --key key {nodes}')
 
     @staticmethod
     def kill():
