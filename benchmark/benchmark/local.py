@@ -82,12 +82,13 @@ class LocalBench:
             # Run the clients (they will wait for the nodes to be ready).
             workers_addresses = committee.workers_addresses(self.faults)
             rate_share = ceil(rate / committee.workers())
-            for i, addresses in enumerate(workers_addresses):
+            for i, (addresses, key_file) in enumerate(zip(workers_addresses, key_files)):
                 for (id, address) in addresses:
                     cmd = CommandMaker.run_client(
                         address,
                         self.tx_size,
                         rate_share,
+                        key_file,
                         [x for y in workers_addresses for _, x in y]
                     )
                     log_file = PathMaker.client_log_file(i, id)

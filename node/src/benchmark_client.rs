@@ -16,7 +16,9 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 mod config;
 
 use crypto::SignatureService;
-use crate::config::{Export, Secret};
+use crate::config::Export as _;
+
+use crate::config::Secret;
 use crypto::Hash;
 
 #[tokio::main]
