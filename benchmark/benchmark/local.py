@@ -74,19 +74,21 @@ class LocalBench:
 
             # Do not boot faulty nodes.
             nodes = nodes - self.faults
-
+            
             # Run the clients (they will wait for the nodes to be ready).
             addresses = committee.front
             rate_share = ceil(rate / nodes)
             timeout = self.node_parameters.timeout_delay
             client_logs = [PathMaker.client_log_file(i) for i in range(nodes)]
-            for addr, log_file in zip(addresses, client_logs):
+            for addr, log_file, key_file in zip(addresses, client_logs, key_files):
                 cmd = CommandMaker.run_client(
                     addr,
                     self.tx_size,
                     rate_share,
-                    timeout
+                    timeout,
+                    key_file, # Note, key_is shared with node of same id...
                 )
+                print(f'Running client with command: {cmd}')
                 self._background_run(cmd, log_file)
 
             # Run the nodes.
