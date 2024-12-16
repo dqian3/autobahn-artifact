@@ -13,13 +13,12 @@ use tokio::net::TcpStream;
 use tokio::time::{interval, sleep, Duration, Instant};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-mod config;
-
 use crypto::SignatureService;
-use crate::config::Export as _;
-
-use crate::config::Secret;
 use crypto::Hash;
+
+use config::KeyPair;
+use config::Import as _;
+
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -73,9 +72,12 @@ async fn main() -> Result<()> {
     info!("Key file provided: {}", key_file);
 
 
-    let secret = Secret::read(key_file)?;
+    let secret = KeyPair::import(key_file).context("Failed to load the node's keypair")?;
     let name = secret.name;
     let secret_key = secret.secret;
+
+    info!("{:?}", secret.name);
+
 
     // Make the data store.
     let signature_service = SignatureService::new(secret_key);
@@ -146,7 +148,7 @@ impl Client {
             let now = Instant::now();
 
             for x in 0..burst {
-                if x == counter % burst {
+                let bytes = if x == counter % burst {
                     // NOTE: This log entry is used to compute performance.
                     info!("Sending sample transaction {}", counter);
 
@@ -173,8 +175,6 @@ impl Client {
                     tx.split().freeze()
                 };
 
-                tx.resize(self.size, 0u8); //Truncate any bits past size
-                let bytes = tx.split().freeze(); //split() moves byte content from tx to bytes (i.e. avoids copy). freeze() makes it const so it can be shared. (bytes can now be used/sent async)
                 //Note: Does not sign transactions. Transaction id-s are not unique w.r.t to content.
                 if let Err(e) = transport.send(bytes).await { //Uses TCP connection to send request to assigned worker. Note: Optimistically only sending to one worker.
                     warn!("Failed to send transaction: {}", e);
