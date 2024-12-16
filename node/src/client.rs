@@ -12,13 +12,12 @@ use tokio::net::TcpStream;
 use tokio::time::{interval, sleep, Duration, Instant};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-mod config;
-
 use crypto::SignatureService;
-use crate::config::Export as _;
-
-use crate::config::Secret;
 use crypto::Hash;
+
+use config::KeyPair;
+use config::Import as _;
+
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -74,9 +73,12 @@ async fn main() -> Result<()> {
     info!("Key file provided: {}", key_file);
 
 
-    let secret = Secret::read(key_file)?;
+    let secret = KeyPair::import(key_file).context("Failed to load the node's keypair")?;
     let name = secret.name;
     let secret_key = secret.secret;
+
+    info!("{:?}", secret.name);
+
 
     // Make the data store.
     let signature_service = SignatureService::new(secret_key);

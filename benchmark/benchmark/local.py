@@ -88,7 +88,6 @@ class LocalBench:
                     timeout,
                     nodes=[],
                     key=key
-
                 )
                 self._background_run(cmd, log_file)
 
