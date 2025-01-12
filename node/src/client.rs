@@ -203,27 +203,6 @@ impl Client {
                     
                     channel_tx.send(msg).await.unwrap();
 
-<<<<<<< HEAD:node/src/client.rs
-                    tx.split().freeze()
-                } else {
-                    r += 1;
-
-                    tx.put_u8(1u8); // Standard txs start with 1.
-                    tx.put_u64(r); // Ensures all clients send different txs.
-                    tx.resize(self.size, 0u8);
-
-                    for b in self.sign(&tx).await {
-                        tx.put_u8(b);
-                    }
-
-                    tx.split().freeze()
-                };
-
-                if let Err(e) = transport.send(bytes).await {
-                    warn!("Failed to send transaction: {}", e);
-                    break 'main;
-=======
->>>>>>> d78276c (add channel to parallelize crypto):node/src/benchmark_client.rs
                 }
             });
             
