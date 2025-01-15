@@ -4,6 +4,7 @@ use bytes::BufMut as _;
 use bytes::BytesMut;
 use clap::{crate_name, crate_version, App, AppSettings};
 use env_logger::Env;
+use futures::channel;
 use futures::future::join_all;
 use futures::sink::SinkExt as _;
 use log::{info, warn};
@@ -12,6 +13,14 @@ use std::net::SocketAddr;
 use tokio::net::TcpStream;
 use tokio::time::{interval, sleep, Duration, Instant};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
+use tokio::sync::mpsc;
+
+use crypto::SignatureService;
+use crypto::Hash;
+
+use config::KeyPair;
+use config::Import as _;
+
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -22,7 +31,7 @@ async fn main() -> Result<()> {
         .args_from_usage("--size=<INT> 'The size of each transaction in bytes'")
         .args_from_usage("--rate=<INT> 'The rate (txs/s) at which to send the transactions'")
         .args_from_usage("--nodes=[ADDR]... 'Network addresses that must be reachable before starting the benchmark.'")
-        .setting(AppSettings::ArgRequiredElseHelp)
+        .args_from_usage("--keys=<FILE> 'The file containing the key information for the benchmark.'")
         .get_matches();
 
     env_logger::Builder::from_env(Env::default().default_filter_or("info"))
@@ -52,6 +61,9 @@ async fn main() -> Result<()> {
         .collect::<Result<Vec<_>, _>>()
         .context("Invalid socket address format")?;
 
+    let key_file = matches.value_of("keys").unwrap();
+    
+
     info!("Node address: {}", target);
 
     // NOTE: This log entry is used to compute performance.
@@ -59,12 +71,21 @@ async fn main() -> Result<()> {
 
     // NOTE: This log entry is used to compute performance.
     info!("Transactions rate: {} tx/s", rate);
+    info!("Key file provided: {}", key_file);
 
-    let client = Client {
+
+    let secret = KeyPair::import(key_file).context("Failed to load the node's keypair")?;
+    let secret_key = secret.secret;
+
+    // Make the data store.
+    let signature_service = SignatureService::new(secret_key);
+    
+    let mut client = Client {
         target,
         size,
         rate,
         nodes,
+        signature_service
     };
 
     // Wait for all nodes to be online and synchronized.
@@ -78,18 +99,28 @@ struct Client {
     target: SocketAddr,  //specifies the worker to connect to
     size: usize,         //specifies the bit size of transactions
     rate: u64,
-    nodes: Vec<SocketAddr>,  //specifies the addresses of all nodes. Currently only used to wait for them to be alive, but also necessary if we wanted to receive result replies (from any node).
+    nodes: Vec<SocketAddr>,
+    // ========= Added for Evaluation purposes ========= 
+    signature_service: SignatureService,
 }
 
+async fn sign(signature_service: &mut SignatureService, tx: &BytesMut) -> [u8; 64]
+{
+    let digest = tx.as_ref().digest();
+    let signature = signature_service.request_signature(digest).await;
+    signature.flatten()
+}
+
+
 impl Client {
-    pub async fn send(&self) -> Result<()> {
+    pub async fn send(&mut self) -> Result<()> {
         const PRECISION: u64 = 20; // Sample precision.
         const BURST_DURATION: u64 = 1000 / PRECISION;
 
         // The transaction size must be at least 16 bytes to ensure all txs are different.
-        if self.size < 9 {
+        if self.size < 16 {
             return Err(anyhow::Error::msg(
-                "Transaction size must be at least 9 bytes",
+                "Transaction size must be at least 16 bytes",
             ));
         }
 
@@ -98,14 +129,28 @@ impl Client {
             .await
             .context(format!("failed to connect to {}", self.target))?;
 
+        // Create a channel so we can sign transactions concurrently and send from a single task
+        let (channel_tx, mut channel_rx) = mpsc::channel(100);
+
         // Submit all transactions.
         let burst = self.rate / PRECISION;
-        let mut tx = BytesMut::with_capacity(self.size);
+        let tx = BytesMut::with_capacity(self.size + 64); // + 64 for signatures
         let mut counter = 0;
-        let mut r = rand::thread_rng().gen();
+        let mut r :u64 = rand::thread_rng().gen();
         let mut transport = Framed::new(stream, LengthDelimitedCodec::new());
         let interval = interval(Duration::from_millis(BURST_DURATION));
         tokio::pin!(interval);
+
+
+        // Spawn a task to read from channel and send signed transactions
+        tokio::spawn(async move {
+            while let Some(message) = channel_rx.recv().await {
+                if let Err(e) = transport.send(message).await { //Uses TCP connection to send request to assigned worker. Note: Optimistically only sending to one worker.
+                    warn!("Failed to send transaction: {}", e);
+                    return;
+                }
+            }
+        });
 
         // NOTE: This log entry is used to compute performance.
         info!("Start sending transactions");
@@ -114,31 +159,55 @@ impl Client {
             interval.as_mut().tick().await;
             let now = Instant::now();
 
-            for x in 0..burst {
-                if x == counter % burst {
-                    // NOTE: This log entry is used to compute performance.
-                    info!("Sending sample transaction {}", counter);
+            let mut tx = tx.clone();     
+            let counter_copy = counter.clone();
+            let mut r_copy = r.clone();
+            let size = self.size;
+            let mut sig_copy = self.signature_service.clone();
 
-                    tx.put_u8(0u8); // Sample txs start with 0.
-                    tx.put_u64(counter); // This counter identifies the tx.
-                } else {
-                    r += 1;
-                    tx.put_u8(1u8); // Standard txs start with 1.
-                    tx.put_u64(r); // Ensures all clients send different txs.
-                };
+            let channel_tx = channel_tx.clone();
 
-                tx.resize(self.size, 0u8); //Truncate any bits past size
-                let bytes = tx.split().freeze(); //split() moves byte content from tx to bytes (i.e. avoids copy). freeze() makes it const so it can be shared. (bytes can now be used/sent async)
-                //Note: Does not sign transactions. Transaction id-s are not unique w.r.t to content.
-                if let Err(e) = transport.send(bytes).await { //Uses TCP connection to send request to assigned worker. Note: Optimistically only sending to one worker.
-                    warn!("Failed to send transaction: {}", e);
-                    break 'main;
+            tokio::spawn(async move {
+                for x in 0..burst {
+                    let msg = if x == counter_copy % burst {
+                        // NOTE: This log entry is used to compute performance.
+                        info!("Sending sample transaction {}", counter_copy);
+
+                        tx.put_u8(0u8); // Sample txs start with 0.
+                        tx.put_u64(counter_copy); // This counter identifies the tx.
+                        tx.resize(size, 0u8);
+
+                        
+                        for b in sign(&mut sig_copy, &tx).await {
+                            tx.put_u8(b);
+                        }
+
+                        tx.split().freeze()
+                    } else {
+                        r_copy += 1;
+                        tx.put_u8(1u8); // Standard txs start with 1.
+                        tx.put_u64(r_copy); // Ensures all clients send different txs.
+                        tx.resize(size, 0u8);
+
+                        for b in sign(&mut sig_copy, &tx).await {
+                            tx.put_u8(b);
+                        }
+
+                        tx.split().freeze()
+                    };
+
+                    
+                    channel_tx.send(msg).await.unwrap();
+
                 }
-            }
+            });
+            
             if now.elapsed().as_millis() > BURST_DURATION as u128 {
                 // NOTE: This log entry is used to compute performance.
                 warn!("Transaction rate too high for this client");
             }
+
+            r += burst;
             counter += 1;
         }
         Ok(())
