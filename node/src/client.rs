@@ -73,14 +73,13 @@ async fn main() -> Result<()> {
     info!("Transactions size: {} B", size);
     info!("Transactions rate: {} tx/s", rate);
     info!("Key file provided: {}", key_file);
-
+    
 
     let secret = KeyPair::import(key_file).context("Failed to load the node's keypair")?;
     let secret_key = secret.secret;
 
-    // Make the data store.
     let signature_service = SignatureService::new(secret_key);
-    
+
     let mut client = Client {
         target,
         size,
@@ -90,11 +89,33 @@ async fn main() -> Result<()> {
         signature_service
     };
 
+
     // Wait for all nodes to be online and synchronized.
     client.wait().await;
 
     // Start the benchmark.
     client.send().await.context("Failed to submit transactions")
+
+
+
+    // let mut tx = BytesMut::with_capacity(size + 64); // + 64 for signatures
+    // let mut counter = 0;
+
+    // let now = Instant::now();
+
+    // for counter in 0..10000 {
+    //     tx.put_u8(0u8); // Sample txs start with 0.
+    //     tx.put_u64(counter); // This counter identifies the tx.
+    //     tx.resize(size, 0u8);
+    //     tx.extend_from_slice(&sign(&mut signature_service, &tx).await);
+    //     tx.split().freeze();
+    // }
+
+    // let elapsed = now.elapsed().as_secs_f64();
+
+    // info!("Time taken to sign 10000 transactions: {}, rate {}", elapsed, (10000 as f64)/elapsed);
+
+    // Ok(())
 }
 
 struct Client {
@@ -181,10 +202,7 @@ impl Client {
                         tx.put_u64(counter_copy); // This counter identifies the tx.
                         tx.resize(size, 0u8);
 
-                        
-                        for b in sign(&mut sig_copy, &tx).await {
-                            tx.put_u8(b);
-                        }
+                        tx.extend_from_slice(&sign(&mut sig_copy, &tx).await);
 
                         tx.split().freeze()
                     } else {
@@ -193,9 +211,7 @@ impl Client {
                         tx.put_u64(r_copy); // Ensures all clients send different txs.
                         tx.resize(size, 0u8);
 
-                        for b in sign(&mut sig_copy, &tx).await {
-                            tx.put_u8(b);
-                        }
+                        tx.extend_from_slice(&sign(&mut sig_copy, &tx).await);
 
                         tx.split().freeze()
                     };
@@ -210,6 +226,8 @@ impl Client {
                 // NOTE: This log entry is used to compute performance.
                 warn!("Transaction rate too high for this client");
             }
+
+            
 
             r += burst;
             counter += 1;
