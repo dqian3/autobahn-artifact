@@ -14,6 +14,7 @@ use std::convert::TryInto;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
 use log::debug;
+use futures::future::try_join_all;
 
 #[cfg(test)]
 #[path = "tests/processor_tests.rs"]
@@ -53,31 +54,45 @@ impl Processor {
                 }
 
                 if let WorkerMessage::Batch(id, batch) = bincode::deserialize(&serialized).expect("Failed to deserialize batch") {
+                    let key = ed25519_dalek::PublicKey::from_bytes(&id.0).expect("Failed to load pub key");
+    
 
-                    for tx in batch.iter() {
-                        let (msg, sig) = tx.split_at(tx.len() - 64); 
-                        let digest = msg.digest();
-                        let signature = ed25519::signature::Signature::from_bytes(sig).expect("Failed to create sig");
-                        let key = ed25519_dalek::PublicKey::from_bytes(&id.0).expect("Failed to load pub key");
-                        
-                        match key.verify_strict(&digest.0, &signature) {
-                            Ok(()) => {
-                                // debug!("Client transaction verified");
-                            }
-                            Err(e) => {
-                                debug!("Failed to verify client transaction {}", e);
+                    let mut handles = Vec::new();
+                
+                    for tx in batch.into_iter() {
+                        let handle = tokio::task::spawn_blocking(move || {
+                            let (msg, sig) = tx.split_at(tx.len() - 64);
+                            let digest = msg.digest();
+                            let signature = ed25519::signature::Signature::from_bytes(sig)
+                                .expect("Failed to create sig");
+                
+                            key.verify_strict(&digest.0, &signature)
+                                .map_err(|e| format!("Signature failed: {}", e))
+                        });
+                
+                        handles.push(handle);
+                    }
+                
+                    // Await all signature verifications
+                    let results = try_join_all(handles).await;
+                
+                    match results {
+                        Ok(verifications) => {
+                            if verifications.iter().all(|r| r.is_ok()) {
+                                debug!("All client transactions verified");
+                                tx_verified.send(serialized).await
+                                    .expect("Failed to send batch to be verified");
+                            } else {
+                                debug!("Some signatures failed: {:?}", verifications);
                                 return;
                             }
                         }
-
+                        Err(e) => {
+                            debug!("A blocking task panicked or failed: {:?}", e);
+                            return;
+                        }
                     }
-
-                    tx_verified
-                        .send(serialized)
-                        .await
-                        .expect("Failed to send batch to be verified");
                 }
-
             }
         });
 
