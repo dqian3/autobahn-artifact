@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
         .args_from_usage("--size=<INT> 'The size of each transaction in bytes'")
         .args_from_usage("--rate=<INT> 'The rate (txs/s) at which to send the transactions'")
         .args_from_usage("--nodes=[ADDR]... 'Network addresses that must be reachable before starting the benchmark.'")
-        .args_from_usage("--keys=<FILE> 'The file containing the key information for the benchmark.'")
+        .args_from_usage("--key=<FILE> 'The file containing the key information for the benchmark.'")
         .get_matches();
 
     env_logger::Builder::from_env(Env::default().default_filter_or("info"))
