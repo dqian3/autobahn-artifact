@@ -1,0 +1,54 @@
+platform: gcloud
+project: bft-project-2
+
+# Non-colocate mode: primary + workers run on replica VMs,
+# benchmark clients run on separate client VMs.
+colocate: false
+
+# One VM per authority — runs the primary and worker(s).
+replica_vms:
+  - replica0    # authority 0  (us-west1-c)
+  - replica1    # authority 1  (us-west4-c)
+  - replica2    # authority 2  (us-east1-c)
+  - replica3    # authority 3  (us-east4-c)
+
+# Each client entry: which VM, which authority's worker it targets.
+# Multiple clients can target the same worker to increase load.
+# Each client should be in the same region as its target worker.
+clients:
+  - {vm: client0, authority: 0, worker: 0}   # us-west1-c -> replica0 worker 0
+  - {vm: client4, authority: 0, worker: 0}   # us-west1-c -> replica0 worker 0
+  - {vm: client1, authority: 1, worker: 0}   # us-west4-c -> replica1 worker 0
+  - {vm: client5, authority: 1, worker: 0}   # us-west4-c -> replica1 worker 0
+  - {vm: client2, authority: 2, worker: 0}   # us-east1-c -> replica2 worker 0
+  - {vm: client3, authority: 3, worker: 0}   # us-east4-c -> replica3 worker 0
+
+repo:
+  url: https://github.com/dqian3/autobahn-artifact.git
+  name: autobahn-artifact
+  branch: autobahn-blips-cliauth
+
+base_port: 5000
+workers: 1
+
+bench:
+  faults: 0
+  rate: 50000        # total rate, split evenly across all 6 clients
+  tx_size: 512
+  duration: 20
+  runs: 1
+
+params:
+  timeout_delay: 1000
+  header_size: 1000
+  max_header_delay: 100
+  gc_depth: 50
+  sync_retry_delay: 5000
+  sync_retry_nodes: 3
+  batch_size: 500000
+  max_batch_delay: 100
+  k: 4
+  use_fast_path: true
+  fast_path_timeout: 500
+  use_parallel_proposals: true
+  use_optimistic_tips: true

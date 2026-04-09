@@ -1,5 +1,5 @@
 platform: gcloud
-# project: bft-project-2  # uncomment if not your gcloud default
+project: bft-project-2  # uncomment if not your gcloud default
 
 # One VM per authority (co-locate mode: primary + workers + clients on same VM)
 vms:
@@ -9,9 +9,9 @@ vms:
   - replica3
 
 repo:
-  url: https://github.com/neilgiri/autobahn-artifact.git
+  url: https://github.com/dqian3/autobahn-artifact.git
   name: autobahn-artifact
-  branch: autobahn-blips
+  branch: autobahn-blips-cliauth
 
 base_port: 5000
 workers: 1

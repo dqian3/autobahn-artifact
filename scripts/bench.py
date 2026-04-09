@@ -32,10 +32,16 @@ sys.path.insert(0, str(REPO_ROOT / "benchmark"))
 
 from autobahn_config import (
     load_config,
+    validate_config,
     generate_committee,
     generate_parameters,
     committee_workers_addresses,
     committee_primary_addresses,
+    get_all_vms,
+    get_num_authorities,
+    get_client_assignments,
+    get_replica_vms,
+    build_host_lists,
     ip_from_address,
 )
 from remote import load_remote
@@ -116,7 +122,7 @@ def cmd_install(args):
     """Install dependencies and clone repo on all VMs."""
     config = load_config(args.config)
     remote = load_remote(config)
-    vms = config["vms"]
+    vms = get_all_vms(config)
     repo = config["repo"]
 
     print(f"Installing on {len(vms)} VMs...")
@@ -145,7 +151,7 @@ def cmd_upload(args):
     """Build locally and upload binaries to all VMs."""
     config = load_config(args.config)
     remote = load_remote(config)
-    vms = config["vms"]
+    vms = get_all_vms(config)
 
     remote.check_vms_running(vms)
 
@@ -190,6 +196,195 @@ def cmd_upload(args):
     print("Upload complete.")
 
 
+def run_benchmark(config, remote, log_dir=None, debug=False):
+    """Run a single benchmark. Returns the log directory used.
+
+    This is the core logic shared by `cmd_remote` and `sweep.py`.
+    Supports both colocate=true (all processes on one VM per authority)
+    and colocate=false (primary and workers on separate VMs).
+
+    Args:
+        config: loaded config dict (with bench/params already set to desired values)
+        remote: a Remote instance (already checked VMs running, IPs resolved)
+        log_dir: directory to download logs into (default: scripts/logs/)
+        debug: use -vvv logging
+    """
+    validate_config(config)
+
+    all_vm_names = get_all_vms(config)
+    replica_vms = get_replica_vms(config)
+    client_assignments = get_client_assignments(config)
+    num_nodes = get_num_authorities(config)
+
+    bench = config["bench"]
+    faults = bench["faults"]
+    workers = config["workers"]
+    rate = bench["rate"]
+    tx_size = bench["tx_size"]
+    duration = bench["duration"]
+    good_nodes = num_nodes - faults
+
+    # Build binaries and generate keys locally
+    node_bin, _ = build_binaries()
+    keys = generate_keys(node_bin, num_nodes)
+
+    # Get internal IPs for all VMs
+    ips = remote.get_all_ips(all_vm_names)
+
+    # Build per-authority host lists for committee generation
+    host_lists = build_host_lists(config, ips)
+
+    # Build committee and parameters
+    committee = generate_committee(keys, host_lists, config["base_port"], workers)
+    parameters = generate_parameters(config)
+
+    # Write config files locally
+    committee_file = ".committee.json"
+    parameters_file = ".parameters.json"
+    with open(committee_file, "w") as f:
+        json.dump(committee, f, indent=4)
+    with open(parameters_file, "w") as f:
+        json.dump(parameters, f, indent=4)
+
+    # Upload config files to all VMs.
+    # Replica VMs need their own key file; client VMs need the key file for
+    # the authority they target.
+    print("Uploading config files...")
+
+    upload_targets = []  # (authority_index, vm_name)
+    for i, vm in enumerate(replica_vms):
+        upload_targets.append((i, vm))
+    for c in client_assignments:
+        upload_targets.append((c["authority"], c["vm"]))
+
+    def _upload_configs(i, vm):
+        key_file = f".node-{i}.json"
+        remote.scp_upload(key_file, vm, f"~/{key_file}")
+        remote.scp_upload(committee_file, vm, f"~/{committee_file}")
+        remote.scp_upload(parameters_file, vm, f"~/{parameters_file}")
+
+    seen = set()
+    deduped = []
+    for i, vm in upload_targets:
+        if vm not in seen:
+            seen.add(vm)
+            deduped.append((i, vm))
+
+    with ThreadPoolExecutor(max_workers=max(len(deduped), 1)) as pool:
+        futures = {pool.submit(_upload_configs, i, vm): vm for i, vm in deduped}
+        for f in as_completed(futures):
+            f.result()
+
+    # Compute addresses from committee
+    workers_addresses = committee_workers_addresses(committee, faults)
+    all_tx_addrs = [addr for auth_workers in workers_addresses for _, addr in auth_workers]
+    nodes_flag = " ".join(all_tx_addrs)
+
+    # Kill any existing processes
+    print("Killing existing processes...")
+    remote.run_on_all(all_vm_names, "pkill -9 -f './node' || true; pkill -9 -f './benchmark_client' || true", quiet=True)
+    time.sleep(2)
+
+    # Clean up old state on VMs
+    remote.run_on_all(all_vm_names, "rm -rf .db-* logs/ ; mkdir -p logs/", quiet=True)
+
+    # Start clients first (they wait for nodes to come online).
+    # Rate is split evenly across all client processes.
+    print(f"Starting {len(client_assignments)} client(s)...")
+    num_clients = len(client_assignments)
+    rate_per_client = ceil(rate / num_clients) if num_clients > 0 else 0
+
+    for ci, c in enumerate(client_assignments):
+        auth_idx = c["authority"]
+        wid = c["worker"]
+        client_vm = c["vm"]
+        key_file = f".node-{auth_idx}.json"
+
+        # Look up the transaction address for this authority's worker
+        tx_addr = workers_addresses[auth_idx][wid][1]
+
+        cmd = (
+            f"nohup ./benchmark_client {tx_addr} "
+            f"--size {tx_size} --rate {rate_per_client} "
+            f"--key {key_file} --nodes {nodes_flag} "
+            f">logs/client-{ci}.log 2>&1 &"
+        )
+        remote.ssh(client_vm, cmd, bg=True)
+
+    # Start primaries (on replica VMs)
+    print("Starting primaries...")
+    debug_flag = "-vvv" if debug else "-vv"
+    for i in range(good_nodes):
+        vm = replica_vms[i]
+        key_file = f".node-{i}.json"
+        cmd = (
+            f"nohup ./node {debug_flag} run "
+            f"--keys {key_file} --committee {committee_file} "
+            f"--store .db-{i} --parameters {parameters_file} primary "
+            f">logs/primary-{i}.log 2>&1 &"
+        )
+        remote.ssh(vm, cmd, bg=True)
+
+    # Start workers (on replica VMs, co-located with primary)
+    print("Starting workers...")
+    for i in range(good_nodes):
+        vm = replica_vms[i]
+        key_file = f".node-{i}.json"
+        for wid, _ in workers_addresses[i]:
+            cmd = (
+                f"nohup ./node {debug_flag} run "
+                f"--keys {key_file} --committee {committee_file} "
+                f"--store .db-{i}-{wid} --parameters {parameters_file} "
+                f"worker --id {wid} "
+                f">logs/worker-{i}-{wid}.log 2>&1 &"
+            )
+            remote.ssh(vm, cmd, bg=True)
+
+    # Wait for benchmark duration
+    print(f"Running benchmark ({duration}s)...")
+    steps = 20
+    step_duration = ceil(duration / steps)
+    for step in progress_bar(range(steps), prefix="Progress:"):
+        time.sleep(step_duration)
+
+    # Kill all processes
+    print("Stopping processes...")
+    remote.run_on_all(all_vm_names, "pkill -9 -f './node' || true; pkill -9 -f './benchmark_client' || true", quiet=True)
+    time.sleep(2)
+
+    # Download logs
+    dest = Path(log_dir) if log_dir else LOGS_DIR
+    dest.mkdir(parents=True, exist_ok=True)
+    for f in dest.glob("*.log"):
+        f.unlink()
+
+    print("Downloading logs...")
+
+    def _download_log(vm, remote_path, local_path):
+        try:
+            remote.scp_download(vm, remote_path, str(local_path))
+        except Exception as e:
+            print(f"  Warning: could not download {remote_path} from {vm}: {e}")
+
+    download_tasks = []
+    # Primary + worker logs from replica VMs
+    for i in range(good_nodes):
+        vm = replica_vms[i]
+        download_tasks.append((vm, f"logs/primary-{i}.log", dest / f"primary-{i}.log"))
+        for wid, _ in workers_addresses[i]:
+            download_tasks.append((vm, f"logs/worker-{i}-{wid}.log", dest / f"worker-{i}-{wid}.log"))
+    # Client logs from client VMs
+    for ci, c in enumerate(client_assignments):
+        download_tasks.append((c["vm"], f"logs/client-{ci}.log", dest / f"client-{ci}.log"))
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(_download_log, *t) for t in download_tasks]
+        for f in as_completed(futures):
+            f.result()
+
+    return str(dest)
+
+
 def cmd_remote(args):
     """Run a full benchmark on remote VMs."""
     config = load_config(args.config)
@@ -206,185 +401,44 @@ def cmd_remote(args):
     if args.faults is not None:
         config["bench"]["faults"] = args.faults
 
+    validate_config(config)
     remote = load_remote(config)
-    vms = config["vms"]
+    all_vm_names = get_all_vms(config)
+    num_nodes = get_num_authorities(config)
     bench = config["bench"]
     faults = bench["faults"]
-    workers = config["workers"]
-    rate = bench["rate"]
-    tx_size = bench["tx_size"]
-    duration = bench["duration"]
     runs = bench.get("runs", 1)
-
-    num_nodes = len(vms)
-    good_nodes = num_nodes - faults
+    colocate = config.get("colocate", True)
 
     print(f"=== Autobahn Benchmark ===")
-    print(f"Nodes: {num_nodes} ({faults} faulty), Workers/node: {workers}")
-    print(f"Rate: {rate:,} tx/s, Tx size: {tx_size} B, Duration: {duration}s")
+    print(f"Nodes: {num_nodes} ({faults} faulty), Workers/node: {config['workers']}, Colocate: {colocate}")
+    print(f"Rate: {bench['rate']:,} tx/s, Tx size: {bench['tx_size']} B, Duration: {bench['duration']}s")
     print()
 
-    remote.check_vms_running(vms)
-
-    # Get internal IPs
-    print("Resolving VM IPs...")
-    ips = remote.get_all_ips(vms)
-    # Maintain order matching vms list
-    ip_list = [ips[vm] for vm in vms]
-
-    # Build binaries and generate keys locally
-    node_bin, _ = build_binaries()
-    print(f"Generating keys for {num_nodes} nodes...")
-    keys = generate_keys(node_bin, num_nodes)
-
-    # Build committee and parameters
-    committee = generate_committee(keys, ip_list, config["base_port"], workers)
-    parameters = generate_parameters(config)
-
-    # Write config files locally
-    committee_file = ".committee.json"
-    parameters_file = ".parameters.json"
-    with open(committee_file, "w") as f:
-        json.dump(committee, f, indent=4)
-    with open(parameters_file, "w") as f:
-        json.dump(parameters, f, indent=4)
-
-    # Upload config files to each VM
-    print("Uploading config files...")
-    key_names = list(committee["authorities"].keys())
-
-    def _upload_configs(i, vm):
-        key_file = f".node-{i}.json"
-        remote.scp_upload(key_file, vm, f"~/{key_file}")
-        remote.scp_upload(committee_file, vm, f"~/{committee_file}")
-        remote.scp_upload(parameters_file, vm, f"~/{parameters_file}")
-
-    with ThreadPoolExecutor(max_workers=len(vms)) as pool:
-        futures = {pool.submit(_upload_configs, i, vm): vm for i, vm in enumerate(vms)}
-        for f in as_completed(futures):
-            f.result()
-
-    # Run benchmarks
-    workers_addresses = committee_workers_addresses(committee, faults)
-    primary_addresses = committee_primary_addresses(committee, faults)
-
-    # Flatten all worker transaction addresses (for client --nodes flag)
-    all_tx_addrs = [addr for auth_workers in workers_addresses for _, addr in auth_workers]
+    remote.check_vms_running(all_vm_names)
 
     for run_idx in range(runs):
         if runs > 1:
             print(f"\n--- Run {run_idx + 1}/{runs} ---")
 
-        # Kill any existing processes
-        print("Killing existing processes...")
-        remote.run_on_all(vms, "pkill -9 -f './node' || true; pkill -9 -f './benchmark_client' || true", quiet=True)
-        time.sleep(2)
-
-        # Clean up old state on VMs
-        remote.run_on_all(vms, "rm -rf .db-* logs/ ; mkdir -p logs/", quiet=True)
-
-        # Start clients first (they wait for nodes to come online)
-        print("Starting clients...")
-        total_workers = good_nodes * workers
-        rate_share = ceil(rate / total_workers)
-        nodes_flag = " ".join(all_tx_addrs)
-
-        for i, auth_workers in enumerate(workers_addresses):
-            vm = vms[i]
-            key_file = f".node-{i}.json"
-            for wid, tx_addr in auth_workers:
-                cmd = (
-                    f"nohup ./benchmark_client {tx_addr} "
-                    f"--size {tx_size} --rate {rate_share} "
-                    f"--keys {key_file} --nodes {nodes_flag} "
-                    f">logs/client-{i}-{wid}.log 2>&1 &"
-                )
-                remote.ssh(vm, cmd, bg=True)
-
-        # Start primaries
-        print("Starting primaries...")
-        for i, addr in enumerate(primary_addresses):
-            vm = vms[i]
-            key_file = f".node-{i}.json"
-            debug_flag = "-vvv" if args.debug else "-vv"
-            cmd = (
-                f"nohup ./node {debug_flag} run "
-                f"--keys {key_file} --committee {committee_file} "
-                f"--store .db-{i} --parameters {parameters_file} primary "
-                f">logs/primary-{i}.log 2>&1 &"
-            )
-            remote.ssh(vm, cmd, bg=True)
-
-        # Start workers
-        print("Starting workers...")
-        for i, auth_workers in enumerate(workers_addresses):
-            vm = vms[i]
-            key_file = f".node-{i}.json"
-            debug_flag = "-vvv" if args.debug else "-vv"
-            for wid, _ in auth_workers:
-                cmd = (
-                    f"nohup ./node {debug_flag} run "
-                    f"--keys {key_file} --committee {committee_file} "
-                    f"--store .db-{i}-{wid} --parameters {parameters_file} "
-                    f"worker --id {wid} "
-                    f">logs/worker-{i}-{wid}.log 2>&1 &"
-                )
-                remote.ssh(vm, cmd, bg=True)
-
-        # Wait for benchmark duration
-        print(f"Running benchmark ({duration}s)...")
-        steps = 20
-        step_duration = ceil(duration / steps)
-        for step in progress_bar(range(steps), prefix="Progress:"):
-            time.sleep(step_duration)
-
-        # Kill all processes
-        print("Stopping processes...")
-        remote.run_on_all(vms, "pkill -9 -f './node' || true; pkill -9 -f './benchmark_client' || true", quiet=True)
-        time.sleep(2)
-
-        # Download logs
-        print("Downloading logs...")
-        LOGS_DIR.mkdir(parents=True, exist_ok=True)
-        # Clear local logs
-        for f in LOGS_DIR.glob("*.log"):
-            f.unlink()
-
-        def _download_log(vm, remote_path, local_path):
-            try:
-                remote.scp_download(vm, remote_path, str(local_path))
-            except Exception as e:
-                print(f"  Warning: could not download {remote_path} from {vm}: {e}")
-
-        download_tasks = []
-        for i in range(good_nodes):
-            vm = vms[i]
-            download_tasks.append((vm, f"logs/primary-{i}.log", LOGS_DIR / f"primary-{i}.log"))
-            for wid in range(workers):
-                download_tasks.append((vm, f"logs/worker-{i}-{wid}.log", LOGS_DIR / f"worker-{i}-{wid}.log"))
-                download_tasks.append((vm, f"logs/client-{i}-{wid}.log", LOGS_DIR / f"client-{i}-{wid}.log"))
-
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            futures = [pool.submit(_download_log, *t) for t in download_tasks]
-            for f in as_completed(futures):
-                f.result()
+        log_dir = run_benchmark(config, remote, debug=getattr(args, "debug", False))
 
         # Parse and print results
         print("\nParsing logs...")
         try:
             from benchmark.logs import LogParser
-            logger = LogParser.process(str(LOGS_DIR), faults=faults)
+            logger = LogParser.process(log_dir, faults=faults)
             print(logger.result())
         except Exception as e:
             print(f"Log parsing failed: {e}")
-            print("Raw logs are available in scripts/logs/")
+            print(f"Raw logs are available in {log_dir}/")
 
 
 def cmd_kill(args):
     """Kill all autobahn processes on VMs."""
     config = load_config(args.config)
     remote = load_remote(config)
-    vms = config["vms"]
+    vms = get_all_vms(config)
     print(f"Killing processes on {len(vms)} VMs...")
     remote.run_on_all(vms, "pkill -9 -f './node' || true; pkill -9 -f './benchmark_client' || true", quiet=True)
     print("Done.")
@@ -393,7 +447,7 @@ def cmd_kill(args):
 def cmd_vm_start(args):
     config = load_config(args.config)
     remote = load_remote(config)
-    vms = config["vms"]
+    vms = get_all_vms(config)
     print(f"Starting {len(vms)} VMs...")
     remote.vm_start(vms)
     print("Done.")
@@ -402,7 +456,7 @@ def cmd_vm_start(args):
 def cmd_vm_stop(args):
     config = load_config(args.config)
     remote = load_remote(config)
-    vms = config["vms"]
+    vms = get_all_vms(config)
     print(f"Stopping {len(vms)} VMs...")
     remote.vm_stop(vms)
     print("Done.")
@@ -411,7 +465,7 @@ def cmd_vm_stop(args):
 def cmd_vm_status(args):
     config = load_config(args.config)
     remote = load_remote(config)
-    vms = config["vms"]
+    vms = get_all_vms(config)
     statuses = remote.vm_status(vms)
     print(f"{'VM':<25} {'Status'}")
     print(f"{'--':<25} {'------'}")

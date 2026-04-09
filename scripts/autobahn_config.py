@@ -56,7 +56,11 @@ def default_config():
         "platform": "gcloud",
         "zone": None,
         "project": None,
+        "colocate": True,
         "vms": [],
+        # Non-colocate fields:
+        "replica_vms": [],
+        "clients": [],  # list of {vm, authority, worker} dicts
         "repo": {
             "url": "https://github.com/neilgiri/autobahn-artifact.git",
             "name": "autobahn-artifact",
@@ -77,10 +81,12 @@ def load_config(path):
     defaults = default_config()
 
     # Top-level scalars
-    for key in ("platform", "zone", "project", "base_port", "workers"):
+    for key in ("platform", "zone", "project", "colocate", "base_port", "workers"):
         cfg.setdefault(key, defaults[key])
 
     cfg.setdefault("vms", defaults["vms"])
+    cfg.setdefault("replica_vms", defaults["replica_vms"])
+    cfg.setdefault("clients", defaults["clients"])
     cfg.setdefault("repo", {})
     for key in ("url", "name", "branch"):
         cfg["repo"].setdefault(key, defaults["repo"][key])
@@ -100,7 +106,7 @@ def load_config(path):
     return cfg
 
 
-def generate_committee(keys, ips, base_port, workers):
+def generate_committee(keys, host_lists, base_port, workers):
     """Build the committee JSON consumed by the Rust binary.
 
     Port allocation exactly matches benchmark/benchmark/config.py:Committee.__init__.
@@ -108,41 +114,51 @@ def generate_committee(keys, ips, base_port, workers):
 
     Args:
         keys: list of dicts with 'name' field (public key strings), one per authority
-        ips: list of IP strings, one per authority (co-locate mode)
+        host_lists: list of host-lists, one per authority. Each host-list is:
+            - colocate mode:   [ip] * (1 + workers)  (all same IP)
+            - non-colocate:    [primary_ip, worker0_ip, worker1_ip, ...]
+          The first entry is used for consensus + primary; remaining for workers.
         base_port: starting port number
         workers: number of workers per authority
 
     Returns:
         dict matching the Committee JSON schema expected by the Rust binary.
     """
-    assert len(keys) == len(ips)
+    assert len(keys) == len(host_lists)
 
     port = base_port
     authorities = OrderedDict()
 
-    for key, ip in zip(keys, ips):
+    for key, hosts in zip(keys, host_lists):
         name = key["name"]
+        assert len(hosts) == 1 + workers, (
+            f"Authority needs 1 primary + {workers} worker host(s), got {len(hosts)}"
+        )
 
-        # Consensus address
+        primary_ip = hosts[0]
+        worker_ips = hosts[1:]
+
+        # Consensus address (on primary host)
         consensus_addr = {
-            "consensus_to_consensus": f"{ip}:{port}",
+            "consensus_to_consensus": f"{primary_ip}:{port}",
         }
         port += 1
 
-        # Primary addresses
+        # Primary addresses (on primary host)
         primary_addr = {
-            "primary_to_primary": f"{ip}:{port}",
-            "worker_to_primary": f"{ip}:{port + 1}",
+            "primary_to_primary": f"{primary_ip}:{port}",
+            "worker_to_primary": f"{primary_ip}:{port + 1}",
         }
         port += 2
 
-        # Worker addresses (co-locate: all on same IP)
+        # Worker addresses
         workers_addr = OrderedDict()
         for j in range(workers):
+            wip = worker_ips[j]
             workers_addr[j] = {
-                "primary_to_worker": f"{ip}:{port}",
-                "transactions": f"{ip}:{port + 1}",
-                "worker_to_worker": f"{ip}:{port + 2}",
+                "primary_to_worker": f"{wip}:{port}",
+                "transactions": f"{wip}:{port + 1}",
+                "worker_to_worker": f"{wip}:{port + 2}",
             }
             port += 3
 
@@ -194,9 +210,112 @@ def committee_primary_addresses(committee, faults=0):
     ]
 
 
-def all_vms(config):
-    """Return the list of VM names from config."""
-    return config["vms"]
+def get_all_vms(config):
+    """Return deduplicated list of all VM names from config (preserving order)."""
+    if config.get("colocate", True):
+        return list(config["vms"])
+    else:
+        seen = set()
+        result = []
+        for vm in config["replica_vms"]:
+            if vm not in seen:
+                seen.add(vm)
+                result.append(vm)
+        for c in config["clients"]:
+            vm = c["vm"]
+            if vm not in seen:
+                seen.add(vm)
+                result.append(vm)
+        return result
+
+
+def get_num_authorities(config):
+    """Return the number of authorities (nodes) in the config."""
+    if config.get("colocate", True):
+        return len(config["vms"])
+    else:
+        return len(config["replica_vms"])
+
+
+def get_client_assignments(config):
+    """Return list of client assignments for non-colocate mode.
+
+    Each entry is a dict: {vm, authority, worker}.
+    In colocate mode, synthesizes one client per worker on the same VM.
+    """
+    workers = config["workers"]
+
+    if config.get("colocate", True):
+        result = []
+        for i, vm in enumerate(config["vms"]):
+            for wid in range(workers):
+                result.append({"vm": vm, "authority": i, "worker": wid})
+        return result
+    else:
+        return list(config["clients"])
+
+
+def build_host_lists(config, ips):
+    """Build per-authority host lists for generate_committee().
+
+    Primary + workers are always co-located on the replica VM, so each
+    authority's host list is [replica_ip] * (1 + workers).
+
+    Args:
+        config: loaded config dict
+        ips: dict of {vm_name: internal_ip}
+
+    Returns:
+        list of [primary_ip, worker0_ip, ...] per authority
+    """
+    workers = config["workers"]
+    if config.get("colocate", True):
+        vms = config["vms"]
+    else:
+        vms = config["replica_vms"]
+
+    host_lists = []
+    for vm in vms:
+        ip = ips[vm]
+        host_lists.append([ip] * (1 + workers))
+    return host_lists
+
+
+def get_replica_vms(config):
+    """Return the list of replica VMs (one per authority)."""
+    if config.get("colocate", True):
+        return list(config["vms"])
+    else:
+        return list(config["replica_vms"])
+
+
+def validate_config(config):
+    """Validate config and raise ValueError on problems."""
+    colocate = config.get("colocate", True)
+    workers = config["workers"]
+
+    if colocate:
+        if not config["vms"]:
+            raise ValueError("colocate=true requires 'vms' list")
+    else:
+        if not config["replica_vms"]:
+            raise ValueError("colocate=false requires 'replica_vms' list")
+        if not config["clients"]:
+            raise ValueError("colocate=false requires 'clients' list")
+        num_auth = len(config["replica_vms"])
+        for c in config["clients"]:
+            if not isinstance(c, dict) or "vm" not in c or "authority" not in c or "worker" not in c:
+                raise ValueError(
+                    f"Each client entry must have 'vm', 'authority', 'worker' fields, got: {c}"
+                )
+            if c["authority"] >= num_auth:
+                raise ValueError(
+                    f"Client authority {c['authority']} >= num authorities {num_auth}"
+                )
+            if c["worker"] >= workers:
+                raise ValueError(
+                    f"Client worker {c['worker']} >= num workers {workers}"
+                )
 
 
 def ip_from_address(address):
