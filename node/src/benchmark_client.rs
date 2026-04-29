@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
         .collect::<Result<Vec<_>, _>>()
         .context("Invalid socket address format")?;
 
-    let key_file = matches.value_of("keys").unwrap();
+    let key_file = matches.value_of("key").unwrap();
     
 
     info!("Node address: {}", target);

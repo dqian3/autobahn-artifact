@@ -9,3 +9,18 @@ TODO: Update Readme
 
 ## License
 This software is licensed as [Apache 2.0](LICENSE).
+
+
+python3 scripts/sweep.py \
+    --config scripts/configs/my-cluster.yaml \
+    --rates 4000 8000 16000 32000 48000 64000 \
+    --duration 30 --repeat 5
+
+  python3 scripts/sweep.py \
+    --config scripts/configs/my-cluster.yaml \
+    --rates 60000 \
+    --duration 30 \
+    --repeats 5 \
+    --output-dir scripts/logs/sweep_20260419_215746
+
+    

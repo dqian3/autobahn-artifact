@@ -139,12 +139,39 @@ def cmd_install(args):
         f'(git clone {repo["url"]} || (cd {repo["name"]} && git pull))',
     ])
 
-    results = remote.run_on_all(vms, install_cmd)
-    failed = [vm for vm, r in results.items() if isinstance(r, Exception)]
+    failed = []
+    for idx, vm in enumerate(vms, start=1):
+        print(f"\n===== [{idx}/{len(vms)}] Installing on {vm} =====", flush=True)
+        start = time.monotonic()
+        try:
+            result = remote.ssh(vm, install_cmd)
+            elapsed = time.monotonic() - start
+            stdout = (result.stdout or "").strip()
+            stderr = (result.stderr or "").strip()
+            if stdout:
+                print(f"--- [{vm}] stdout ---\n{stdout}")
+            if stderr:
+                print(f"--- [{vm}] stderr ---\n{stderr}")
+            print(f"[{vm}] OK ({elapsed:.1f}s)", flush=True)
+        except subprocess.CalledProcessError as e:
+            elapsed = time.monotonic() - start
+            stdout = (e.output or "").strip()
+            stderr = (e.stderr or "").strip()
+            if stdout:
+                print(f"--- [{vm}] stdout ---\n{stdout}")
+            if stderr:
+                print(f"--- [{vm}] stderr ---\n{stderr}")
+            print(f"[{vm}] FAILED exit={e.returncode} ({elapsed:.1f}s)", flush=True)
+            failed.append(vm)
+        except Exception as e:
+            elapsed = time.monotonic() - start
+            print(f"[{vm}] ERROR: {e} ({elapsed:.1f}s)", flush=True)
+            failed.append(vm)
+
     if failed:
-        print(f"ERROR: install failed on: {failed}", file=sys.stderr)
+        print(f"\nERROR: install failed on: {failed}", file=sys.stderr)
         sys.exit(1)
-    print(f"Installed on {len(vms)} VMs successfully.")
+    print(f"\nInstalled on {len(vms)} VMs successfully.")
 
 
 def cmd_upload(args):
