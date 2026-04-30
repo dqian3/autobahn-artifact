@@ -8,6 +8,8 @@
 rust/.idea/*
 .db-*
 
+scripts/__pycache__
+
 target/
 !/**/src/**/target/
 .test_*

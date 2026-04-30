@@ -1,0 +1,41 @@
+platform: gcloud
+project: bft-project-2  # uncomment if not your gcloud default
+
+# One VM per authority (co-locate mode: primary + workers + clients on same VM)
+vms:
+  - replica0
+  - replica1
+  - replica2
+  - replica3
+
+repo:
+  url: https://github.com/dqian3/autobahn-artifact.git
+  name: autobahn-artifact
+  branch: autobahn-blips-cliauth
+
+base_port: 5000
+workers: 1
+
+bench:
+  faults: 0
+  rate: 50000        # total tx/s across all clients
+  tx_size: 512
+  duration: 20
+  runs: 1
+
+# Node parameters (Rust Parameters struct). Only override what you need;
+# defaults are filled in automatically from Parameters::default().
+params:
+  timeout_delay: 1000
+  header_size: 1000
+  max_header_delay: 100
+  gc_depth: 50
+  sync_retry_delay: 5000
+  sync_retry_nodes: 3
+  batch_size: 500000
+  max_batch_delay: 100
+  k: 4
+  use_fast_path: true
+  fast_path_timeout: 500
+  use_parallel_proposals: true
+  use_optimistic_tips: true
