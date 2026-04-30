@@ -27,7 +27,7 @@ REPO_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(REPO_ROOT / "benchmark"))
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from autobahn_config import load_config
+from autobahn_config import load_config, get_all_vms
 from remote import load_remote
 from bench import run_benchmark, cmd_upload, build_binaries
 
@@ -364,7 +364,9 @@ def main():
 
     config = load_config(args.config)
     remote = load_remote(config)
-    vms = config["vms"]
+    # config["vms"] is empty in non-colocate mode (replicas + clients live in
+    # other keys); use the helper so the up-front check works for both modes.
+    vms = get_all_vms(config)
 
     # Check VMs and pre-discover zones
     print("=== Checking VM status ===")
