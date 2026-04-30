@@ -36,6 +36,11 @@ def default_params():
         "egress_penalty": 0,
         "use_fast_sync": False,
         "use_exponential_timeouts": False,
+        # When true, replica sign/verify become no-ops (zero signatures,
+        # always-Ok verifies). bench.py also passes --disable-crypto to
+        # benchmark_client so client-side tx signing skips too. For
+        # no-crypto throughput baselines only.
+        "disable_crypto": False,
     }
 
 

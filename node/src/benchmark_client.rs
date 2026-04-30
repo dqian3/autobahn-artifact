@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 
 use crypto::SignatureService;
 use crypto::Hash;
+use crypto::set_crypto_disabled;
 
 use config::KeyPair;
 use config::Import as _;
@@ -32,6 +33,7 @@ async fn main() -> Result<()> {
         .args_from_usage("--rate=<INT> 'The rate (txs/s) at which to send the transactions'")
         .args_from_usage("--nodes=[ADDR]... 'Network addresses that must be reachable before starting the benchmark.'")
         .args_from_usage("--key=<FILE> 'The file containing the key information for the benchmark.'")
+        .args_from_usage("--disable-crypto 'Skip ed25519 signing of submitted transactions (no-crypto baseline).'")
         .get_matches();
 
     env_logger::Builder::from_env(Env::default().default_filter_or("info"))
@@ -62,7 +64,11 @@ async fn main() -> Result<()> {
         .context("Invalid socket address format")?;
 
     let key_file = matches.value_of("key").unwrap();
-    
+    let disable_crypto = matches.is_present("disable-crypto");
+    set_crypto_disabled(disable_crypto);
+    if disable_crypto {
+        info!("Crypto disabled: tx signatures are zeros (no-crypto baseline).");
+    }
 
     info!("Node address: {}", target);
 

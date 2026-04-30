@@ -320,6 +320,10 @@ def run_benchmark(config, remote, log_dir=None, debug=False):
     print(f"Starting {len(client_assignments)} client(s)...")
     num_clients = len(client_assignments)
     rate_per_client = ceil(rate / num_clients) if num_clients > 0 else 0
+    # Replicas pick up `disable_crypto` from the parameters file. The
+    # benchmark client doesn't read parameters, so pass it via CLI so
+    # client-side tx signing is skipped too.
+    client_disable_crypto = " --disable-crypto" if parameters.get("disable_crypto") else ""
 
     for ci, c in enumerate(client_assignments):
         auth_idx = c["authority"]
@@ -333,7 +337,7 @@ def run_benchmark(config, remote, log_dir=None, debug=False):
         cmd = (
             f"nohup ./benchmark_client {tx_addr} "
             f"--size {tx_size} --rate {rate_per_client} "
-            f"--key {key_file} --nodes {nodes_flag} "
+            f"--key {key_file} --nodes {nodes_flag}{client_disable_crypto} "
             f">logs/client-{ci}.log 2>&1 &"
         )
         remote.ssh(client_vm, cmd, bg=True)

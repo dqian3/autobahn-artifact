@@ -7,7 +7,7 @@ use clap::{crate_name, crate_version, App, AppSettings, ArgMatches, SubCommand};
 use config::Export as _;
 use config::Import as _;
 use config::{Committee, KeyPair, Parameters, WorkerId};
-use crypto::SignatureService;
+use crypto::{set_crypto_disabled, SignatureService};
 use env_logger::Env;
 use primary::Header;
 use primary::Primary;
@@ -91,6 +91,12 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
         }
         None => Parameters::default(),
     };
+
+    // Wire the no-crypto toggle into the crypto module before any signing
+    // service spins up. Has to happen before SignatureService::new because
+    // its background task captures the current value via Signature::new on
+    // each request.
+    set_crypto_disabled(parameters.disable_crypto);
 
     // The `SignatureService` provides signatures on input digests.
     let signature_service = SignatureService::new(keypair.secret);

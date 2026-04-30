@@ -108,6 +108,13 @@ pub struct Parameters {
     pub egress_penalty: u64, //ms of delay
     pub use_fast_sync: bool,
     pub use_exponential_timeouts: bool,
+
+    /// When true, sign/verify become no-ops (zero signatures, always-Ok
+    /// verifies). Used for no-crypto throughput baselines; do not enable
+    /// in production. Plumbed into `crypto::set_crypto_disabled` at node
+    /// startup.
+    #[serde(default)]
+    pub disable_crypto: bool,
 }
 
 impl Default for Parameters {
@@ -146,6 +153,8 @@ impl Default for Parameters {
             egress_penalty: 0,
             use_fast_sync: false,
             use_exponential_timeouts: false,
+
+            disable_crypto: false,
         }
     }
 }
@@ -168,6 +177,7 @@ impl Parameters {
         info!("Optimistic tips enabled? {}", self.use_optimistic_tips);
         info!("Parallel Proposals enabled? {}. K: {}", self.use_parallel_proposals, self.k);
         info!("Ride share enabled? {}. Car timeout: {}", self.use_ride_share, self.car_timeout);
+        info!("Crypto disabled? {}", self.disable_crypto);
     }
 }
 

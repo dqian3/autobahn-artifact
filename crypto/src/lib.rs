@@ -11,8 +11,24 @@ use serde::{de, ser, Deserialize, Serialize};
 use std::array::TryFromSliceError;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::sync::oneshot;
+
+/// When true, `Signature::new` returns the zero signature and all `verify*`
+/// methods return `Ok(())`. Set once at node startup from
+/// `Parameters::disable_crypto` (see `node/src/main.rs`). Used for
+/// no-crypto throughput baselines; do not enable in production.
+static CRYPTO_DISABLED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_crypto_disabled(disabled: bool) {
+    CRYPTO_DISABLED.store(disabled, Ordering::Relaxed);
+}
+
+#[inline]
+fn crypto_disabled() -> bool {
+    CRYPTO_DISABLED.load(Ordering::Relaxed)
+}
 
 #[cfg(test)]
 #[path = "tests/crypto_tests.rs"]
@@ -191,6 +207,9 @@ pub struct Signature {
 
 impl Signature {
     pub fn new(digest: &Digest, secret: &SecretKey) -> Self {
+        if crypto_disabled() {
+            return Signature::default();
+        }
         let keypair = dalek::Keypair::from_bytes(&secret.0).expect("Unable to load secret key");
         let sig = keypair.sign(&digest.0).to_bytes();
         let part1 = sig[..32].try_into().expect("Unexpected signature length");
@@ -206,6 +225,9 @@ impl Signature {
     }
 
     pub fn verify(&self, digest: &Digest, public_key: &PublicKey) -> Result<(), CryptoError> {
+        if crypto_disabled() {
+            return Ok(());
+        }
         let signature = ed25519::signature::Signature::from_bytes(&self.flatten())?;
         let key = dalek::PublicKey::from_bytes(&public_key.0)?;
         key.verify_strict(&digest.0, &signature)
@@ -215,6 +237,13 @@ impl Signature {
     where
         I: IntoIterator<Item = &'a (PublicKey, Signature)>,
     {
+        if crypto_disabled() {
+            // Drain the iterator anyway so callers that rely on side effects
+            // (none today, but cheap insurance) still see them.
+            for _ in votes.into_iter() {}
+            let _ = digest;
+            return Ok(());
+        }
         let mut messages: Vec<&[u8]> = Vec::new();
         let mut signatures: Vec<dalek::Signature> = Vec::new();
         let mut keys: Vec<dalek::PublicKey> = Vec::new();
@@ -230,6 +259,11 @@ impl Signature {
     where
         I: IntoIterator<Item = &'a (PublicKey, Signature)>,
     {
+        if crypto_disabled() {
+            for _ in votes.into_iter() {}
+            let _ = digests;
+            return Ok(());
+        }
         let mut messages: Vec<&[u8]> = Vec::new();
         let mut signatures: Vec<dalek::Signature> = Vec::new();
         let mut keys: Vec<dalek::PublicKey> = Vec::new();

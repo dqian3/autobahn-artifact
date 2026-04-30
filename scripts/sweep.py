@@ -341,6 +341,10 @@ def main():
                     help="Override benchmark duration (seconds)")
     ap.add_argument("--faults", type=int, default=None,
                     help="Override fault count")
+    ap.add_argument("--disable-crypto", action="store_true", default=False,
+                    dest="disable_crypto",
+                    help="Override params.disable_crypto=true for all runs "
+                         "(replica sign/verify and client tx signing become no-ops).")
     ap.add_argument("--upload", action="store_true",
                     help="Build and upload binaries before sweeping")
     ap.add_argument("--output-dir", default=None, dest="output_dir",
@@ -435,6 +439,8 @@ def main():
             run_config["bench"]["faults"] = faults
             if args.duration is not None:
                 run_config["bench"]["duration"] = args.duration
+            if args.disable_crypto:
+                run_config["params"]["disable_crypto"] = True
 
             run_dir = os.path.join(round_dir, f"run_{rate}_{tx_size}")
 
