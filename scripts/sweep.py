@@ -29,7 +29,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from autobahn_config import load_config, get_all_vms
 from remote import load_remote
-from bench import run_benchmark, cmd_upload, build_binaries
+from bench import run_benchmark
 
 
 _NOISE_RE = None
@@ -345,8 +345,6 @@ def main():
                     dest="disable_crypto",
                     help="Override params.disable_crypto=true for all runs "
                          "(replica sign/verify and client tx signing become no-ops).")
-    ap.add_argument("--upload", action="store_true",
-                    help="Build and upload binaries before sweeping")
     ap.add_argument("--output-dir", default=None, dest="output_dir",
                     help="Base directory for sweep output (default: scripts/logs/sweep_<timestamp>)")
     ap.add_argument("--debug", action="store_true",
@@ -375,12 +373,6 @@ def main():
     # Check VMs and pre-discover zones
     print("=== Checking VM status ===")
     remote.check_vms_running(vms)
-
-    # Upload if requested
-    if args.upload:
-        print("\n=== Building and uploading binaries ===")
-        upload_args = argparse.Namespace(config=args.config)
-        cmd_upload(upload_args)
 
     # Build sweep matrix
     tx_sizes = args.tx_sizes or [config["bench"]["tx_size"]]

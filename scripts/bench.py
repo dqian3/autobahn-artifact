@@ -3,15 +3,19 @@
 
 Subcommands:
     install     Install dependencies and clone repo on all VMs
-    upload      Build locally and upload binaries to VMs
     remote      Run a full benchmark on remote VMs
     kill        Kill all autobahn processes on VMs
     vm-start    Start VMs
     vm-stop     Stop VMs
     vm-status   Show VM status
 
+Binary distribution lives in the parent project's run_experiment.py
+(`_autobahn_upload_via_vm`): it builds on a cluster VM (matching glibc)
+and scp-fans the resulting `node` + `benchmark_client` to every VM.
+The local-build `upload` subcommand was removed because its locally
+built binary doesn't match the VMs' older glibc on our test cluster.
+
 Usage:
-    python scripts/bench.py upload --config scripts/configs/gcloud-autobahn.yaml
     python scripts/bench.py remote --config scripts/configs/gcloud-autobahn.yaml
     python scripts/bench.py remote --config scripts/configs/gcloud-autobahn.yaml --rate 100000 --duration 30
 """
@@ -53,7 +57,6 @@ from remote import load_remote
 
 NODE_CRATE = REPO_ROOT / "node"
 BINARY_DIR = REPO_ROOT / "target" / "release"
-MTIME_FILE = Path(__file__).resolve().parent / ".upload_mtimes"
 LOGS_DIR = Path(__file__).resolve().parent / "logs"
 
 
@@ -100,18 +103,6 @@ def generate_keys(node_bin, count):
         with open(filename, "r") as f:
             keys.append(json.load(f))
     return keys
-
-
-def load_mtimes():
-    if MTIME_FILE.exists():
-        with open(MTIME_FILE) as f:
-            return json.load(f)
-    return {}
-
-
-def save_mtimes(mtimes):
-    with open(MTIME_FILE, "w") as f:
-        json.dump(mtimes, f)
 
 
 # ---------------------------------------------------------------------------
@@ -172,55 +163,6 @@ def cmd_install(args):
         print(f"\nERROR: install failed on: {failed}", file=sys.stderr)
         sys.exit(1)
     print(f"\nInstalled on {len(vms)} VMs successfully.")
-
-
-def cmd_upload(args):
-    """Build locally and upload binaries to all VMs."""
-    config = load_config(args.config)
-    remote = load_remote(config)
-    vms = get_all_vms(config)
-
-    remote.check_vms_running(vms)
-
-    node_bin, client_bin = build_binaries()
-    binaries = {"node": node_bin, "benchmark_client": client_bin}
-
-    mtimes = load_mtimes()
-    uploads = []
-    for name, path in binaries.items():
-        mtime = os.path.getmtime(path)
-        for vm in vms:
-            cache_key = f"{vm}:{name}"
-            if mtimes.get(cache_key) == mtime:
-                continue
-            uploads.append((vm, name, path, mtime, cache_key))
-
-    if not uploads:
-        print("All binaries up to date on all VMs.")
-        return
-
-    print(f"Uploading {len(uploads)} binary/VM pairs...")
-
-    def _upload_one(vm, name, path, mtime, cache_key):
-        remote.scp_upload(path, vm, f"~/{name}")
-        remote.ssh(vm, f"chmod +x ~/{name}")
-        return cache_key, mtime
-
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {
-            pool.submit(_upload_one, *u): u[0] for u in uploads
-        }
-        for f in as_completed(futures):
-            vm = futures[f]
-            try:
-                cache_key, mtime = f.result()
-                mtimes[cache_key] = mtime
-                print(f"  {cache_key}: uploaded")
-            except Exception as e:
-                print(f"  [{vm}] upload failed: {e}")
-
-    save_mtimes(mtimes)
-    print("Upload complete.")
 
 
 def run_benchmark(config, remote, log_dir=None, debug=False):
@@ -517,10 +459,6 @@ def main():
     p = sub.add_parser("install", help="Install deps and clone repo on VMs")
     p.add_argument("--config", required=True, help="YAML config file")
 
-    # upload
-    p = sub.add_parser("upload", help="Build and upload binaries to VMs")
-    p.add_argument("--config", required=True, help="YAML config file")
-
     # remote
     p = sub.add_parser("remote", help="Run benchmark on remote VMs")
     p.add_argument("--config", required=True, help="YAML config file")
@@ -551,7 +489,6 @@ def main():
 
     commands = {
         "install": cmd_install,
-        "upload": cmd_upload,
         "remote": cmd_remote,
         "kill": cmd_kill,
         "vm-start": cmd_vm_start,
