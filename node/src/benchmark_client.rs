@@ -184,9 +184,18 @@ impl Client {
 
         'main: loop {
             interval.as_mut().tick().await;
+            // Sender task exits on TCP write error (worker disconnected /
+            // backpressured under saturation); when it does, channel_rx is
+            // dropped and channel_tx becomes closed. Bail cleanly here so
+            // we don't keep spawning doomed producers (which would each
+            // hit a SendError and panic via .unwrap()).
+            if channel_tx.is_closed() {
+                warn!("Send channel closed (worker likely overloaded); stopping client");
+                break 'main;
+            }
             let now = Instant::now();
 
-            let mut tx = tx.clone();     
+            let mut tx = tx.clone();
             let counter_copy = counter.clone();
             let mut r_copy = r.clone();
             let size = self.size;
@@ -218,8 +227,11 @@ impl Client {
                         tx.split().freeze()
                     };
 
-                    
-                    channel_tx.send(msg).await.unwrap();
+                    if channel_tx.send(msg).await.is_err() {
+                        // Channel closed mid-burst — sender task already
+                        // logged the underlying TCP error. Exit silently.
+                        return;
+                    }
 
                 }
             });
