@@ -10,6 +10,8 @@ use futures::sink::SinkExt as _;
 use log::{info, warn};
 use rand::Rng;
 use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::net::TcpStream;
 use tokio::time::{interval, sleep, Duration, Instant};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
@@ -156,8 +158,10 @@ impl Client {
             .await
             .context(format!("failed to connect to {}", self.target))?;
 
-        // Create a channel so we can sign transactions concurrently and send from a single task
-        let (channel_tx, mut channel_rx) = mpsc::channel(100);
+        // ~1s of offered load. Signer uses try_send; never blocks.
+        let buf_size = (self.rate as usize).max(4096);
+        let (channel_tx, mut channel_rx) = mpsc::channel(buf_size);
+        let dropped = Arc::new(AtomicU64::new(0));
 
         // Submit all transactions.
         let burst = self.rate / PRECISION;
@@ -202,6 +206,7 @@ impl Client {
             let mut sig_copy = self.signature_service.clone();
 
             let channel_tx = channel_tx.clone();
+            let dropped_task = dropped.clone();
 
             tokio::spawn(async move {
                 for x in 0..burst {
@@ -227,12 +232,13 @@ impl Client {
                         tx.split().freeze()
                     };
 
-                    if channel_tx.send(msg).await.is_err() {
-                        // Channel closed mid-burst — sender task already
-                        // logged the underlying TCP error. Exit silently.
-                        return;
+                    match channel_tx.try_send(msg) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            dropped_task.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => return,
                     }
-
                 }
             });
             
@@ -241,7 +247,13 @@ impl Client {
                 warn!("Transaction rate too high for this client");
             }
 
-            
+            // Log dropped tx count once per second.
+            if counter % PRECISION == 0 {
+                let n = dropped.load(Ordering::Relaxed);
+                if n > 0 {
+                    info!("Producer dropped {} txs (channel full)", n);
+                }
+            }
 
             r += burst;
             counter += 1;
