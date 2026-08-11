@@ -162,6 +162,15 @@ impl Client {
         let buf_size = (self.rate as usize).max(4096);
         let (channel_tx, mut channel_rx) = mpsc::channel(buf_size);
         let dropped = Arc::new(AtomicU64::new(0));
+        // Send-side counters, mirroring the aspen/flutter clients so the same
+        // offered-load analysis applies here. `produced` counts txs the burst
+        // loop generated, `dispatched` counts the ones that made it into the
+        // channel — their difference is `dropped`. This client is
+        // fire-and-forget (no per-tx completion tracking), so there is no
+        // `completed` to report; delivered throughput still comes from the
+        // node-side commit logs.
+        let produced = Arc::new(AtomicU64::new(0));
+        let dispatched = Arc::new(AtomicU64::new(0));
 
         // Submit all transactions.
         let burst = self.rate / PRECISION;
@@ -207,6 +216,8 @@ impl Client {
 
             let channel_tx = channel_tx.clone();
             let dropped_task = dropped.clone();
+            let produced_task = produced.clone();
+            let dispatched_task = dispatched.clone();
 
             tokio::spawn(async move {
                 for x in 0..burst {
@@ -232,8 +243,11 @@ impl Client {
                         tx.split().freeze()
                     };
 
+                    produced_task.fetch_add(1, Ordering::Relaxed);
                     match channel_tx.try_send(msg) {
-                        Ok(()) => {}
+                        Ok(()) => {
+                            dispatched_task.fetch_add(1, Ordering::Relaxed);
+                        }
                         Err(mpsc::error::TrySendError::Full(_)) => {
                             dropped_task.fetch_add(1, Ordering::Relaxed);
                         }
@@ -247,12 +261,19 @@ impl Client {
                 warn!("Transaction rate too high for this client");
             }
 
-            // Log dropped tx count once per second.
+            // Send-side counters once per second. Emitted unconditionally
+            // (not only when drops occur) because the offered-load analysis
+            // differences consecutive samples: a run that never drops still
+            // needs the produced/dispatched series to show whether the client
+            // actually kept up with the configured rate.
+            // NOTE: This log entry is used to compute performance.
             if counter % PRECISION == 0 {
-                let n = dropped.load(Ordering::Relaxed);
-                if n > 0 {
-                    info!("Producer dropped {} txs (channel full)", n);
-                }
+                info!(
+                    "client_stats produced={} dispatched={} dropped={}",
+                    produced.load(Ordering::Relaxed),
+                    dispatched.load(Ordering::Relaxed),
+                    dropped.load(Ordering::Relaxed),
+                );
             }
 
             r += burst;
