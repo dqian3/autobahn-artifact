@@ -281,6 +281,14 @@ impl BatchMaker {
         #[cfg(feature = "benchmark")]
         let size = self.current_batch_size;
 
+        // Transactions in this batch, logged so the benchmark parser can count
+        // them directly. It used to divide the byte total by the configured
+        // transaction size, but a transaction on the wire is the payload plus
+        // the 64-byte signature the client appends, so that count came out
+        // (size + 64) / size too high -- 5x at a 16 B payload.
+        #[cfg(feature = "benchmark")]
+        let tx_count = self.current_batch.len();
+
         // Look for sample txs (they all start with 0) and gather their txs id (the next 8 bytes).
         #[cfg(feature = "benchmark")]
         let tx_ids: Vec<_> = self
@@ -316,6 +324,9 @@ impl BatchMaker {
 
             // NOTE: This log entry is used to compute performance.
             info!("Batch {:?} contains {} B", digest, size);
+
+            // NOTE: This log entry is used to compute performance.
+            info!("Batch {:?} contains {} txs", digest, tx_count);
         }
 
         // Broadcast the batch through the network.

@@ -54,10 +54,25 @@ class LogParser:
                 results = p.map(self._parse_workers, workers)
         except (ValueError, IndexError, AttributeError) as e:
             raise ParseError(f'Failed to parse workers\' logs: {e}')
-        sizes, self.received_samples, workers_ips = zip(*results)
+        sizes, counts, self.received_samples, workers_ips = zip(*results)
         self.sizes = {
             k: v for x in sizes for k, v in x.items() if k in self.commits
         }
+        self.tx_counts = {
+            k: v for x in counts for k, v in x.items() if k in self.commits
+        }
+        # Logs written before the workers tallied transactions per batch have
+        # the byte line but not the count line. Throughput is computed from the
+        # count now, so those would silently come back as zero; say what is
+        # actually wrong instead.
+        if self.sizes and not self.tx_counts:
+            raise ParseError(
+                'Worker logs carry batch sizes but no transaction counts. '
+                'They predate the "Batch ... contains N txs" log line, so '
+                'throughput cannot be computed without dividing bytes by the '
+                'transaction size, which overcounts the appended signature. '
+                'Re-run against a worker built from this revision.'
+            )
 
         # Determine whether the primary and the workers are collocated.
         self.collocate = set(primary_ips) == set(workers_ips)
@@ -144,16 +159,31 @@ class LogParser:
         tmp = findall(r'Batch ([^ ]+) contains (\d+) B', log)
         sizes = {d: int(s) for d, s in tmp}
 
+        tmp = findall(r'Batch ([^ ]+) contains (\d+) txs', log)
+        counts = {d: int(c) for d, c in tmp}
+
         tmp = findall(r'Batch ([^ ]+) contains sample tx (\d+)', log)
         samples = {int(s): d for d, s in tmp}
 
         ip = search(r'booted on (\d+.\d+.\d+.\d+)', log).group(1)
 
-        return sizes, samples, ip
+        return sizes, counts, samples, ip
 
     def _to_posix(self, string):
         x = datetime.fromisoformat(string.replace('Z', '+00:00'))
         return datetime.timestamp(x)
+
+    def _committed_transactions(self):
+        """Transactions in the committed batches.
+
+        Counted from the workers' own per-batch tally. Deriving it as
+        `bytes / transaction_size` instead -- which is what this did -- counts
+        the 64-byte signature the client appends to every transaction as if it
+        were payload, so the count comes out (size + 64) / size too high: 5x at
+        a 16 B payload, 1.06x at 1 KB. That made autobahn appear to deliver
+        several times the offered rate.
+        """
+        return sum(self.tx_counts.values())
 
     def _consensus_throughput(self):
         if not self.commits:
@@ -162,7 +192,7 @@ class LogParser:
         duration = end - start
         bytes = sum(self.sizes.values())
         bps = bytes / duration
-        tps = bps / self.size[0]
+        tps = self._committed_transactions() / duration
         return tps, bps, duration
 
     def _consensus_latency(self):
@@ -176,7 +206,7 @@ class LogParser:
         duration = end - start
         bytes = sum(self.sizes.values())
         bps = bytes / duration
-        tps = bps / self.size[0]
+        tps = self._committed_transactions() / duration
         return tps, bps, duration
 
     def _end_to_end_latency(self):
