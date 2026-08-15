@@ -53,12 +53,25 @@ impl Processor {
                     continue;
                 }
 
+                // Honour the no-crypto switch. The clients stop signing when it
+                // is set (`Signature::new` returns the zero signature), so
+                // verifying here would fail every batch and, via the `return`
+                // below, stop this worker processing anything ever again --
+                // a no-crypto run that measured nothing.
+                if crypto::is_crypto_disabled() {
+                    tx_verified
+                        .send(serialized)
+                        .await
+                        .expect("Failed to send batch to be verified");
+                    continue;
+                }
+
                 if let WorkerMessage::Batch(id, batch) = bincode::deserialize(&serialized).expect("Failed to deserialize batch") {
                     let key = ed25519_dalek::PublicKey::from_bytes(&id.0).expect("Failed to load pub key");
-    
+
 
                     let mut handles = Vec::new();
-                
+
                     for tx in batch.into_iter() {
                         let handle = tokio::task::spawn_blocking(move || {
                             let (msg, sig) = tx.split_at(tx.len() - 64);
@@ -83,13 +96,20 @@ impl Processor {
                                 tx_verified.send(serialized).await
                                     .expect("Failed to send batch to be verified");
                             } else {
+                                // `continue`, not `return`. This runs inside
+                                // the batch-receive loop, so returning ended
+                                // the task: one bad batch and this worker
+                                // stopped processing every later batch too,
+                                // for the rest of the run. Dropping the batch
+                                // is the intended behaviour -- it is not
+                                // stored and never reaches the primary.
                                 debug!("Some signatures failed: {:?}", verifications);
-                                return;
+                                continue;
                             }
                         }
                         Err(e) => {
                             debug!("A blocking task panicked or failed: {:?}", e);
-                            return;
+                            continue;
                         }
                     }
                 }

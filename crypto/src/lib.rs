@@ -30,6 +30,19 @@ fn crypto_disabled() -> bool {
     CRYPTO_DISABLED.load(Ordering::Relaxed)
 }
 
+/// Public form of the above, for the one verification path that cannot go
+/// through `Signature::verify`.
+///
+/// The worker verifies per-transaction client signatures against raw dalek
+/// types (`worker::processor`), because a transaction carries its signature as
+/// a bare 64-byte suffix rather than as a `Signature`. That path therefore
+/// missed the switch above entirely: with `disable_crypto` set the clients
+/// stop signing but the workers kept verifying, so every batch failed.
+#[inline]
+pub fn is_crypto_disabled() -> bool {
+    crypto_disabled()
+}
+
 #[cfg(test)]
 #[path = "tests/crypto_tests.rs"]
 pub mod crypto_tests;

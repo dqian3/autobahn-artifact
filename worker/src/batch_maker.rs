@@ -207,8 +207,22 @@ impl BatchMaker {
 
         // Spawn a task to read from clients and verify signed transactions
         tokio::spawn(async move {
+            // Like the worker's processor, this verifies raw dalek types
+            // rather than going through `crypto::Signature::verify`, so it
+            // does not see the no-crypto switch on its own. With
+            // `disable_crypto` the clients send the zero signature, every
+            // transaction failed here, and the `return` below tore down this
+            // task -- which closed the channel the transaction receiver sends
+            // on, so the worker panicked on its first request and the run
+            // reported 0 TPS.
+            let skip_verify = crypto::is_crypto_disabled();
             while let Some(transaction) = rx_transaction.recv().await {
-                let (msg, sig) = transaction.split_at(transaction.len() - 64); 
+                if skip_verify {
+                    channel_tx.send(transaction).await.expect("Failed to send transaction");
+                    continue;
+                }
+
+                let (msg, sig) = transaction.split_at(transaction.len() - 64);
 
                 let digest = msg.digest();
 
@@ -220,8 +234,12 @@ impl BatchMaker {
                         channel_tx.send(transaction).await.expect("Failed to send transaction");
                     }
                     Err(e) => {
+                        // `continue`, not `return`: this is the receive loop
+                        // for every client transaction this worker will ever
+                        // see. Returning made one unverifiable transaction
+                        // silently disable the worker for the rest of the run.
                         debug!("Failed to verify client transaction {}", e);
-                        return;
+                        continue;
                     }
                 }
             }
