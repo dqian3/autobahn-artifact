@@ -3,14 +3,20 @@
 #![allow(unused_imports)]
 // Copyright(C) Facebook, Inc. and its affiliates.
 use anyhow::{Context, Result};
+use bytes::Bytes;
 use clap::{crate_name, crate_version, App, AppSettings, ArgMatches, SubCommand};
 use config::Export as _;
 use config::Import as _;
 use config::{Committee, KeyPair, Parameters, WorkerId};
-use crypto::{set_crypto_disabled, SignatureService};
+use crypto::{set_crypto_disabled, Digest, PublicKey, SignatureService};
 use env_logger::Env;
+use log::warn;
+use network::SimpleSender;
 use primary::Header;
 use primary::Primary;
+use primary::PrimaryWorkerMessage;
+use std::collections::HashMap;
+use std::net::SocketAddr;
 use store::Store;
 use tokio::sync::mpsc::{channel, Receiver};
 use worker::Worker;
@@ -98,6 +104,11 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
     // each request.
     set_crypto_disabled(parameters.disable_crypto);
 
+    // Keep a copy of the raw key before the signature service takes ownership:
+    // the worker's client-reply path signs one reply per committed request and
+    // has to do it across the blocking pool, not on the service's single task.
+    let secret_bytes = keypair.secret.to_bytes();
+
     // The `SignatureService` provides signatures on input digests.
     let signature_service = SignatureService::new(keypair.secret);
 
@@ -171,21 +182,73 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 .unwrap()
                 .parse::<WorkerId>()
                 .context("The worker id must be a positive integer")?;
-            Worker::spawn(keypair.name, id, committee, parameters, store);
+            Worker::spawn(keypair.name, id, committee.clone(), parameters.clone(), store, secret_bytes);
         }
         _ => unreachable!(),
     }
 
     // Analyze the consensus' output.
-    analyze(rx_output).await;
+    analyze(rx_output, name, committee, parameters.client_reply_count).await;
 
     // If this expression is reached, the program ends and all other tasks terminate.
     unreachable!();
 }
 
-/// Receives an ordered list of certificates and apply any application-specific logic.
-async fn analyze(mut rx_output: Receiver<Header>) {
-    while let Some(_header) = rx_output.recv().await {
-        // NOTE: Here goes the application logic.
+/// Receives an ordered list of committed headers and applies any
+/// application-specific logic.
+///
+/// The application logic here is the client reply path. A committed header
+/// names its batches by digest only; the transactions themselves sit in the
+/// worker's store, in a different process. So this tells our own workers
+/// which batches committed and leaves them to answer the clients.
+///
+/// Only the primary ever receives on this channel — the worker subcommand
+/// leaves it idle — so this loop is the primary's commit hook.
+async fn analyze(
+    mut rx_output: Receiver<Header>,
+    name: PublicKey,
+    committee: Committee,
+    client_reply_count: usize,
+) {
+    if client_reply_count == 0 {
+        // Published behaviour: clients are send-only, so there is nothing to
+        // tell the workers. Drain the channel so the committer never blocks.
+        while rx_output.recv().await.is_some() {}
+        return;
+    }
+
+    let mut network = SimpleSender::new();
+    let mut worker_addresses: HashMap<WorkerId, Option<SocketAddr>> = HashMap::new();
+
+    while let Some(header) = rx_output.recv().await {
+        // Group the header's batches by the worker of ours that stores them.
+        let mut by_worker: HashMap<WorkerId, Vec<Digest>> = HashMap::new();
+        for (digest, worker_id) in &header.payload {
+            by_worker
+                .entry(*worker_id)
+                .or_insert_with(Vec::new)
+                .push(digest.clone());
+        }
+
+        for (worker_id, digests) in by_worker {
+            let address = *worker_addresses.entry(worker_id).or_insert_with(|| {
+                match committee.worker(&name, &worker_id) {
+                    Ok(addresses) => Some(addresses.primary_to_worker),
+                    Err(e) => {
+                        warn!("Cannot notify worker {} of commits: {}", worker_id, e);
+                        None
+                    }
+                }
+            });
+            let address = match address {
+                Some(address) => address,
+                None => continue,
+            };
+
+            let message = PrimaryWorkerMessage::Committed(digests, header.author);
+            let bytes = bincode::serialize(&message)
+                .expect("Failed to serialize our own commit notification");
+            network.send(address, Bytes::from(bytes)).await;
+        }
     }
 }

@@ -63,6 +63,11 @@ pub enum PrimaryWorkerMessage {
     Synchronize(Vec<Digest>, /* target */ PublicKey),
     /// The primary indicates a round update.
     Cleanup(Height),
+    /// The primary indicates that these batches (authored by `author`) have
+    /// committed, so the worker can reply to the clients whose transactions
+    /// they carry. Added last on purpose: bincode numbers enum variants by
+    /// position, so appending keeps the existing two wire-compatible.
+    Committed(Vec<Digest>, /* author */ PublicKey),
 }
 
 /// The messages sent by the workers to their primary.

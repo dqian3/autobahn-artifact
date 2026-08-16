@@ -2,6 +2,7 @@
 #![allow(unused_imports)]
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::batch_maker::{Batch, BatchMaker, Transaction};
+use crate::client_replier::ClientReplier;
 use crate::helper::Helper;
 use crate::primary_connector::PrimaryConnector;
 use crate::processor::{Processor, SerializedBatchMessage};
@@ -31,6 +32,14 @@ pub mod worker_tests;
 /// The default channel capacity for each channel of the worker.
 pub const CHANNEL_CAPACITY: usize = 1_000;
 
+/// Capacity of the commit-notification channel feeding the `ClientReplier`.
+///
+/// Deliberately deep, and fed with a blocking `send`: dropping notifications
+/// would quietly skip the reply signing this path exists to charge for, and
+/// the measurement would come back flattering. If the replier cannot keep up
+/// the backpressure is real and should be visible.
+pub const COMMITTED_CHANNEL_CAPACITY: usize = 10_000;
+
 /// The primary round number.
 // TODO: Move to the primary.
 pub type Round = u64;
@@ -56,6 +65,8 @@ pub struct Worker {
     parameters: Parameters,
     /// The persistent storage.
     store: Store,
+    /// This authority's signing key, used to sign client replies.
+    secret: [u8; 64],
 }
 
 impl Worker {
@@ -65,6 +76,7 @@ impl Worker {
         committee: Committee,
         parameters: Parameters,
         store: Store,
+        secret: [u8; 64],
     ) {
         // Define a worker instance.
         let worker = Self {
@@ -73,6 +85,7 @@ impl Worker {
             committee,
             parameters,
             store,
+            secret,
         };
 
         // Spawn all worker tasks.
@@ -111,6 +124,7 @@ impl Worker {
     /// Spawn all tasks responsible to handle messages from our primary.
     fn handle_primary_messages(&self) {
         let (tx_synchronizer, rx_synchronizer) = channel(CHANNEL_CAPACITY); //channel between PrimaryReceiverHandler and Synchronizer
+        let (tx_committed, rx_committed) = channel(COMMITTED_CHANNEL_CAPACITY); //channel between PrimaryReceiverHandler and ClientReplier
 
         // Receive incoming messages from our primary.
         let mut address = self
@@ -122,8 +136,25 @@ impl Worker {
         Receiver::spawn(
             address,                                    //socket to receive Primary messages from
             /* handler */
-            PrimaryReceiverHandler { tx_synchronizer }, //handler for received Primary messages, forwards them to synchronizer
+            PrimaryReceiverHandler {                    //handler for received Primary messages, forwards them to synchronizer (or, for commits, to the client replier)
+                tx_synchronizer,
+                tx_committed,
+            },
         );
+
+        // The `ClientReplier` answers the clients whose transactions just
+        // committed. Skipped entirely at `client_reply_count: 0`, which is
+        // autobahn as published: send-only clients, no reply signing.
+        if self.parameters.client_reply_count > 0 {
+            ClientReplier::spawn(
+                self.name,
+                self.committee.clone(),
+                self.store.clone(),
+                self.secret,
+                self.parameters.client_reply_count,
+                /* rx_committed */ rx_committed,
+            );
+        }
 
         // The `Synchronizer` is responsible to keep the worker in sync with the others. It handles the commands
         // it receives from the primary (which are mainly notifications that we are out of sync).
@@ -355,6 +386,7 @@ impl MessageHandler for WorkerReceiverHandler {
 #[derive(Clone)]
 struct PrimaryReceiverHandler {
     tx_synchronizer: Sender<PrimaryWorkerMessage>,  //sender channel to connect to synchronizer.
+    tx_committed: Sender<(Vec<Digest>, PublicKey)>, //sender channel to connect to the client replier.
 }
 
 #[async_trait]
@@ -367,9 +399,17 @@ impl MessageHandler for PrimaryReceiverHandler {
         // Deserialize the message and send it to the synchronizer.
         match bincode::deserialize(&serialized) {
             Err(e) => error!("Failed to deserialize primary message: {}", e),
+            Ok(PrimaryWorkerMessage::Committed(digests, author)) => {
+                // Our primary committed these batches. The replier is absent
+                // at `client_reply_count: 0`, in which case our primary never
+                // sends this and a stray one is nothing to fail over.
+                if self.tx_committed.send((digests, author)).await.is_err() {
+                    debug!("Received a commit notification with no client replier running");
+                }
+            },
             Ok(message) => {
                 debug!("Received primary message: {:?}", message);
-                self             
+                self
                     .tx_synchronizer
                     .send(message)
                     .await

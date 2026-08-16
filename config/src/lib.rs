@@ -115,6 +115,23 @@ pub struct Parameters {
     /// startup.
     #[serde(default)]
     pub disable_crypto: bool,
+
+    /// How many replicas sign and send a reply to the client for each
+    /// committed transaction. 0 restores the published behaviour (clients
+    /// are send-only and never hear back). 1 is a single-node ack. f+1 is
+    /// the setting that makes reply signing cost the same as aspen's fast
+    /// path, where every replica signs a reply the client assembles into a
+    /// certificate.
+    ///
+    /// The repliers for a batch are the `client_reply_count` replicas
+    /// starting at the batch's own author in committee order, so the work
+    /// spreads evenly instead of piling onto whichever replica sorts first.
+    #[serde(default = "default_client_reply_count")]
+    pub client_reply_count: usize,
+}
+
+fn default_client_reply_count() -> usize {
+    1
 }
 
 impl Default for Parameters {
@@ -155,6 +172,7 @@ impl Default for Parameters {
             use_exponential_timeouts: false,
 
             disable_crypto: false,
+            client_reply_count: 1,
         }
     }
 }
@@ -178,6 +196,8 @@ impl Parameters {
         info!("Parallel Proposals enabled? {}. K: {}", self.use_parallel_proposals, self.k);
         info!("Ride share enabled? {}. Car timeout: {}", self.use_ride_share, self.car_timeout);
         info!("Crypto disabled? {}", self.disable_crypto);
+        // NOTE: This log entry is used to compute performance.
+        info!("Client reply count set to {}", self.client_reply_count);
     }
 }
 
