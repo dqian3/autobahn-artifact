@@ -169,17 +169,6 @@ impl SecretKey {
             .map_err(|_| base64::DecodeError::InvalidLength)?;
         Ok(Self(array))
     }
-
-    /// The raw dalek keypair bytes.
-    ///
-    /// `SignatureService` takes the key by value and signs on a single task,
-    /// which is fine for the handful of signatures the protocol itself makes
-    /// per round but not for one signature per client request. The client
-    /// reply path needs the bytes so it can build one `dalek::Keypair` up
-    /// front and sign across the blocking pool.
-    pub fn to_bytes(&self) -> [u8; 64] {
-        self.0
-    }
 }
 
 impl Serialize for SecretKey {

@@ -1,20 +1,21 @@
 //! Wire format shared by the benchmark client and the replicas that answer it.
 //!
 //! Autobahn's published client is send-only: it writes transactions at a
-//! target rate and never reads its socket, so a replica pays nothing to
-//! "finish" a request. Aspen's replicas sign a reply per request so the
-//! client can assemble a commit certificate, which is a per-request
-//! signature on every replica. Comparing the two on throughput means making
-//! autobahn do the same work, which needs two things the published protocol
-//! does not have: somewhere to send the reply, and something to send.
+//! target rate and never reads its socket, so a request is never *finished*
+//! from the client's point of view and its latency has to be reconstructed
+//! offline by matching client send logs against commit lines in a primary's
+//! log — two clocks on two machines. Every other protocol in the evaluation
+//! answers its clients and measures latency at one of them. This is the reply
+//! path that lets autobahn do the same.
 //!
-//! **Where.** Each client's reply address travels inside the transaction
-//! itself, at a fixed offset. Putting it in the bytes rather than in a map
-//! on the receiving worker is what lets *any* replica reply: every replica
-//! stores every batch, so every replica can read the address. A worker-side
-//! map would only work on the one worker the client happens to be connected
-//! to. It also means nothing has to be remembered per in-flight request, so
-//! there is no map to bound and no leak when a client disconnects.
+//! **Where a reply goes.** Each client's reply address travels inside the
+//! transaction itself, at a fixed offset. Putting it in the bytes rather than
+//! in a map on the receiving worker is what lets *any* replica reply: every
+//! replica stores every batch, so every replica can read the address. A
+//! worker-side map would only work on the one worker the client happens to be
+//! connected to. It also means nothing has to be remembered per in-flight
+//! request, so there is no map to bound and no leak when a client
+//! disconnects.
 //!
 //! Transaction layout, ahead of the trailing 64-byte client signature:
 //!
@@ -35,12 +36,26 @@
 //! before this change produces: it zero-fills the payload after the id, so
 //! old clients and `client_reply_count: 0` both come out as "no reply".
 //!
-//! **What.** A reply is a signature over the request digest — the same
-//! digest the client signed — tagged with the request's first 9 bytes so the
-//! client can match it. Replies for one committed batch destined for the
-//! same client are concatenated into a single frame, so the network cost
-//! stays proportional to batches while the signing cost stays proportional
-//! to requests, which is the cost being measured.
+//! **What a reply says.** Nothing beyond "this committed": a reply is the
+//! request's own first 9 bytes echoed back, so the client can match it. It is
+//! not signed and carries no proof.
+//!
+//! That is a deliberate choice about what to charge autobahn for. A per-
+//! request signature is the shape *aspen's* fast path is obliged to use,
+//! because it runs no consensus and the client's only evidence is a set of
+//! matching signed replies. Autobahn runs consensus and already produces a
+//! quorum certificate per commit, so making it sign per request would be
+//! billing it for a mechanism its design does not need. Banyan's client
+//! reply is a bare unsigned ack for the same reason, so this also puts the
+//! two competitors on the same footing.
+//!
+//! What remains, and what a run with this path measures, is the cost of
+//! answering at all: the commit notification from primary to worker, reading
+//! the batch back out of the store, and a reply per request on the wire.
+//!
+//! Replies for one committed batch bound for the same client are concatenated
+//! into a single frame, so network cost stays proportional to batches rather
+//! than to requests.
 
 use std::convert::TryInto;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -48,11 +63,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 /// Bytes of the transaction echoed back so the client can match the reply.
 pub const TAG_LEN: usize = 9;
 
-/// An ed25519 signature.
-pub const SIG_LEN: usize = 64;
-
-/// One reply: the request tag followed by the replica's signature.
-pub const REPLY_ENTRY_LEN: usize = TAG_LEN + SIG_LEN;
+/// One reply. The tag is the whole of it.
+pub const REPLY_ENTRY_LEN: usize = TAG_LEN;
 
 /// Offset of the client's reply address within a transaction.
 pub const REPLY_ADDR_OFFSET: usize = TAG_LEN;
@@ -132,5 +144,10 @@ mod tests {
     #[test]
     fn a_short_transaction_asks_for_no_reply() {
         assert_eq!(decode_reply_addr(&vec![1u8; MIN_TX_LEN - 1]), None);
+    }
+
+    #[test]
+    fn ipv6_is_refused_rather_than_truncated() {
+        assert!(encode_reply_addr(&"[::1]:5107".parse().unwrap()).is_none());
     }
 }

@@ -33,12 +33,11 @@ use worker::client_reply::{
 
 /// Send times of the sampled transactions still awaiting a reply.
 ///
-/// Only the sampled transactions are tracked. Every committed transaction
-/// gets a signed reply — that is the replica-side cost being measured — but
-/// keeping a send time for all of them would put a hash-map insert and a
-/// lock on the client's hot path at tens of thousands of transactions a
-/// second, and turn the client into the thing under measurement. The
-/// existing log-derived latency samples at exactly the same rate.
+/// Only the sampled transactions are tracked. Every committed transaction is
+/// replied to, but keeping a send time for all of them would put a hash-map
+/// insert and a lock on the client's hot path at tens of thousands of
+/// transactions a second, and turn the client into the thing under
+/// measurement. The existing log-derived latency samples at the same rate.
 type SampleTimes = Arc<Mutex<HashMap<u64, Instant>>>;
 
 
@@ -187,12 +186,9 @@ struct Client {
 /// Read replies off one replica's connection for as long as it stays open.
 ///
 /// Replies arrive in batches — one frame per committed batch per client — of
-/// fixed-width entries: the request's first 9 bytes followed by the
-/// replica's signature over the request digest. The signature is carried but
-/// not verified here. Verifying it is client-side work; loading the client
-/// with per-request crypto is how a client-side ceiling gets mistaken for a
-/// replica-side one, and the number this whole path exists to produce is a
-/// replica-side one.
+/// fixed-width entries, each the request's own first 9 bytes echoed back so
+/// it can be matched. Nothing else: the reply is a bare ack, unsigned and
+/// carrying no proof (see `worker::client_reply` for why).
 async fn read_replies(stream: TcpStream, samples: SampleTimes, replied: Arc<AtomicU64>) {
     let mut transport = Framed::new(stream, LengthDelimitedCodec::new());
     while let Some(frame) = transport.next().await {
@@ -411,10 +407,10 @@ impl Client {
             // actually kept up with the configured rate.
             // NOTE: This log entry is used to compute performance.
             //
-            // `replied` counts the signed replies that came back. With one
-            // replier per request it tracks committed throughput; with f+1 it
-            // is that many times larger. It is a cross-check on the
-            // commit-log throughput, not a replacement for it.
+            // `replied` counts the acks that came back. With one replier per
+            // request it tracks committed throughput; with more repliers it is
+            // that many times larger. It is a cross-check on the commit-log
+            // throughput, not a replacement for it.
             if counter % PRECISION == 0 {
                 info!(
                     "client_stats produced={} dispatched={} dropped={} replied={}",

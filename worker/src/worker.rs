@@ -35,9 +35,9 @@ pub const CHANNEL_CAPACITY: usize = 1_000;
 /// Capacity of the commit-notification channel feeding the `ClientReplier`.
 ///
 /// Deliberately deep, and fed with a blocking `send`: dropping notifications
-/// would quietly skip the reply signing this path exists to charge for, and
-/// the measurement would come back flattering. If the replier cannot keep up
-/// the backpressure is real and should be visible.
+/// would quietly skip replies this path exists to account for, and the
+/// measurement would come back flattering. If the replier cannot keep up the
+/// backpressure is real and should be visible.
 pub const COMMITTED_CHANNEL_CAPACITY: usize = 10_000;
 
 /// The primary round number.
@@ -65,8 +65,6 @@ pub struct Worker {
     parameters: Parameters,
     /// The persistent storage.
     store: Store,
-    /// This authority's signing key, used to sign client replies.
-    secret: [u8; 64],
 }
 
 impl Worker {
@@ -76,7 +74,6 @@ impl Worker {
         committee: Committee,
         parameters: Parameters,
         store: Store,
-        secret: [u8; 64],
     ) {
         // Define a worker instance.
         let worker = Self {
@@ -85,7 +82,6 @@ impl Worker {
             committee,
             parameters,
             store,
-            secret,
         };
 
         // Spawn all worker tasks.
@@ -144,13 +140,12 @@ impl Worker {
 
         // The `ClientReplier` answers the clients whose transactions just
         // committed. Skipped entirely at `client_reply_count: 0`, which is
-        // autobahn as published: send-only clients, no reply signing.
+        // autobahn as published: send-only clients, no reply at all.
         if self.parameters.client_reply_count > 0 {
             ClientReplier::spawn(
                 self.name,
                 self.committee.clone(),
                 self.store.clone(),
-                self.secret,
                 self.parameters.client_reply_count,
                 /* rx_committed */ rx_committed,
             );

@@ -116,12 +116,16 @@ pub struct Parameters {
     #[serde(default)]
     pub disable_crypto: bool,
 
-    /// How many replicas sign and send a reply to the client for each
-    /// committed transaction. 0 restores the published behaviour (clients
-    /// are send-only and never hear back). 1 is a single-node ack. f+1 is
-    /// the setting that makes reply signing cost the same as aspen's fast
-    /// path, where every replica signs a reply the client assembles into a
-    /// certificate.
+    /// How many replicas send a reply to the client for each committed
+    /// transaction. 0 restores the published behaviour: clients are
+    /// send-only and never hear back, so latency has to be reconstructed
+    /// from two machines' logs. 1 is a single-node ack, the same shape
+    /// banyan's client reply has.
+    ///
+    /// Replies are not signed. A per-request signature is what aspen's fast
+    /// path is obliged to do, having no consensus to borrow a certificate
+    /// from; autobahn does run consensus, so charging it a signature per
+    /// request would price a mechanism it does not need.
     ///
     /// The repliers for a batch are the `client_reply_count` replicas
     /// starting at the batch's own author in committee order, so the work

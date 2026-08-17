@@ -104,11 +104,6 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
     // each request.
     set_crypto_disabled(parameters.disable_crypto);
 
-    // Keep a copy of the raw key before the signature service takes ownership:
-    // the worker's client-reply path signs one reply per committed request and
-    // has to do it across the blocking pool, not on the service's single task.
-    let secret_bytes = keypair.secret.to_bytes();
-
     // The `SignatureService` provides signatures on input digests.
     let signature_service = SignatureService::new(keypair.secret);
 
@@ -182,7 +177,7 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 .unwrap()
                 .parse::<WorkerId>()
                 .context("The worker id must be a positive integer")?;
-            Worker::spawn(keypair.name, id, committee.clone(), parameters.clone(), store, secret_bytes);
+            Worker::spawn(keypair.name, id, committee.clone(), parameters.clone(), store);
         }
         _ => unreachable!(),
     }
