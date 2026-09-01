@@ -59,6 +59,12 @@ impl<Handler: MessageHandler> Receiver<Handler> {
                     continue;
                 }
             };
+            // Small frames -- votes, acks, a 16 B transaction -- are exactly
+            // what Nagle holds back until the previous segment is acknowledged,
+            // which costs a round trip per message on a WAN link.
+            if let Err(e) = socket.set_nodelay(true) {
+                warn!("Failed to set TCP_NODELAY for {}: {}", peer, e);
+            }
             info!("Incoming connection established with {}", peer);
             Self::spawn_runner(socket, peer, self.handler.clone()).await;
         }

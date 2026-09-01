@@ -230,6 +230,9 @@ async fn serve_replies(listener: TcpListener, samples: SampleTimes, replied: Arc
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
+                if let Err(e) = stream.set_nodelay(true) {
+                    warn!("Failed to set TCP_NODELAY for {}: {}", peer, e);
+                }
                 info!("Replica {} connected to send replies", peer);
                 tokio::spawn(read_replies(stream, samples.clone(), replied.clone()));
             }
@@ -282,6 +285,13 @@ impl Client {
         let stream = TcpStream::connect(self.target)
             .await
             .context(format!("failed to connect to {}", self.target))?;
+        // A 16 B transaction every ~12 ms is the worst case for Nagle: each
+        // write waits for the previous segment's ACK, so the client's send
+        // costs a round trip instead of a hop.  aspen's transport disables it
+        // (crates/network/src/{sender,receiver}.rs); this did not.
+        if let Err(e) = stream.set_nodelay(true) {
+            warn!("Failed to set TCP_NODELAY for {}: {}", self.target, e);
+        }
 
         // ~1s of offered load. Signer uses try_send; never blocks.
         let buf_size = (self.rate as usize).max(4096);
