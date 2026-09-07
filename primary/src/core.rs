@@ -1252,7 +1252,14 @@ impl Core {
                     }
                     else{
                         debug!("enough coverage!");
+                        // TRACE: the send side of the prepare round trip. The
+                        // decision to propose is logged above; this is the last
+                        // point before the message is handed to the network, so
+                        // the two together bound how much of the observed round
+                        // trip is ours rather than the wire.
+                        debug!("TRACE prepare_send slot {} by {}", slot + 1, self.name);
                         self.send_consensus_req(new_prepare_instance).await?;
+                        debug!("TRACE prepare_sent slot {} by {}", slot + 1, self.name);
                     }
                     
                     return Ok(());
@@ -1563,6 +1570,7 @@ impl Core {
         } 
         else {
             debug!("Send consensus vote to replica {}", author);
+            debug!("TRACE vote_send slot {} to {} by {}", slot, author, self.name);
 
             
             /*let address = self
@@ -1604,6 +1612,12 @@ impl Core {
 
                 // Check if this prepare message can be used for a ticket to propose in the next slot
                 // TODO: Remove from process_header
+                // TRACE: the receive side. Paired with prepare_send on the
+                // leader, this splits the round trip into leader->follower and
+                // follower->leader; the harness syncs clocks, so the one-way
+                // halves are comparable across machines.
+                debug!("TRACE prepare_recv slot {} at {}", slot, self.name);
+
                 let x = self.is_prepare_ticket_ready(prepare_message).await;
                 // if !self.is_prepare_ticket_ready(prepare_message).await.unwrap() {
                 //     //println!("prepare ticket not ready");
