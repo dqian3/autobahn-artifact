@@ -293,8 +293,15 @@ impl Client {
             warn!("Failed to set TCP_NODELAY for {}: {}", self.target, e);
         }
 
-        // ~1s of offered load. Signer uses try_send; never blocks.
-        let buf_size = (self.rate as usize).max(4096);
+        // Sized so it never binds: a whole run's worth of offered load, with a
+        // floor for slow clients. The previous `max(rate, 4096)` was about one
+        // second at a fast client and six at a slow one, so the cap tightened
+        // as the committee grew and per-client rate fell -- the client shed
+        // load at a rate that depended on committee size. aspen's clients run
+        // uncapped (`max_in_flight: 0`), so a cap here measured the two
+        // protocols by different rules under overload. `dropped` stays, and
+        // should now read zero; a non-zero value means this is still binding.
+        let buf_size = (self.rate as usize * 120).max(200_000);
         let (channel_tx, mut channel_rx) = mpsc::channel(buf_size);
         let dropped = Arc::new(AtomicU64::new(0));
         // Send-side counters, mirroring the aspen/flutter clients so the same
