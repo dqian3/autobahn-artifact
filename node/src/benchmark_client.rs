@@ -28,17 +28,40 @@ use config::KeyPair;
 use config::Import as _;
 
 use worker::client_reply::{
-    encode_reply_addr, KIND_SAMPLE, REPLY_ADDR_LEN, REPLY_ENTRY_LEN, TAG_LEN,
+    encode_reply_addr, KIND_SAMPLE, MAX_REPLIERS, REPLY_ADDR_LEN, REPLY_ENTRY_LEN,
+    REPLY_HEADER_LEN, TAG_LEN,
 };
 
 /// Send times of the sampled transactions still awaiting a reply.
 ///
-/// Only the sampled transactions are tracked. Every committed transaction is
-/// replied to, but keeping a send time for all of them would put a hash-map
-/// insert and a lock on the client's hot path at tens of thousands of
-/// transactions a second, and turn the client into the thing under
-/// measurement. The existing log-derived latency samples at the same rate.
+/// Only the sampled transactions are timed. Keeping a send time for all of
+/// them would put a hash-map insert and a lock on the client's send path at
+/// tens of thousands of transactions a second, and turn the client into the
+/// thing under measurement. The existing log-derived latency samples at the
+/// same rate.
 type SampleTimes = Arc<Mutex<HashMap<u64, Instant>>>;
+
+/// How long a transaction may hold fewer than `quorum` replies before the
+/// client gives up on it.
+const PARTIAL_REPLY_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Reply-side state shared by every replica's connection.
+struct Replies {
+    /// Distinct replicas that must reply before a transaction counts as
+    /// committed.
+    quorum: usize,
+    samples: SampleTimes,
+    /// Transactions with some but fewer than `quorum` replies, keyed by tag:
+    /// a bit per replier, and when the first reply arrived. Built on the
+    /// reply side only, so the send path stays untouched.
+    partial: Mutex<HashMap<[u8; TAG_LEN], (u64, Instant)>>,
+    /// Transactions that reached `quorum` distinct replies.
+    completed: AtomicU64,
+    /// Reply entries received, from every replier.
+    entries: AtomicU64,
+    /// Transactions dropped from `partial` after PARTIAL_REPLY_TIMEOUT.
+    abandoned: AtomicU64,
+}
 
 
 #[tokio::main]
@@ -53,6 +76,7 @@ async fn main() -> Result<()> {
         .args_from_usage("--key=<FILE> 'The file containing the key information for the benchmark.'")
         .args_from_usage("--disable-crypto 'Skip ed25519 signing of submitted transactions (no-crypto baseline).'")
         .args_from_usage("--reply-addr=[ADDR] 'Address to listen on for committed-request replies. Omit to run send-only, as autobahn publishes it.'")
+        .args_from_usage("--reply-quorum=[INT] 'Distinct replicas that must reply before a transaction counts as committed; match the replicas client_reply_count (default 1).'")
         .get_matches();
 
     env_logger::Builder::from_env(Env::default().default_filter_or("info"))
@@ -90,6 +114,14 @@ async fn main() -> Result<()> {
         ),
         None => None,
     };
+    let reply_quorum = matches
+        .value_of("reply-quorum")
+        .map(|value| value.parse::<usize>())
+        .transpose()
+        .context("The reply quorum must be a positive integer")?
+        .unwrap_or(1)
+        .max(1)
+        .min(MAX_REPLIERS);
 
     let key_file = matches.value_of("key").unwrap();
     let disable_crypto = matches.is_present("disable-crypto");
@@ -139,6 +171,7 @@ async fn main() -> Result<()> {
         signature_service,
         reply_addr,
         reply_bytes,
+        reply_quorum,
     };
 
 
@@ -181,15 +214,21 @@ struct Client {
     reply_addr: Option<SocketAddr>,
     /// That address, in the form embedded in each transaction.
     reply_bytes: [u8; REPLY_ADDR_LEN],
+    /// Distinct replicas that must reply before a transaction counts.
+    reply_quorum: usize,
 }
 
 /// Read replies off one replica's connection for as long as it stays open.
 ///
-/// Replies arrive in batches — one frame per committed batch per client — of
-/// fixed-width entries, each the request's own first 9 bytes echoed back so
-/// it can be matched. Nothing else: the reply is a bare ack, unsigned and
-/// carrying no proof (see `worker::client_reply` for why).
-async fn read_replies(stream: TcpStream, samples: SampleTimes, replied: Arc<AtomicU64>) {
+/// Replies arrive in batches — one frame per committed batch per client — led
+/// by the replier's committee index and followed by fixed-width entries, each
+/// the request's own first 9 bytes echoed back so it can be matched. Nothing
+/// else: the reply is a bare ack, unsigned and carrying no proof (see
+/// `worker::client_reply` for why).
+///
+/// A transaction completes on its `quorum`-th distinct replier. A replica
+/// answering twice (a redelivered commit) does not count again.
+async fn read_replies(stream: TcpStream, replies: Arc<Replies>) {
     let mut transport = Framed::new(stream, LengthDelimitedCodec::new());
     while let Some(frame) = transport.next().await {
         let frame = match frame {
@@ -199,21 +238,63 @@ async fn read_replies(stream: TcpStream, samples: SampleTimes, replied: Arc<Atom
                 return;
             }
         };
+        if frame.len() < REPLY_HEADER_LEN {
+            continue;
+        }
+        let bit = 1u64 << (frame[0] as usize % MAX_REPLIERS);
+        let entries = &frame[REPLY_HEADER_LEN..];
 
-        for entry in frame.chunks_exact(REPLY_ENTRY_LEN) {
-            replied.fetch_add(1, Ordering::Relaxed);
-
-            if entry[0] != KIND_SAMPLE {
-                continue;
+        let mut completed = 0u64;
+        let mut sampled = Vec::new();
+        {
+            let mut partial = replies.partial.lock().unwrap();
+            for entry in entries.chunks_exact(REPLY_ENTRY_LEN) {
+                let complete = if replies.quorum <= 1 {
+                    true
+                } else {
+                    let tag: [u8; TAG_LEN] = entry.try_into().expect("entry is one tag");
+                    let complete = match partial.get_mut(&tag) {
+                        Some(slot) => {
+                            if slot.0 & bit != 0 {
+                                false
+                            } else {
+                                slot.0 |= bit;
+                                slot.0.count_ones() as usize >= replies.quorum
+                            }
+                        }
+                        None => {
+                            partial.insert(tag, (bit, Instant::now()));
+                            false
+                        }
+                    };
+                    if complete {
+                        partial.remove(&tag);
+                    }
+                    complete
+                };
+                if !complete {
+                    continue;
+                }
+                completed += 1;
+                if entry[0] == KIND_SAMPLE {
+                    sampled.push(u64::from_be_bytes(
+                        entry[1..TAG_LEN].try_into().expect("tag carries a u64"),
+                    ));
+                }
             }
-            let id = u64::from_be_bytes(
-                entry[1..TAG_LEN].try_into().expect("tag carries a u64"),
-            );
-            // Take it out of the map: a second reply for the same request
-            // (two replicas replying, or a redelivered commit) is counted but
-            // only timed once, against its own send.
-            let sent_at = samples.lock().unwrap().remove(&id);
-            if let Some(sent_at) = sent_at {
+        }
+        replies
+            .entries
+            .fetch_add((entries.len() / REPLY_ENTRY_LEN) as u64, Ordering::Relaxed);
+        replies.completed.fetch_add(completed, Ordering::Relaxed);
+
+        if sampled.is_empty() {
+            continue;
+        }
+        let mut samples = replies.samples.lock().unwrap();
+        for id in sampled {
+            // Taken out of the map, so a later reply is not timed again.
+            if let Some(sent_at) = samples.remove(&id) {
                 // NOTE: This log entry is used to compute performance.
                 info!(
                     "Reply for sampled tx {} after {:.3} ms",
@@ -225,8 +306,23 @@ async fn read_replies(stream: TcpStream, samples: SampleTimes, replied: Arc<Atom
     }
 }
 
+/// Give up on transactions that have held fewer than `quorum` replies for
+/// PARTIAL_REPLY_TIMEOUT, so a lost reply does not hold memory for the run.
+async fn sweep_partial_replies(replies: Arc<Replies>) {
+    let mut ticker = interval(Duration::from_secs(10));
+    loop {
+        ticker.tick().await;
+        let mut partial = replies.partial.lock().unwrap();
+        let before = partial.len();
+        partial.retain(|_, (_, first)| first.elapsed() < PARTIAL_REPLY_TIMEOUT);
+        replies
+            .abandoned
+            .fetch_add((before - partial.len()) as u64, Ordering::Relaxed);
+    }
+}
+
 /// Accept reply connections for the life of the run.
-async fn serve_replies(listener: TcpListener, samples: SampleTimes, replied: Arc<AtomicU64>) {
+async fn serve_replies(listener: TcpListener, replies: Arc<Replies>) {
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
@@ -234,7 +330,7 @@ async fn serve_replies(listener: TcpListener, samples: SampleTimes, replied: Arc
                     warn!("Failed to set TCP_NODELAY for {}: {}", peer, e);
                 }
                 info!("Replica {} connected to send replies", peer);
-                tokio::spawn(read_replies(stream, samples.clone(), replied.clone()));
+                tokio::spawn(read_replies(stream, replies.clone()));
             }
             Err(e) => {
                 warn!("Failed to accept a reply connection: {}", e);
@@ -266,9 +362,17 @@ impl Client {
 
         // Start listening for replies before the first transaction goes out,
         // so a reply cannot arrive at a closed port.
-        let samples: SampleTimes = Arc::new(Mutex::new(HashMap::new()));
-        let replied = Arc::new(AtomicU64::new(0));
+        let replies = Arc::new(Replies {
+            quorum: self.reply_quorum,
+            samples: Arc::new(Mutex::new(HashMap::new())),
+            partial: Mutex::new(HashMap::new()),
+            completed: AtomicU64::new(0),
+            entries: AtomicU64::new(0),
+            abandoned: AtomicU64::new(0),
+        });
         if let Some(address) = self.reply_addr {
+            // NOTE: This log entry is used to compute performance.
+            info!("Reply quorum: {} distinct replicas", self.reply_quorum);
             // Advertise the routable address to the replicas, but bind the
             // wildcard, the way every node in this codebase does: on a cloud
             // VM the advertised address is the internal one and binding it
@@ -278,7 +382,10 @@ impl Client {
             let listener = TcpListener::bind(bind_addr)
                 .await
                 .context(format!("failed to listen for replies on {}", bind_addr))?;
-            tokio::spawn(serve_replies(listener, samples.clone(), replied.clone()));
+            tokio::spawn(serve_replies(listener, replies.clone()));
+            if self.reply_quorum > 1 {
+                tokio::spawn(sweep_partial_replies(replies.clone()));
+            }
         }
 
         // Connect to the mempool.
@@ -307,10 +414,8 @@ impl Client {
         // Send-side counters, mirroring the aspen/flutter clients so the same
         // offered-load analysis applies here. `produced` counts txs the burst
         // loop generated, `dispatched` counts the ones that made it into the
-        // channel — their difference is `dropped`. This client is
-        // fire-and-forget (no per-tx completion tracking), so there is no
-        // `completed` to report; delivered throughput still comes from the
-        // node-side commit logs.
+        // channel — their difference is `dropped`. Sends do not wait on
+        // replies; `replied` in the stats line is what completed.
         let produced = Arc::new(AtomicU64::new(0));
         let dispatched = Arc::new(AtomicU64::new(0));
 
@@ -361,7 +466,7 @@ impl Client {
             let produced_task = produced.clone();
             let dispatched_task = dispatched.clone();
             let reply_bytes = self.reply_bytes;
-            let samples_task = samples.clone();
+            let samples_task = replies.samples.clone();
 
             tokio::spawn(async move {
                 for x in 0..burst {
@@ -424,17 +529,19 @@ impl Client {
             // actually kept up with the configured rate.
             // NOTE: This log entry is used to compute performance.
             //
-            // `replied` counts the acks that came back. With one replier per
-            // request it tracks committed throughput; with more repliers it is
-            // that many times larger. It is a cross-check on the commit-log
-            // throughput, not a replacement for it.
+            // `replied` counts transactions that reached `reply_quorum`
+            // distinct replicas. `reply_entries` counts every reply received,
+            // and `reply_abandoned` the transactions given up on short of the
+            // quorum.
             if counter % PRECISION == 0 {
                 info!(
-                    "client_stats produced={} dispatched={} dropped={} replied={}",
+                    "client_stats produced={} dispatched={} dropped={} replied={} reply_entries={} reply_abandoned={}",
                     produced.load(Ordering::Relaxed),
                     dispatched.load(Ordering::Relaxed),
                     dropped.load(Ordering::Relaxed),
-                    replied.load(Ordering::Relaxed),
+                    replies.completed.load(Ordering::Relaxed),
+                    replies.entries.load(Ordering::Relaxed),
+                    replies.abandoned.load(Ordering::Relaxed),
                 );
             }
 

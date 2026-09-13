@@ -11,7 +11,7 @@
 //! store, keyed the same way, that `Helper` already serves batches from.
 
 use crate::batch_maker::Transaction;
-use crate::client_reply::{decode_reply_addr, TAG_LEN};
+use crate::client_reply::{decode_reply_addr, MAX_REPLIERS, REPLY_HEADER_LEN, TAG_LEN};
 use crate::worker::WorkerMessage;
 use bytes::Bytes;
 use config::Committee;
@@ -67,6 +67,12 @@ impl ClientReplier {
             .iter()
             .position(|key| key == &name)
             .expect("Our public key is not in the committee");
+        assert!(
+            order.len() <= MAX_REPLIERS,
+            "client replies identify at most {} replicas, committee has {}",
+            MAX_REPLIERS,
+            order.len()
+        );
 
         tokio::spawn(async move {
             Self {
@@ -161,6 +167,7 @@ impl ClientReplier {
         // One frame per client per batch. Requests are what we answer;
         // batches are what we send, so a reply per request does not become a
         // packet per request.
+        let replier = self.our_index as u8;
         let mut by_client: HashMap<SocketAddr, Vec<u8>> = HashMap::new();
         for transaction in &batch {
             let address = match decode_reply_addr(transaction) {
@@ -169,12 +176,12 @@ impl ClientReplier {
             };
             by_client
                 .entry(address)
-                .or_insert_with(Vec::new)
+                .or_insert_with(|| vec![replier])
                 .extend_from_slice(&transaction[..TAG_LEN]);
         }
 
         for (address, bytes) in by_client {
-            self.sent += (bytes.len() / TAG_LEN) as u64;
+            self.sent += ((bytes.len() - REPLY_HEADER_LEN) / TAG_LEN) as u64;
             self.network.send(address, Bytes::from(bytes)).await;
         }
 

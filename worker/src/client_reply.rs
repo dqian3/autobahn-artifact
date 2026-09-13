@@ -38,7 +38,10 @@
 //!
 //! **What a reply says.** Nothing beyond "this committed": a reply is the
 //! request's own first 9 bytes echoed back, so the client can match it. It is
-//! not signed and carries no proof.
+//! not signed and carries no proof. Each frame starts with one byte, the
+//! replying replica's index in committee order, so a client waiting for more
+//! than one reply can tell two replicas apart from one replica answering
+//! twice.
 //!
 //! That is a deliberate choice about what to charge autobahn for. A per-
 //! request signature is the shape *aspen's* fast path is obliged to use,
@@ -65,6 +68,12 @@ pub const TAG_LEN: usize = 9;
 
 /// One reply. The tag is the whole of it.
 pub const REPLY_ENTRY_LEN: usize = TAG_LEN;
+
+/// Leading byte of every reply frame: the replier's index in committee order.
+pub const REPLY_HEADER_LEN: usize = 1;
+
+/// Largest committee whose repliers a client can tell apart.
+pub const MAX_REPLIERS: usize = 64;
 
 /// Offset of the client's reply address within a transaction.
 pub const REPLY_ADDR_OFFSET: usize = TAG_LEN;
