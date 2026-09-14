@@ -105,8 +105,10 @@ impl Connection {
         // Try to connect to the peer.
         let (mut writer, mut reader) = match TcpStream::connect(self.address).await {
             Ok(stream) => {
-                if let Err(e) = stream.set_nodelay(true) {
-                    warn!("Failed to set TCP_NODELAY for {}: {}", self.address, e);
+                if crate::tcp_nodelay() {
+                    if let Err(e) = stream.set_nodelay(true) {
+                        warn!("Failed to set TCP_NODELAY for {}: {}", self.address, e);
+                    }
                 }
                 Framed::new(stream, LengthDelimitedCodec::new()).split()
             }

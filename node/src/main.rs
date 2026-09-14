@@ -104,6 +104,9 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
     // each request.
     set_crypto_disabled(parameters.disable_crypto);
 
+    // Set before any primary or worker opens a socket.
+    network::set_tcp_nodelay(parameters.tcp_nodelay);
+
     // The `SignatureService` provides signatures on input digests.
     let signature_service = SignatureService::new(keypair.secret);
 

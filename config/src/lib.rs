@@ -132,6 +132,12 @@ pub struct Parameters {
     /// spreads evenly instead of piling onto whichever replica sorts first.
     #[serde(default = "default_client_reply_count")]
     pub client_reply_count: usize,
+
+    /// When true, every node socket sets TCP_NODELAY, so small frames are
+    /// sent immediately rather than held for the previous segment's ACK.
+    /// Plumbed into `network::set_tcp_nodelay` at node startup.
+    #[serde(default)]
+    pub tcp_nodelay: bool,
 }
 
 fn default_client_reply_count() -> usize {
@@ -177,6 +183,7 @@ impl Default for Parameters {
 
             disable_crypto: false,
             client_reply_count: 1,
+            tcp_nodelay: false,
         }
     }
 }
@@ -202,6 +209,7 @@ impl Parameters {
         info!("Crypto disabled? {}", self.disable_crypto);
         // NOTE: This log entry is used to compute performance.
         info!("Client reply count set to {}", self.client_reply_count);
+        info!("TCP_NODELAY enabled? {}", self.tcp_nodelay);
     }
 }
 

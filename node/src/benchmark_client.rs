@@ -75,6 +75,7 @@ async fn main() -> Result<()> {
         .args_from_usage("--nodes=[ADDR]... 'Network addresses that must be reachable before starting the benchmark.'")
         .args_from_usage("--key=<FILE> 'The file containing the key information for the benchmark.'")
         .args_from_usage("--disable-crypto 'Skip ed25519 signing of submitted transactions (no-crypto baseline).'")
+        .args_from_usage("--tcp-nodelay 'Set TCP_NODELAY on the connection to the worker and on reply connections.'")
         .args_from_usage("--reply-addr=[ADDR] 'Address to listen on for committed-request replies. Omit to run send-only, as autobahn publishes it.'")
         .args_from_usage("--reply-quorum=[INT] 'Distinct replicas that must reply before a transaction counts as committed; match the replicas client_reply_count (default 1).'")
         .get_matches();
@@ -129,6 +130,9 @@ async fn main() -> Result<()> {
     if disable_crypto {
         info!("Crypto disabled: tx signatures are zeros (no-crypto baseline).");
     }
+    let tcp_nodelay = matches.is_present("tcp-nodelay");
+    network::set_tcp_nodelay(tcp_nodelay);
+    info!("TCP_NODELAY enabled? {}", tcp_nodelay);
 
     info!("Node address: {}", target);
 
@@ -303,8 +307,10 @@ async fn serve_replies(listener: TcpListener, replies: Arc<Replies>) {
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
-                if let Err(e) = stream.set_nodelay(true) {
-                    warn!("Failed to set TCP_NODELAY for {}: {}", peer, e);
+                if network::tcp_nodelay() {
+                    if let Err(e) = stream.set_nodelay(true) {
+                        warn!("Failed to set TCP_NODELAY for {}: {}", peer, e);
+                    }
                 }
                 info!("Replica {} connected to send replies", peer);
                 tokio::spawn(read_replies(stream, replies.clone()));
@@ -366,12 +372,12 @@ impl Client {
         let stream = TcpStream::connect(self.target)
             .await
             .context(format!("failed to connect to {}", self.target))?;
-        // A 16 B transaction every ~12 ms is the worst case for Nagle: each
-        // write waits for the previous segment's ACK, so the client's send
-        // costs a round trip instead of a hop.  aspen's transport disables it
-        // (crates/network/src/{sender,receiver}.rs); this did not.
-        if let Err(e) = stream.set_nodelay(true) {
-            warn!("Failed to set TCP_NODELAY for {}: {}", self.target, e);
+        // Without TCP_NODELAY a small transaction waits for the previous
+        // segment's ACK, so each send can cost a round trip instead of a hop.
+        if network::tcp_nodelay() {
+            if let Err(e) = stream.set_nodelay(true) {
+                warn!("Failed to set TCP_NODELAY for {}: {}", self.target, e);
+            }
         }
 
         // Sized so it never binds: a whole run's worth of offered load, with a

@@ -143,8 +143,10 @@ impl Connection {
         loop {
             match TcpStream::connect(self.address).await {
                 Ok(stream) => {
-                    if let Err(e) = stream.set_nodelay(true) {
-                        warn!("Failed to set TCP_NODELAY for {}: {}", self.address, e);
+                    if crate::tcp_nodelay() {
+                        if let Err(e) = stream.set_nodelay(true) {
+                            warn!("Failed to set TCP_NODELAY for {}: {}", self.address, e);
+                        }
                     }
                     info!("Outgoing connection established with {}", self.address);
 
