@@ -13,4 +13,5 @@ mod worker;
 #[path = "tests/common.rs"]
 mod common;
 
+pub use crate::processor::verify_peer_batch;
 pub use crate::worker::Worker;

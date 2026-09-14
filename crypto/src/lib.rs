@@ -289,6 +289,70 @@ impl Signature {
     }
 }
 
+/// A keypair parsed once, for signing many digests directly on the caller's
+/// thread.
+pub struct Signer(dalek::Keypair);
+
+impl Signer {
+    pub fn new(secret: &SecretKey) -> Self {
+        Self(dalek::Keypair::from_bytes(&secret.0).expect("Unable to load secret key"))
+    }
+
+    pub fn sign(&self, digest: &Digest) -> Signature {
+        if crypto_disabled() {
+            return Signature::default();
+        }
+        let sig = self.0.sign(&digest.0).to_bytes();
+        let part1 = sig[..32].try_into().expect("Unexpected signature length");
+        let part2 = sig[32..64].try_into().expect("Unexpected signature length");
+        Signature { part1, part2 }
+    }
+}
+
+/// Verifies client transactions laid out as `payload || 64-byte signature`,
+/// each signed by `key` over `payload.digest()`, and returns one pass/fail
+/// flag per transaction. The whole set is checked as one batch first; if
+/// that fails, each transaction is checked on its own. Malformed
+/// transactions fail.
+pub fn verify_transactions<T: AsRef<[u8]>>(key: &PublicKey, transactions: &[T]) -> Vec<bool> {
+    if transactions.is_empty() {
+        return Vec::new();
+    }
+    let key = match dalek::PublicKey::from_bytes(&key.0) {
+        Ok(key) => key,
+        Err(_) => return vec![false; transactions.len()],
+    };
+    let parsed: Vec<Option<(Digest, dalek::Signature)>> = transactions
+        .iter()
+        .map(|tx| {
+            let tx = tx.as_ref();
+            if tx.len() < dalek::SIGNATURE_LENGTH {
+                return None;
+            }
+            let (msg, sig) = tx.split_at(tx.len() - dalek::SIGNATURE_LENGTH);
+            let signature = ed25519::signature::Signature::from_bytes(sig).ok()?;
+            Some((msg.digest(), signature))
+        })
+        .collect();
+
+    if parsed.iter().all(Option::is_some) {
+        let (digests, signatures): (Vec<_>, Vec<_>) = parsed.iter().flatten().cloned().unzip();
+        let messages: Vec<&[u8]> = digests.iter().map(|d| &d.0[..]).collect();
+        let keys = vec![key; messages.len()];
+        if dalek::verify_batch(&messages, &signatures, &keys).is_ok() {
+            return vec![true; transactions.len()];
+        }
+    }
+
+    parsed
+        .iter()
+        .map(|entry| match entry {
+            Some((digest, signature)) => key.verify_strict(&digest.0, signature).is_ok(),
+            None => false,
+        })
+        .collect()
+}
+
 /// This service holds the node's private key. It takes digests as input and returns a signature
 /// over the digest (through a oneshot channel).
 #[derive(Clone)]

@@ -1,20 +1,21 @@
 // Copyright(C) Facebook, Inc. and its affiliates.
 use crate::worker::SerializedBatchDigestMessage;
-use crate::worker::WorkerMessage;
 
 use config::WorkerId;
-use crypto::Digest;
-use crypto::Hash as _;
-use ed25519_dalek::ed25519;
+use crypto::{Digest, PublicKey};
 use ed25519_dalek::Digest as _;
 use ed25519_dalek::Sha512;
 use primary::WorkerPrimaryMessage;
+use serde::Deserialize;
 use tokio::sync::mpsc;
 use std::convert::TryInto;
+use std::ops::Range;
+use std::sync::Arc;
 use store::Store;
 use tokio::sync::mpsc::{Receiver, Sender};
 use log::debug;
-use futures::future::try_join_all;
+use futures::future::join_all;
+use futures::stream::{FuturesOrdered, StreamExt as _};
 
 #[cfg(test)]
 #[path = "tests/processor_tests.rs"]
@@ -22,6 +23,74 @@ pub mod processor_tests;
 
 /// Indicates a serialized `WorkerMessage::Batch` message.
 pub type SerializedBatchMessage = Vec<u8>;
+
+/// Transactions per blocking verification task.
+const VERIFY_CHUNK: usize = 128;
+
+/// Batches from other workers whose signatures may be checked at once.
+const MAX_BATCHES_IN_FLIGHT: usize = 16;
+
+/// Borrowing view of a serialized `WorkerMessage` (same variants, same
+/// order), so a batch's transactions can be located without copying them.
+#[derive(Deserialize)]
+enum WorkerMessageView<'a> {
+    Batch(PublicKey, #[serde(borrow)] Vec<&'a [u8]>),
+    #[allow(dead_code)]
+    BatchRequest(Vec<Digest>, PublicKey),
+}
+
+/// Checks every client signature in a serialized batch from another worker,
+/// in chunks on blocking threads. Returns the batch if all of them hold.
+pub async fn verify_peer_batch(serialized: SerializedBatchMessage) -> Option<SerializedBatchMessage> {
+    let serialized = Arc::new(serialized);
+    let (author, ranges) = match bincode::deserialize::<WorkerMessageView>(&serialized) {
+        Ok(WorkerMessageView::Batch(author, batch)) => {
+            let base = serialized.as_ptr() as usize;
+            let ranges: Vec<Range<usize>> = batch
+                .iter()
+                .map(|tx| {
+                    let start = tx.as_ptr() as usize - base;
+                    start..start + tx.len()
+                })
+                .collect();
+            (author, ranges)
+        }
+        Ok(WorkerMessageView::BatchRequest(..)) => return None,
+        Err(e) => {
+            debug!("Failed to deserialize batch: {}", e);
+            return None;
+        }
+    };
+
+    let checks = ranges.chunks(VERIFY_CHUNK).map(|chunk| {
+        let bytes = serialized.clone();
+        let chunk = chunk.to_vec();
+        tokio::task::spawn_blocking(move || {
+            let txs: Vec<&[u8]> = chunk.into_iter().map(|range| &bytes[range]).collect();
+            crypto::verify_transactions(&author, &txs)
+        })
+    });
+    for result in join_all(checks).await {
+        match result {
+            Ok(passed) if passed.iter().all(|ok| *ok) => {}
+            Ok(passed) => {
+                // The batch is dropped: not stored and never sent to the primary.
+                debug!(
+                    "Dropping batch from {}: {} client signatures failed",
+                    author,
+                    passed.iter().filter(|ok| !**ok).count()
+                );
+                return None;
+            }
+            Err(e) => {
+                debug!("A blocking task panicked or failed: {:?}", e);
+                return None;
+            }
+        }
+    }
+    debug!("All client transactions verified");
+    Some(Arc::try_unwrap(serialized).unwrap_or_else(|shared| (*shared).clone()))
+}
 
 /// Hashes and stores batches, it then outputs the batch's digest.
 pub struct Processor;
@@ -41,77 +110,32 @@ impl Processor {
     ) {
         let (tx_verified, mut rx_verified) = mpsc::channel(100);
 
+        // Verifies several batches at once and forwards them in arrival order.
         tokio::spawn(async move {
-            while let Some(serialized) = rx_batch.recv().await {
-                // Hash the batch.
-
-                if own_digest {
-                    tx_verified
-                        .send(serialized)
-                        .await
-                        .expect("Failed to send batch to be verified");
-                    continue;
-                }
-
-                // Honour the no-crypto switch. The clients stop signing when it
-                // is set (`Signature::new` returns the zero signature), so
-                // verifying here would fail every batch and, via the `return`
-                // below, stop this worker processing anything ever again --
-                // a no-crypto run that measured nothing.
-                if crypto::is_crypto_disabled() {
-                    tx_verified
-                        .send(serialized)
-                        .await
-                        .expect("Failed to send batch to be verified");
-                    continue;
-                }
-
-                if let WorkerMessage::Batch(id, batch) = bincode::deserialize(&serialized).expect("Failed to deserialize batch") {
-                    let key = ed25519_dalek::PublicKey::from_bytes(&id.0).expect("Failed to load pub key");
-
-
-                    let mut handles = Vec::new();
-
-                    for tx in batch.into_iter() {
-                        let handle = tokio::task::spawn_blocking(move || {
-                            let (msg, sig) = tx.split_at(tx.len() - 64);
-                            let digest = msg.digest();
-                            let signature = ed25519::signature::Signature::from_bytes(sig)
-                                .expect("Failed to create sig");
-                
-                            key.verify_strict(&digest.0, &signature)
-                                .map_err(|e| format!("Signature failed: {}", e))
-                        });
-                
-                        handles.push(handle);
-                    }
-                
-                    // Await all signature verifications
-                    let results = try_join_all(handles).await;
-                
-                    match results {
-                        Ok(verifications) => {
-                            if verifications.iter().all(|r| r.is_ok()) {
-                                debug!("All client transactions verified");
-                                tx_verified.send(serialized).await
-                                    .expect("Failed to send batch to be verified");
-                            } else {
-                                // `continue`, not `return`. This runs inside
-                                // the batch-receive loop, so returning ended
-                                // the task: one bad batch and this worker
-                                // stopped processing every later batch too,
-                                // for the rest of the run. Dropping the batch
-                                // is the intended behaviour -- it is not
-                                // stored and never reaches the primary.
-                                debug!("Some signatures failed: {:?}", verifications);
-                                continue;
-                            }
+            let mut pending = FuturesOrdered::new();
+            loop {
+                tokio::select! {
+                    Some(serialized) = rx_batch.recv(), if pending.len() < MAX_BATCHES_IN_FLIGHT => {
+                        // Own batches were checked by the batch maker. With
+                        // crypto disabled the clients send zero signatures.
+                        if own_digest || crypto::is_crypto_disabled() {
+                            tx_verified
+                                .send(serialized)
+                                .await
+                                .expect("Failed to send batch to be verified");
+                        } else {
+                            pending.push_back(verify_peer_batch(serialized));
                         }
-                        Err(e) => {
-                            debug!("A blocking task panicked or failed: {:?}", e);
-                            continue;
+                    },
+                    Some(verified) = pending.next(), if !pending.is_empty() => {
+                        if let Some(serialized) = verified {
+                            tx_verified
+                                .send(serialized)
+                                .await
+                                .expect("Failed to send batch to be verified");
                         }
-                    }
+                    },
+                    else => break,
                 }
             }
         });

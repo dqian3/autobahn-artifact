@@ -124,3 +124,46 @@ async fn signature_service() {
     // Verify the signature we received.
     assert!(signature.verify(&digest, &public_key).is_ok());
 }
+
+fn signed_transactions(secret_key: &SecretKey, count: usize) -> Vec<Vec<u8>> {
+    let signer = Signer::new(secret_key);
+    (0..count)
+        .map(|i| {
+            let mut tx = vec![i as u8; 32];
+            let signature = signer.sign(&tx.as_slice().digest()).flatten();
+            tx.extend_from_slice(&signature);
+            tx
+        })
+        .collect()
+}
+
+#[test]
+fn verify_transactions_all_valid() {
+    let (public_key, secret_key) = keys().pop().unwrap();
+    let transactions = signed_transactions(&secret_key, 10);
+    assert_eq!(verify_transactions(&public_key, &transactions), vec![true; 10]);
+}
+
+#[test]
+fn verify_transactions_one_corrupted() {
+    let (public_key, secret_key) = keys().pop().unwrap();
+    let mut transactions = signed_transactions(&secret_key, 10);
+    transactions[3][0] ^= 1;
+    let mut expected = vec![true; 10];
+    expected[3] = false;
+    assert_eq!(verify_transactions(&public_key, &transactions), expected);
+}
+
+#[test]
+fn verify_transactions_malformed() {
+    let (public_key, secret_key) = keys().pop().unwrap();
+    let mut transactions = signed_transactions(&secret_key, 3);
+    transactions[1].truncate(10);
+    assert_eq!(verify_transactions(&public_key, &transactions), vec![true, false, true]);
+}
+
+#[test]
+fn verify_transactions_empty() {
+    let (public_key, _) = keys().pop().unwrap();
+    assert!(verify_transactions::<Vec<u8>>(&public_key, &[]).is_empty());
+}

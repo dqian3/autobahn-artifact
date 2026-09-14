@@ -12,7 +12,7 @@ use ed25519_dalek::ed25519;
 
 //#[cfg(feature = "benchmark")]
 use ed25519_dalek::{Digest as _, Sha512};
-use futures::stream::FuturesUnordered;
+use futures::stream::{FuturesOrdered, FuturesUnordered};
 use futures::StreamExt;
 use log::debug;
 //#[cfg(feature = "benchmark")]
@@ -36,6 +36,11 @@ use primary::timer::Timer;
 #[cfg(test)]
 #[path = "tests/batch_maker_tests.rs"]
 pub mod batch_maker_tests;
+
+/// Most client transactions checked in one blocking verification task.
+const VERIFY_CHUNK: usize = 128;
+/// Chunks of client transactions whose signatures may be checked at once.
+const MAX_CHUNKS_IN_FLIGHT: usize = 8;
 
 //The message type received by clients
 pub type Transaction = Vec<u8>;
@@ -205,42 +210,56 @@ impl BatchMaker {
         let name = self.name.clone();
         let mut rx_transaction = rx_transaction;
 
-        // Spawn a task to read from clients and verify signed transactions
+        // Spawn a task to read from clients and verify signed transactions.
+        // Each chunk is the next transaction plus whatever else is already
+        // queued; chunks are checked on blocking threads, a few at a time,
+        // and the transactions that pass are forwarded in arrival order.
         tokio::spawn(async move {
-            // Like the worker's processor, this verifies raw dalek types
-            // rather than going through `crypto::Signature::verify`, so it
-            // does not see the no-crypto switch on its own. With
-            // `disable_crypto` the clients send the zero signature, every
-            // transaction failed here, and the `return` below tore down this
-            // task -- which closed the channel the transaction receiver sends
-            // on, so the worker panicked on its first request and the run
-            // reported 0 TPS.
-            let skip_verify = crypto::is_crypto_disabled();
-            while let Some(transaction) = rx_transaction.recv().await {
-                if skip_verify {
+            // With crypto disabled the clients send zero signatures.
+            if crypto::is_crypto_disabled() {
+                while let Some(transaction) = rx_transaction.recv().await {
                     channel_tx.send(transaction).await.expect("Failed to send transaction");
-                    continue;
                 }
+                return;
+            }
 
-                let (msg, sig) = transaction.split_at(transaction.len() - 64);
-
-                let digest = msg.digest();
-
-                let signature = ed25519::signature::Signature::from_bytes(sig).expect("Failed to create sig");
-                let key = ed25519_dalek::PublicKey::from_bytes(&name.0).expect("Failed to load pub key");
-
-                match key.verify_strict(&digest.0, &signature) {
-                    Ok(()) => {
-                        channel_tx.send(transaction).await.expect("Failed to send transaction");
-                    }
-                    Err(e) => {
-                        // `continue`, not `return`: this is the receive loop
-                        // for every client transaction this worker will ever
-                        // see. Returning made one unverifiable transaction
-                        // silently disable the worker for the rest of the run.
-                        debug!("Failed to verify client transaction {}", e);
-                        continue;
-                    }
+            let mut pending = FuturesOrdered::new();
+            let mut open = true;
+            loop {
+                tokio::select! {
+                    received = rx_transaction.recv(), if open && pending.len() < MAX_CHUNKS_IN_FLIGHT => {
+                        match received {
+                            Some(first) => {
+                                let mut chunk = vec![first];
+                                while chunk.len() < VERIFY_CHUNK {
+                                    match rx_transaction.try_recv() {
+                                        Ok(transaction) => chunk.push(transaction),
+                                        Err(_) => break,
+                                    }
+                                }
+                                pending.push_back(tokio::task::spawn_blocking(move || {
+                                    let passed = crypto::verify_transactions(&name, &chunk);
+                                    (chunk, passed)
+                                }));
+                            }
+                            None => open = false,
+                        }
+                    },
+                    Some(result) = pending.next(), if !pending.is_empty() => {
+                        match result {
+                            Ok((chunk, passed)) => {
+                                for (transaction, ok) in chunk.into_iter().zip(passed) {
+                                    if ok {
+                                        channel_tx.send(transaction).await.expect("Failed to send transaction");
+                                    } else {
+                                        debug!("Failed to verify client transaction");
+                                    }
+                                }
+                            }
+                            Err(e) => debug!("A blocking task panicked or failed: {:?}", e),
+                        }
+                    },
+                    else => break,
                 }
             }
         });

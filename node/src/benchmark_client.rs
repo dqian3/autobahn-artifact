@@ -20,7 +20,7 @@ use tokio::time::{interval, sleep, Duration, Instant};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use tokio::sync::mpsc;
 
-use crypto::SignatureService;
+use crypto::Signer;
 use crypto::Hash;
 use crypto::set_crypto_disabled;
 
@@ -141,9 +141,7 @@ async fn main() -> Result<()> {
     
 
     let secret = KeyPair::import(key_file).context("Failed to load the node's keypair")?;
-    let secret_key = secret.secret;
-
-    let signature_service = SignatureService::new(secret_key);
+    let signer = Arc::new(Signer::new(&secret.secret));
 
     // The reply address travels inside every transaction, so a replica that
     // commits it can answer without having to have been the one that received
@@ -168,7 +166,7 @@ async fn main() -> Result<()> {
         size,
         rate,
         nodes,
-        signature_service,
+        signer,
         reply_addr,
         reply_bytes,
         reply_quorum,
@@ -180,27 +178,6 @@ async fn main() -> Result<()> {
 
     // Start the benchmark.
     client.send().await.context("Failed to submit transactions")
-
-
-
-    // let mut tx = BytesMut::with_capacity(size + 64); // + 64 for signatures
-    // let mut counter = 0;
-
-    // let now = Instant::now();
-
-    // for counter in 0..10000 {
-    //     tx.put_u8(0u8); // Sample txs start with 0.
-    //     tx.put_u64(counter); // This counter identifies the tx.
-    //     tx.resize(size, 0u8);
-    //     tx.extend_from_slice(&sign(&mut signature_service, &tx).await);
-    //     tx.split().freeze();
-    // }
-
-    // let elapsed = now.elapsed().as_secs_f64();
-
-    // info!("Time taken to sign 10000 transactions: {}, rate {}", elapsed, (10000 as f64)/elapsed);
-
-    // Ok(())
 }
 
 struct Client {
@@ -209,7 +186,7 @@ struct Client {
     rate: u64,
     nodes: Vec<SocketAddr>,
     // ========= Added for Evaluation purposes =========
-    signature_service: SignatureService,
+    signer: Arc<Signer>,
     /// Where we listen for replies, if we asked for any.
     reply_addr: Option<SocketAddr>,
     /// That address, in the form embedded in each transaction.
@@ -340,11 +317,8 @@ async fn serve_replies(listener: TcpListener, replies: Arc<Replies>) {
     }
 }
 
-async fn sign(signature_service: &mut SignatureService, tx: &BytesMut) -> [u8; 64]
-{
-    let digest = tx.as_ref().digest();
-    let signature = signature_service.request_signature(digest).await;
-    signature.flatten()
+fn sign(signer: &Signer, tx: &BytesMut) -> [u8; 64] {
+    signer.sign(&tx.as_ref().digest()).flatten()
 }
 
 
@@ -459,7 +433,7 @@ impl Client {
             let counter_copy = counter.clone();
             let mut r_copy = r.clone();
             let size = self.size;
-            let mut sig_copy = self.signature_service.clone();
+            let signer = self.signer.clone();
 
             let channel_tx = channel_tx.clone();
             let dropped_task = dropped.clone();
@@ -468,7 +442,8 @@ impl Client {
             let reply_bytes = self.reply_bytes;
             let samples_task = replies.samples.clone();
 
-            tokio::spawn(async move {
+            // Signing runs on a blocking thread, off the async runtime.
+            tokio::task::spawn_blocking(move || {
                 for x in 0..burst {
                     // The sampled transaction of this burst, if this is it.
                     // Its send time is recorded once it is actually handed to
@@ -486,7 +461,7 @@ impl Client {
                         tx.put_slice(&reply_bytes); // Where to send the reply.
                         tx.resize(size, 0u8);
 
-                        tx.extend_from_slice(&sign(&mut sig_copy, &tx).await);
+                        tx.extend_from_slice(&sign(&signer, &tx));
 
                         tx.split().freeze()
                     } else {
@@ -496,7 +471,7 @@ impl Client {
                         tx.put_slice(&reply_bytes); // Where to send the reply.
                         tx.resize(size, 0u8);
 
-                        tx.extend_from_slice(&sign(&mut sig_copy, &tx).await);
+                        tx.extend_from_slice(&sign(&signer, &tx));
 
                         tx.split().freeze()
                     };
