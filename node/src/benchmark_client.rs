@@ -10,6 +10,7 @@ use futures::sink::SinkExt as _;
 use futures::stream::StreamExt as _;
 use log::{info, warn};
 use rand::Rng;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::net::SocketAddr;
@@ -53,24 +54,94 @@ const VERIFY_GROUP: usize = 64;
 /// Most signed reply entries batch-checked in one blocking task.
 const VERIFY_ENTRIES: usize = 256;
 
+/// One transaction still expecting replies.
+struct Pending {
+    /// A bit per replica that has answered.
+    repliers: u64,
+    /// Whether it has already reached the quorum and been counted.
+    done: bool,
+    /// When its first reply arrived.
+    first: Instant,
+}
+
+/// Counts distinct repliers per transaction. A transaction completes once,
+/// on its `quorum`-th distinct replier, and its entry stays until all `count`
+/// repliers have answered or PARTIAL_REPLY_TIMEOUT passes, so late replies do
+/// not complete it again. Built on the reply side only, so the send path
+/// stays untouched.
+struct ReplyTracker {
+    /// Distinct replicas that must reply before a transaction counts.
+    quorum: usize,
+    /// Distinct replicas that answer each transaction; at least `quorum`.
+    count: usize,
+    pending: HashMap<[u8; TAG_LEN], Pending>,
+}
+
+impl ReplyTracker {
+    fn new(quorum: usize, count: usize) -> Self {
+        let quorum = quorum.clamp(1, MAX_REPLIERS);
+        Self {
+            quorum,
+            count: count.clamp(quorum, MAX_REPLIERS),
+            pending: HashMap::new(),
+        }
+    }
+
+    /// Record `bit`'s reply to `tag`; true if this reply completes it.
+    fn record(&mut self, tag: [u8; TAG_LEN], bit: u64, now: Instant) -> bool {
+        if self.count <= 1 {
+            return true;
+        }
+        match self.pending.entry(tag) {
+            Entry::Occupied(mut slot) => {
+                let pending = slot.get_mut();
+                if pending.repliers & bit != 0 {
+                    return false;
+                }
+                pending.repliers |= bit;
+                let seen = pending.repliers.count_ones() as usize;
+                let complete = !pending.done && seen >= self.quorum;
+                pending.done |= complete;
+                if seen >= self.count {
+                    slot.remove();
+                }
+                complete
+            }
+            Entry::Vacant(slot) => {
+                let complete = self.quorum <= 1;
+                slot.insert(Pending { repliers: bit, done: complete, first: now });
+                complete
+            }
+        }
+    }
+
+    /// Drop entries older than PARTIAL_REPLY_TIMEOUT; returns how many of
+    /// them had not reached the quorum.
+    fn sweep(&mut self, now: Instant) -> u64 {
+        let mut abandoned = 0;
+        self.pending.retain(|_, pending| {
+            let keep = now.saturating_duration_since(pending.first) < PARTIAL_REPLY_TIMEOUT;
+            if !keep && !pending.done {
+                abandoned += 1;
+            }
+            keep
+        });
+        abandoned
+    }
+}
+
 /// Reply-side state shared by every replica's connection.
 struct Replies {
-    /// Distinct replicas that must reply before a transaction counts as
-    /// committed.
-    quorum: usize,
     /// Replica public keys in committee order, when replies are signed and
     /// must verify before they count.
     verify_keys: Option<Arc<Vec<PublicKey>>>,
     samples: SampleTimes,
-    /// Transactions with some but fewer than `quorum` replies, keyed by tag:
-    /// a bit per replier, and when the first reply arrived. Built on the
-    /// reply side only, so the send path stays untouched.
-    partial: Mutex<HashMap<[u8; TAG_LEN], (u64, Instant)>>,
-    /// Transactions that reached `quorum` distinct replies.
+    tracker: Mutex<ReplyTracker>,
+    /// Transactions that reached the quorum, each counted once.
     completed: AtomicU64,
     /// Reply entries received, from every replier.
     entries: AtomicU64,
-    /// Transactions dropped from `partial` after PARTIAL_REPLY_TIMEOUT.
+    /// Transactions dropped short of the quorum after PARTIAL_REPLY_TIMEOUT.
     abandoned: AtomicU64,
     /// Signed reply entries that did not verify, and so did not count.
     bad_sig: AtomicU64,
@@ -90,7 +161,8 @@ async fn main() -> Result<()> {
         .args_from_usage("--disable-crypto 'Skip ed25519 signing of submitted transactions (no-crypto baseline).'")
         .args_from_usage("--tcp-nodelay 'Set TCP_NODELAY on the connection to the worker and on reply connections.'")
         .args_from_usage("--reply-addr=[ADDR] 'Address to listen on for committed-request replies. Omit to run send-only, as autobahn publishes it.'")
-        .args_from_usage("--reply-quorum=[INT] 'Distinct replicas that must reply before a transaction counts as committed; match the replicas client_reply_count (default 1).'")
+        .args_from_usage("--reply-quorum=[INT] 'Distinct replicas that must reply before a transaction counts as committed (default 1).'")
+        .args_from_usage("--reply-count=[INT] 'Distinct replicas that answer each transaction, the replicas client_reply_count capped at n (default: the quorum).'")
         .args_from_usage("--committee=[FILE] 'The committee file the nodes run with; supplies replica public keys for --verify-replies.'")
         .args_from_usage("--verify-replies 'Expect a signature on every reply (client_reply_signed) and count only replies that verify against the replier key; needs --committee.'")
         .get_matches();
@@ -137,6 +209,14 @@ async fn main() -> Result<()> {
         .context("The reply quorum must be a positive integer")?
         .unwrap_or(1)
         .max(1)
+        .min(MAX_REPLIERS);
+    let reply_count = matches
+        .value_of("reply-count")
+        .map(|value| value.parse::<usize>())
+        .transpose()
+        .context("The reply count must be a positive integer")?
+        .unwrap_or(reply_quorum)
+        .max(reply_quorum)
         .min(MAX_REPLIERS);
 
     let verify_keys = if matches.is_present("verify-replies") {
@@ -206,6 +286,7 @@ async fn main() -> Result<()> {
         reply_addr,
         reply_bytes,
         reply_quorum,
+        reply_count,
         verify_keys,
     };
 
@@ -230,6 +311,8 @@ struct Client {
     reply_bytes: [u8; REPLY_ADDR_LEN],
     /// Distinct replicas that must reply before a transaction counts.
     reply_quorum: usize,
+    /// Distinct replicas that answer each transaction.
+    reply_count: usize,
     /// Replica keys in committee order, when replies must verify.
     verify_keys: Option<Arc<Vec<PublicKey>>>,
 }
@@ -362,8 +445,7 @@ async fn verify_entries(
 /// Count one frame's entries toward their transactions' quorums.
 ///
 /// `frame` is the replier index followed by tags, with any signatures already
-/// stripped. A transaction completes on its `quorum`-th distinct replier. A
-/// replica answering twice (a redelivered commit) does not count again.
+/// stripped. See `ReplyTracker` for when a transaction completes.
 fn record_frame(replies: &Replies, frame: &[u8]) {
     if frame.len() < REPLY_HEADER_LEN {
         return;
@@ -374,32 +456,11 @@ fn record_frame(replies: &Replies, frame: &[u8]) {
     let mut completed = 0u64;
     let mut sampled = Vec::new();
     {
-        let mut partial = replies.partial.lock().unwrap();
+        let now = Instant::now();
+        let mut tracker = replies.tracker.lock().unwrap();
         for entry in entries.chunks_exact(REPLY_ENTRY_LEN) {
-            let complete = if replies.quorum <= 1 {
-                true
-            } else {
-                let tag: [u8; TAG_LEN] = entry.try_into().expect("entry is one tag");
-                let complete = match partial.get_mut(&tag) {
-                    Some(slot) => {
-                        if slot.0 & bit != 0 {
-                            false
-                        } else {
-                            slot.0 |= bit;
-                            slot.0.count_ones() as usize >= replies.quorum
-                        }
-                    }
-                    None => {
-                        partial.insert(tag, (bit, Instant::now()));
-                        false
-                    }
-                };
-                if complete {
-                    partial.remove(&tag);
-                }
-                complete
-            };
-            if !complete {
+            let tag: [u8; TAG_LEN] = entry.try_into().expect("entry is one tag");
+            if !tracker.record(tag, bit, now) {
                 continue;
             }
             completed += 1;
@@ -432,18 +493,14 @@ fn record_frame(replies: &Replies, frame: &[u8]) {
     }
 }
 
-/// Give up on transactions that have held fewer than `quorum` replies for
-/// PARTIAL_REPLY_TIMEOUT, so a lost reply does not hold memory for the run.
+/// Drop transactions still waiting on replies after PARTIAL_REPLY_TIMEOUT,
+/// so a lost reply does not hold memory for the run.
 async fn sweep_partial_replies(replies: Arc<Replies>) {
     let mut ticker = interval(Duration::from_secs(10));
     loop {
         ticker.tick().await;
-        let mut partial = replies.partial.lock().unwrap();
-        let before = partial.len();
-        partial.retain(|_, (_, first)| first.elapsed() < PARTIAL_REPLY_TIMEOUT);
-        replies
-            .abandoned
-            .fetch_add((before - partial.len()) as u64, Ordering::Relaxed);
+        let abandoned = replies.tracker.lock().unwrap().sweep(Instant::now());
+        replies.abandoned.fetch_add(abandoned, Ordering::Relaxed);
     }
 }
 
@@ -488,10 +545,9 @@ impl Client {
         // Start listening for replies before the first transaction goes out,
         // so a reply cannot arrive at a closed port.
         let replies = Arc::new(Replies {
-            quorum: self.reply_quorum,
             verify_keys: self.verify_keys.clone(),
             samples: Arc::new(Mutex::new(HashMap::new())),
-            partial: Mutex::new(HashMap::new()),
+            tracker: Mutex::new(ReplyTracker::new(self.reply_quorum, self.reply_count)),
             completed: AtomicU64::new(0),
             entries: AtomicU64::new(0),
             abandoned: AtomicU64::new(0),
@@ -500,6 +556,7 @@ impl Client {
         if let Some(address) = self.reply_addr {
             // NOTE: This log entry is used to compute performance.
             info!("Reply quorum: {} distinct replicas", self.reply_quorum);
+            info!("Reply count: {} replicas answer each transaction", self.reply_count);
             // Advertise the routable address to the replicas, but bind the
             // wildcard, the way every node in this codebase does: on a cloud
             // VM the advertised address is the internal one and binding it
@@ -510,7 +567,7 @@ impl Client {
                 .await
                 .context(format!("failed to listen for replies on {}", bind_addr))?;
             tokio::spawn(serve_replies(listener, replies.clone()));
-            if self.reply_quorum > 1 {
+            if self.reply_count > 1 {
                 tokio::spawn(sweep_partial_replies(replies.clone()));
             }
         }
@@ -658,7 +715,8 @@ impl Client {
             // NOTE: This log entry is used to compute performance.
             //
             // `replied` counts transactions that reached `reply_quorum`
-            // distinct replicas. `reply_entries` counts every reply received,
+            // distinct replicas, once each. `reply_entries` counts every
+            // verified reply received, including those past the quorum,
             // and `reply_abandoned` the transactions given up on short of the
             // quorum. `reply_bad_sig` counts signed reply entries that failed
             // verification; they are in none of the other counts.
@@ -692,5 +750,64 @@ impl Client {
             })
         }))
         .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tag(n: u8) -> [u8; TAG_LEN] {
+        [n; TAG_LEN]
+    }
+
+    #[test]
+    fn quorum_of_six_completes_once() {
+        let mut tracker = ReplyTracker::new(2, 6);
+        let now = Instant::now();
+        let completions: Vec<bool> =
+            (0..6).map(|r| tracker.record(tag(1), 1 << r, now)).collect();
+        assert_eq!(completions, [false, true, false, false, false, false]);
+        assert!(tracker.pending.is_empty());
+    }
+
+    #[test]
+    fn duplicate_replier_ignored() {
+        let mut tracker = ReplyTracker::new(2, 6);
+        let now = Instant::now();
+        assert!(!tracker.record(tag(1), 1, now));
+        assert!(!tracker.record(tag(1), 1, now));
+        assert!(tracker.record(tag(1), 2, now));
+        assert!(!tracker.record(tag(1), 2, now));
+    }
+
+    #[test]
+    fn timed_out_incomplete_is_abandoned() {
+        let mut tracker = ReplyTracker::new(2, 6);
+        let now = Instant::now();
+        tracker.record(tag(1), 1, now);
+        assert_eq!(tracker.sweep(now), 0);
+        assert_eq!(tracker.sweep(now + PARTIAL_REPLY_TIMEOUT), 1);
+        assert!(tracker.pending.is_empty());
+    }
+
+    #[test]
+    fn timed_out_done_is_not_abandoned() {
+        let mut tracker = ReplyTracker::new(2, 6);
+        let now = Instant::now();
+        tracker.record(tag(1), 1, now);
+        assert!(tracker.record(tag(1), 2, now));
+        assert_eq!(tracker.sweep(now + PARTIAL_REPLY_TIMEOUT), 0);
+        assert!(tracker.pending.is_empty());
+    }
+
+    #[test]
+    fn quorum_one_of_many_completes_on_first() {
+        let mut tracker = ReplyTracker::new(1, 3);
+        let now = Instant::now();
+        assert!(tracker.record(tag(1), 1, now));
+        assert!(!tracker.record(tag(1), 2, now));
+        assert!(!tracker.record(tag(1), 4, now));
+        assert!(tracker.pending.is_empty());
     }
 }
