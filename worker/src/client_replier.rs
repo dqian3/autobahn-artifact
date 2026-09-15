@@ -1,8 +1,8 @@
 //! Answers the clients whose requests just committed.
 //!
 //! See `client_reply` for the wire format, why the client's address rides
-//! inside the transaction, and why the reply is a bare ack rather than a
-//! signature. This is the replica half.
+//! inside the transaction, and why the reply is a bare ack by default and a
+//! signed frame with `client_reply_signed`. This is the replica half.
 //!
 //! A committed header names its batches by digest only, and the primary runs
 //! in a separate process from the worker, so the primary forwards the
@@ -11,15 +11,18 @@
 //! store, keyed the same way, that `Helper` already serves batches from.
 
 use crate::batch_maker::Transaction;
-use crate::client_reply::{decode_reply_addr, MAX_REPLIERS, REPLY_HEADER_LEN, TAG_LEN};
+use crate::client_reply::{
+    decode_reply_addr, sign_reply_frame, MAX_REPLIERS, REPLY_HEADER_LEN, TAG_LEN,
+};
 use crate::worker::WorkerMessage;
 use bytes::Bytes;
 use config::Committee;
-use crypto::{Digest, PublicKey};
+use crypto::{Digest, PublicKey, Signer};
 use log::{debug, error, info, warn};
 use network::SimpleSender;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use store::Store;
 use tokio::sync::mpsc::Receiver;
 
@@ -40,6 +43,8 @@ pub struct ClientReplier {
     order: Vec<PublicKey>,
     /// How many replicas reply per batch.
     reply_count: usize,
+    /// Signs each reply frame with our key; `None` sends frames unsigned.
+    signer: Option<Arc<Signer>>,
     /// The persistent storage, holding batches keyed by digest.
     store: Store,
     /// Committed batch digests from our primary.
@@ -60,6 +65,7 @@ impl ClientReplier {
         committee: Committee,
         store: Store,
         reply_count: usize,
+        signer: Option<Arc<Signer>>,
         rx_committed: Receiver<(Vec<Digest>, PublicKey)>,
     ) {
         let order: Vec<PublicKey> = committee.authorities.keys().cloned().collect();
@@ -79,6 +85,7 @@ impl ClientReplier {
                 our_index,
                 order,
                 reply_count,
+                signer,
                 store,
                 rx_committed,
                 network: SimpleSender::new(),
@@ -180,8 +187,31 @@ impl ClientReplier {
                 .extend_from_slice(&transaction[..TAG_LEN]);
         }
 
-        for (address, bytes) in by_client {
+        let mut frames: Vec<(SocketAddr, Vec<u8>)> = by_client.into_iter().collect();
+        for (_, bytes) in &frames {
             self.sent += ((bytes.len() - REPLY_HEADER_LEN) / TAG_LEN) as u64;
+        }
+
+        // One blocking task signs all of this batch's frames, off the runtime.
+        if let Some(signer) = &self.signer {
+            let signer = signer.clone();
+            frames = match tokio::task::spawn_blocking(move || {
+                for (_, bytes) in frames.iter_mut() {
+                    sign_reply_frame(&signer, bytes);
+                }
+                frames
+            })
+            .await
+            {
+                Ok(frames) => frames,
+                Err(e) => {
+                    error!("Cannot sign replies for batch {:?}: {}", digest, e);
+                    return;
+                }
+            };
+        }
+
+        for (address, bytes) in frames {
             self.network.send(address, Bytes::from(bytes)).await;
         }
 

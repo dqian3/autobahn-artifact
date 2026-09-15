@@ -22,14 +22,16 @@ use tokio::sync::mpsc;
 
 use crypto::Signer;
 use crypto::Hash;
+use crypto::PublicKey;
 use crypto::set_crypto_disabled;
 
+use config::Committee;
 use config::KeyPair;
 use config::Import as _;
 
 use worker::client_reply::{
-    encode_reply_addr, KIND_SAMPLE, MAX_REPLIERS, REPLY_ADDR_LEN, REPLY_ENTRY_LEN,
-    REPLY_HEADER_LEN, TAG_LEN,
+    encode_reply_addr, verify_reply_frames, KIND_SAMPLE, MAX_REPLIERS, REPLY_ADDR_LEN,
+    REPLY_ENTRY_LEN, REPLY_HEADER_LEN, REPLY_SIGNATURE_LEN, TAG_LEN,
 };
 
 /// Send times of the sampled transactions still awaiting a reply.
@@ -45,11 +47,17 @@ type SampleTimes = Arc<Mutex<HashMap<u64, Instant>>>;
 /// client gives up on it.
 const PARTIAL_REPLY_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Most frames read off one connection and verified in one blocking task.
+const VERIFY_GROUP: usize = 64;
+
 /// Reply-side state shared by every replica's connection.
 struct Replies {
     /// Distinct replicas that must reply before a transaction counts as
     /// committed.
     quorum: usize,
+    /// Replica public keys in committee order, when frames are signed and
+    /// must verify before they count.
+    verify_keys: Option<Arc<Vec<PublicKey>>>,
     samples: SampleTimes,
     /// Transactions with some but fewer than `quorum` replies, keyed by tag:
     /// a bit per replier, and when the first reply arrived. Built on the
@@ -61,6 +69,8 @@ struct Replies {
     entries: AtomicU64,
     /// Transactions dropped from `partial` after PARTIAL_REPLY_TIMEOUT.
     abandoned: AtomicU64,
+    /// Signed frames whose signature did not verify, and so did not count.
+    bad_sig: AtomicU64,
 }
 
 
@@ -78,6 +88,8 @@ async fn main() -> Result<()> {
         .args_from_usage("--tcp-nodelay 'Set TCP_NODELAY on the connection to the worker and on reply connections.'")
         .args_from_usage("--reply-addr=[ADDR] 'Address to listen on for committed-request replies. Omit to run send-only, as autobahn publishes it.'")
         .args_from_usage("--reply-quorum=[INT] 'Distinct replicas that must reply before a transaction counts as committed; match the replicas client_reply_count (default 1).'")
+        .args_from_usage("--committee=[FILE] 'The committee file the nodes run with; supplies replica public keys for --verify-replies.'")
+        .args_from_usage("--verify-replies 'Expect signed reply frames (client_reply_signed) and count only those that verify against the replier key; needs --committee.'")
         .get_matches();
 
     env_logger::Builder::from_env(Env::default().default_filter_or("info"))
@@ -124,6 +136,19 @@ async fn main() -> Result<()> {
         .max(1)
         .min(MAX_REPLIERS);
 
+    let verify_keys = if matches.is_present("verify-replies") {
+        let committee_file = matches
+            .value_of("committee")
+            .ok_or_else(|| anyhow::Error::msg("--verify-replies needs --committee"))?;
+        let committee = Committee::import(committee_file)
+            .context("Failed to load the committee information")?;
+        // Committee order: the index each replier puts at the head of a frame.
+        let keys: Vec<PublicKey> = committee.authorities.keys().cloned().collect();
+        Some(Arc::new(keys))
+    } else {
+        None
+    };
+
     let key_file = matches.value_of("key").unwrap();
     let disable_crypto = matches.is_present("disable-crypto");
     set_crypto_disabled(disable_crypto);
@@ -164,6 +189,10 @@ async fn main() -> Result<()> {
             [0u8; REPLY_ADDR_LEN]
         }
     };
+    match &verify_keys {
+        Some(keys) => info!("Verifying signed replies against {} replica keys", keys.len()),
+        None => info!("Verifying signed replies? false"),
+    }
 
     let mut client = Client {
         target,
@@ -174,6 +203,7 @@ async fn main() -> Result<()> {
         reply_addr,
         reply_bytes,
         reply_quorum,
+        verify_keys,
     };
 
 
@@ -197,92 +227,172 @@ struct Client {
     reply_bytes: [u8; REPLY_ADDR_LEN],
     /// Distinct replicas that must reply before a transaction counts.
     reply_quorum: usize,
+    /// Replica keys in committee order, when replies must verify.
+    verify_keys: Option<Arc<Vec<PublicKey>>>,
 }
 
 /// Read replies off one replica's connection for as long as it stays open.
 ///
 /// Replies arrive in batches — one frame per committed batch per client — led
 /// by the replier's committee index and followed by fixed-width entries, each
-/// the request's own first 9 bytes echoed back so it can be matched. Nothing
-/// else: the reply is a bare ack, unsigned and carrying no proof (see
-/// `worker::client_reply` for why).
+/// the request's own first 9 bytes echoed back so it can be matched. Unsigned
+/// by default; with `verify_keys` each frame ends in the replier's signature,
+/// which is checked before any of its entries count (see
+/// `worker::client_reply`).
 ///
-/// A transaction completes on its `quorum`-th distinct replier. A replica
-/// answering twice (a redelivered commit) does not count again.
+/// Frames already buffered are taken up to VERIFY_GROUP at a time, so one
+/// blocking task verifies a group rather than one task per frame.
 async fn read_replies(stream: TcpStream, replies: Arc<Replies>) {
-    let mut transport = Framed::new(stream, LengthDelimitedCodec::new());
-    while let Some(frame) = transport.next().await {
-        let frame = match frame {
-            Ok(frame) => frame,
-            Err(e) => {
-                warn!("Reply connection closed: {}", e);
-                return;
+    let mut transport =
+        Framed::new(stream, LengthDelimitedCodec::new()).ready_chunks(VERIFY_GROUP);
+    while let Some(chunk) = transport.next().await {
+        let mut frames = Vec::with_capacity(chunk.len());
+        let mut closed = None;
+        for frame in chunk {
+            match frame {
+                Ok(frame) => frames.push(frame),
+                Err(e) => {
+                    closed = Some(e);
+                    break;
+                }
             }
-        };
-        if frame.len() < REPLY_HEADER_LEN {
-            continue;
         }
-        let bit = 1u64 << (frame[0] as usize % MAX_REPLIERS);
-        let entries = &frame[REPLY_HEADER_LEN..];
 
-        let mut completed = 0u64;
-        let mut sampled = Vec::new();
-        {
-            let mut partial = replies.partial.lock().unwrap();
-            for entry in entries.chunks_exact(REPLY_ENTRY_LEN) {
-                let complete = if replies.quorum <= 1 {
-                    true
-                } else {
-                    let tag: [u8; TAG_LEN] = entry.try_into().expect("entry is one tag");
-                    let complete = match partial.get_mut(&tag) {
-                        Some(slot) => {
-                            if slot.0 & bit != 0 {
-                                false
-                            } else {
-                                slot.0 |= bit;
-                                slot.0.count_ones() as usize >= replies.quorum
-                            }
-                        }
-                        None => {
-                            partial.insert(tag, (bit, Instant::now()));
+        match &replies.verify_keys {
+            Some(keys) => {
+                for frame in verify_frames(frames, keys.clone(), &replies).await {
+                    record_frame(&replies, &frame[..frame.len() - REPLY_SIGNATURE_LEN]);
+                }
+            }
+            None => {
+                for frame in &frames {
+                    record_frame(&replies, frame);
+                }
+            }
+        }
+
+        if let Some(e) = closed {
+            warn!("Reply connection closed: {}", e);
+            return;
+        }
+    }
+}
+
+/// Keep the signed frames that verify against their replier's committee key,
+/// counting the rest in `bad_sig`. Verification runs on a blocking thread,
+/// one batch check per replier.
+async fn verify_frames(
+    frames: Vec<BytesMut>,
+    keys: Arc<Vec<PublicKey>>,
+    replies: &Replies,
+) -> Vec<BytesMut> {
+    let checked = tokio::task::spawn_blocking(move || {
+        let mut good = vec![false; frames.len()];
+        let mut by_replier: HashMap<u8, Vec<usize>> = HashMap::new();
+        for (i, frame) in frames.iter().enumerate() {
+            if frame.len() >= REPLY_HEADER_LEN + REPLY_SIGNATURE_LEN {
+                by_replier.entry(frame[0]).or_default().push(i);
+            }
+        }
+        for (replier, indices) in by_replier {
+            let key = match keys.get(replier as usize) {
+                Some(key) => key,
+                None => continue,
+            };
+            let group: Vec<&[u8]> = indices.iter().map(|&i| &frames[i][..]).collect();
+            for (&i, ok) in indices.iter().zip(verify_reply_frames(key, &group)) {
+                good[i] = ok;
+            }
+        }
+        (frames, good)
+    })
+    .await;
+
+    let (frames, good) = match checked {
+        Ok(checked) => checked,
+        Err(e) => {
+            warn!("Reply verification task failed: {}", e);
+            return Vec::new();
+        }
+    };
+    let bad = good.iter().filter(|ok| !**ok).count() as u64;
+    replies.bad_sig.fetch_add(bad, Ordering::Relaxed);
+    frames
+        .into_iter()
+        .zip(good)
+        .filter_map(|(frame, ok)| if ok { Some(frame) } else { None })
+        .collect()
+}
+
+/// Count one frame's entries toward their transactions' quorums.
+///
+/// `frame` is the replier index followed by tags, with any signature already
+/// stripped. A transaction completes on its `quorum`-th distinct replier. A
+/// replica answering twice (a redelivered commit) does not count again.
+fn record_frame(replies: &Replies, frame: &[u8]) {
+    if frame.len() < REPLY_HEADER_LEN {
+        return;
+    }
+    let bit = 1u64 << (frame[0] as usize % MAX_REPLIERS);
+    let entries = &frame[REPLY_HEADER_LEN..];
+
+    let mut completed = 0u64;
+    let mut sampled = Vec::new();
+    {
+        let mut partial = replies.partial.lock().unwrap();
+        for entry in entries.chunks_exact(REPLY_ENTRY_LEN) {
+            let complete = if replies.quorum <= 1 {
+                true
+            } else {
+                let tag: [u8; TAG_LEN] = entry.try_into().expect("entry is one tag");
+                let complete = match partial.get_mut(&tag) {
+                    Some(slot) => {
+                        if slot.0 & bit != 0 {
                             false
+                        } else {
+                            slot.0 |= bit;
+                            slot.0.count_ones() as usize >= replies.quorum
                         }
-                    };
-                    if complete {
-                        partial.remove(&tag);
                     }
-                    complete
+                    None => {
+                        partial.insert(tag, (bit, Instant::now()));
+                        false
+                    }
                 };
-                if !complete {
-                    continue;
+                if complete {
+                    partial.remove(&tag);
                 }
-                completed += 1;
-                if entry[0] == KIND_SAMPLE {
-                    sampled.push(u64::from_be_bytes(
-                        entry[1..TAG_LEN].try_into().expect("tag carries a u64"),
-                    ));
-                }
+                complete
+            };
+            if !complete {
+                continue;
+            }
+            completed += 1;
+            if entry[0] == KIND_SAMPLE {
+                sampled.push(u64::from_be_bytes(
+                    entry[1..TAG_LEN].try_into().expect("tag carries a u64"),
+                ));
             }
         }
-        replies
-            .entries
-            .fetch_add((entries.len() / REPLY_ENTRY_LEN) as u64, Ordering::Relaxed);
-        replies.completed.fetch_add(completed, Ordering::Relaxed);
+    }
+    replies
+        .entries
+        .fetch_add((entries.len() / REPLY_ENTRY_LEN) as u64, Ordering::Relaxed);
+    replies.completed.fetch_add(completed, Ordering::Relaxed);
 
-        if sampled.is_empty() {
-            continue;
-        }
-        let mut samples = replies.samples.lock().unwrap();
-        for id in sampled {
-            // Taken out of the map, so a later reply is not timed again.
-            if let Some(sent_at) = samples.remove(&id) {
-                // NOTE: This log entry is used to compute performance.
-                info!(
-                    "Reply for sampled tx {} after {:.3} ms",
-                    id,
-                    sent_at.elapsed().as_secs_f64() * 1000.0
-                );
-            }
+    if sampled.is_empty() {
+        return;
+    }
+    let mut samples = replies.samples.lock().unwrap();
+    for id in sampled {
+        // Taken out of the map, so a later reply is not timed again.
+        if let Some(sent_at) = samples.remove(&id) {
+            // NOTE: This log entry is used to compute performance.
+            info!(
+                "Reply for sampled tx {} after {:.3} ms",
+                id,
+                sent_at.elapsed().as_secs_f64() * 1000.0
+            );
         }
     }
 }
@@ -344,11 +454,13 @@ impl Client {
         // so a reply cannot arrive at a closed port.
         let replies = Arc::new(Replies {
             quorum: self.reply_quorum,
+            verify_keys: self.verify_keys.clone(),
             samples: Arc::new(Mutex::new(HashMap::new())),
             partial: Mutex::new(HashMap::new()),
             completed: AtomicU64::new(0),
             entries: AtomicU64::new(0),
             abandoned: AtomicU64::new(0),
+            bad_sig: AtomicU64::new(0),
         });
         if let Some(address) = self.reply_addr {
             // NOTE: This log entry is used to compute performance.
@@ -513,16 +625,18 @@ impl Client {
             // `replied` counts transactions that reached `reply_quorum`
             // distinct replicas. `reply_entries` counts every reply received,
             // and `reply_abandoned` the transactions given up on short of the
-            // quorum.
+            // quorum. `reply_bad_sig` counts signed frames that failed
+            // verification; their entries are in none of the other counts.
             if counter % PRECISION == 0 {
                 info!(
-                    "client_stats produced={} dispatched={} dropped={} replied={} reply_entries={} reply_abandoned={}",
+                    "client_stats produced={} dispatched={} dropped={} replied={} reply_entries={} reply_abandoned={} reply_bad_sig={}",
                     produced.load(Ordering::Relaxed),
                     dispatched.load(Ordering::Relaxed),
                     dropped.load(Ordering::Relaxed),
                     replies.completed.load(Ordering::Relaxed),
                     replies.entries.load(Ordering::Relaxed),
                     replies.abandoned.load(Ordering::Relaxed),
+                    replies.bad_sig.load(Ordering::Relaxed),
                 );
             }
 

@@ -11,7 +11,8 @@ use crate::synchronizer::Synchronizer;
 use async_trait::async_trait;
 use bytes::Bytes;
 use config::{Committee, Parameters, WorkerId};
-use crypto::{Digest, PublicKey};
+use crypto::{Digest, PublicKey, Signer};
+use std::sync::Arc;
 use futures::sink::SinkExt as _;
 use log::{debug, error, info, warn};
 use network::{MessageHandler, Receiver, Writer};
@@ -57,6 +58,8 @@ pub enum WorkerMessage {
 pub struct Worker {
     /// The public key of this authority.
     name: PublicKey,
+    /// This authority's key, for signing client replies.
+    signer: Arc<Signer>,
     /// The id of this worker.
     id: WorkerId,
     /// The committee information.
@@ -70,6 +73,7 @@ pub struct Worker {
 impl Worker {
     pub fn spawn(
         name: PublicKey,
+        signer: Arc<Signer>,
         id: WorkerId,
         committee: Committee,
         parameters: Parameters,
@@ -78,6 +82,7 @@ impl Worker {
         // Define a worker instance.
         let worker = Self {
             name,
+            signer,
             id,
             committee,
             parameters,
@@ -147,6 +152,9 @@ impl Worker {
                 self.committee.clone(),
                 self.store.clone(),
                 self.parameters.client_reply_count,
+                self.parameters
+                    .client_reply_signed
+                    .then(|| self.signer.clone()),
                 /* rx_committed */ rx_committed,
             );
         }

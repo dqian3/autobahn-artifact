@@ -37,11 +37,21 @@
 //! old clients and `client_reply_count: 0` both come out as "no reply".
 //!
 //! **What a reply says.** Nothing beyond "this committed": a reply is the
-//! request's own first 9 bytes echoed back, so the client can match it. It is
-//! not signed and carries no proof. Each frame starts with one byte, the
-//! replying replica's index in committee order, so a client waiting for more
-//! than one reply can tell two replicas apart from one replica answering
-//! twice.
+//! request's own first 9 bytes echoed back, so the client can match it. By
+//! default it is not signed and carries no proof. Each frame starts with one
+//! byte, the replying replica's index in committee order, so a client waiting
+//! for more than one reply can tell two replicas apart from one replica
+//! answering twice.
+//!
+//! ```text
+//! unsigned:  [replier index][tag]...
+//! signed:    [replier index][tag]...[64-byte Ed25519 signature]
+//! ```
+//!
+//! With `client_reply_signed` on, the replier signs the digest of every byte
+//! before the signature with its own key, one signature per frame, and a
+//! verifying client checks it against that replica's committee key before
+//! counting the frame's tags.
 //!
 //! That is a deliberate choice about what to charge autobahn for. A per-
 //! request signature is the shape *aspen's* fast path is obliged to use,
@@ -60,6 +70,7 @@
 //! into a single frame, so network cost stays proportional to batches rather
 //! than to requests.
 
+use crypto::{is_crypto_disabled, verify_transactions, Hash as _, PublicKey, Signer};
 use std::convert::TryInto;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -71,6 +82,9 @@ pub const REPLY_ENTRY_LEN: usize = TAG_LEN;
 
 /// Leading byte of every reply frame: the replier's index in committee order.
 pub const REPLY_HEADER_LEN: usize = 1;
+
+/// Trailing signature on a signed reply frame.
+pub const REPLY_SIGNATURE_LEN: usize = 64;
 
 /// Largest committee whose repliers a client can tell apart.
 pub const MAX_REPLIERS: usize = 64;
@@ -126,6 +140,26 @@ pub fn decode_reply_addr(tx: &[u8]) -> Option<SocketAddr> {
         IpAddr::V4(Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3])),
         port,
     ))
+}
+
+/// Append `signer`'s signature over the digest of `frame` as it stands.
+pub fn sign_reply_frame(signer: &Signer, frame: &mut Vec<u8>) {
+    let signature = signer.sign(&frame.as_slice().digest()).flatten();
+    frame.extend_from_slice(&signature);
+}
+
+/// Check signed frames that all claim to come from the replica owning `key`.
+///
+/// One flag per frame: true when its trailing signature is `key`'s over the
+/// digest of the bytes before it. Frames are laid out exactly like client
+/// transactions (`payload || signature`), so this is the same batch check
+/// with per-frame fallback. Always true when crypto is disabled, since
+/// replicas then sign with zeros.
+pub fn verify_reply_frames<T: AsRef<[u8]>>(key: &PublicKey, frames: &[T]) -> Vec<bool> {
+    if is_crypto_disabled() {
+        return vec![true; frames.len()];
+    }
+    verify_transactions(key, frames)
 }
 
 #[cfg(test)]

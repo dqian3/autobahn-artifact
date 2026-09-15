@@ -8,7 +8,8 @@ use clap::{crate_name, crate_version, App, AppSettings, ArgMatches, SubCommand};
 use config::Export as _;
 use config::Import as _;
 use config::{Committee, KeyPair, Parameters, WorkerId};
-use crypto::{set_crypto_disabled, Digest, PublicKey, SignatureService};
+use crypto::{set_crypto_disabled, Digest, PublicKey, SignatureService, Signer};
+use std::sync::Arc;
 use env_logger::Env;
 use log::warn;
 use network::SimpleSender;
@@ -107,6 +108,10 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
     // Set before any primary or worker opens a socket.
     network::set_tcp_nodelay(parameters.tcp_nodelay);
 
+    // Parsed before the signature service takes the secret. A worker signs
+    // client replies with it when `client_reply_signed` is on.
+    let reply_signer = Arc::new(Signer::new(&keypair.secret));
+
     // The `SignatureService` provides signatures on input digests.
     let signature_service = SignatureService::new(keypair.secret);
 
@@ -180,7 +185,14 @@ async fn run(matches: &ArgMatches<'_>) -> Result<()> {
                 .unwrap()
                 .parse::<WorkerId>()
                 .context("The worker id must be a positive integer")?;
-            Worker::spawn(keypair.name, id, committee.clone(), parameters.clone(), store);
+            Worker::spawn(
+                keypair.name,
+                reply_signer,
+                id,
+                committee.clone(),
+                parameters.clone(),
+                store,
+            );
         }
         _ => unreachable!(),
     }

@@ -133,6 +133,12 @@ pub struct Parameters {
     #[serde(default = "default_client_reply_count")]
     pub client_reply_count: usize,
 
+    /// When true, each client reply frame carries an Ed25519 signature by
+    /// the replying replica over the frame's digest, appended after its
+    /// tags. Off, frames are unsigned (see `worker::client_reply`).
+    #[serde(default)]
+    pub client_reply_signed: bool,
+
     /// When true, every node socket sets TCP_NODELAY, so small frames are
     /// sent immediately rather than held for the previous segment's ACK.
     /// Plumbed into `network::set_tcp_nodelay` at node startup.
@@ -183,6 +189,7 @@ impl Default for Parameters {
 
             disable_crypto: false,
             client_reply_count: 1,
+            client_reply_signed: false,
             tcp_nodelay: false,
         }
     }
@@ -209,6 +216,7 @@ impl Parameters {
         info!("Crypto disabled? {}", self.disable_crypto);
         // NOTE: This log entry is used to compute performance.
         info!("Client reply count set to {}", self.client_reply_count);
+        info!("Client replies signed? {}", self.client_reply_signed);
         info!("TCP_NODELAY enabled? {}", self.tcp_nodelay);
     }
 }
