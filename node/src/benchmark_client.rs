@@ -30,8 +30,8 @@ use config::KeyPair;
 use config::Import as _;
 
 use worker::client_reply::{
-    encode_reply_addr, verify_reply_frames, KIND_SAMPLE, MAX_REPLIERS, REPLY_ADDR_LEN,
-    REPLY_ENTRY_LEN, REPLY_HEADER_LEN, REPLY_SIGNATURE_LEN, TAG_LEN,
+    encode_reply_addr, verify_reply_entries, KIND_SAMPLE, MAX_REPLIERS, REPLY_ADDR_LEN,
+    REPLY_ENTRY_LEN, REPLY_HEADER_LEN, SIGNED_REPLY_ENTRY_LEN, TAG_LEN,
 };
 
 /// Send times of the sampled transactions still awaiting a reply.
@@ -47,15 +47,18 @@ type SampleTimes = Arc<Mutex<HashMap<u64, Instant>>>;
 /// client gives up on it.
 const PARTIAL_REPLY_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Most frames read off one connection and verified in one blocking task.
+/// Most frames read off one connection and verified together.
 const VERIFY_GROUP: usize = 64;
+
+/// Most signed reply entries batch-checked in one blocking task.
+const VERIFY_ENTRIES: usize = 256;
 
 /// Reply-side state shared by every replica's connection.
 struct Replies {
     /// Distinct replicas that must reply before a transaction counts as
     /// committed.
     quorum: usize,
-    /// Replica public keys in committee order, when frames are signed and
+    /// Replica public keys in committee order, when replies are signed and
     /// must verify before they count.
     verify_keys: Option<Arc<Vec<PublicKey>>>,
     samples: SampleTimes,
@@ -69,7 +72,7 @@ struct Replies {
     entries: AtomicU64,
     /// Transactions dropped from `partial` after PARTIAL_REPLY_TIMEOUT.
     abandoned: AtomicU64,
-    /// Signed frames whose signature did not verify, and so did not count.
+    /// Signed reply entries that did not verify, and so did not count.
     bad_sig: AtomicU64,
 }
 
@@ -89,7 +92,7 @@ async fn main() -> Result<()> {
         .args_from_usage("--reply-addr=[ADDR] 'Address to listen on for committed-request replies. Omit to run send-only, as autobahn publishes it.'")
         .args_from_usage("--reply-quorum=[INT] 'Distinct replicas that must reply before a transaction counts as committed; match the replicas client_reply_count (default 1).'")
         .args_from_usage("--committee=[FILE] 'The committee file the nodes run with; supplies replica public keys for --verify-replies.'")
-        .args_from_usage("--verify-replies 'Expect signed reply frames (client_reply_signed) and count only those that verify against the replier key; needs --committee.'")
+        .args_from_usage("--verify-replies 'Expect a signature on every reply (client_reply_signed) and count only replies that verify against the replier key; needs --committee.'")
         .get_matches();
 
     env_logger::Builder::from_env(Env::default().default_filter_or("info"))
@@ -236,12 +239,12 @@ struct Client {
 /// Replies arrive in batches — one frame per committed batch per client — led
 /// by the replier's committee index and followed by fixed-width entries, each
 /// the request's own first 9 bytes echoed back so it can be matched. Unsigned
-/// by default; with `verify_keys` each frame ends in the replier's signature,
-/// which is checked before any of its entries count (see
+/// by default; with `verify_keys` each tag is followed by the replier's
+/// signature, which is checked before the tag counts (see
 /// `worker::client_reply`).
 ///
-/// Frames already buffered are taken up to VERIFY_GROUP at a time, so one
-/// blocking task verifies a group rather than one task per frame.
+/// Frames already buffered are taken up to VERIFY_GROUP at a time and
+/// verified together rather than one task per frame.
 async fn read_replies(stream: TcpStream, replies: Arc<Replies>) {
     let mut transport =
         Framed::new(stream, LengthDelimitedCodec::new()).ready_chunks(VERIFY_GROUP);
@@ -260,8 +263,8 @@ async fn read_replies(stream: TcpStream, replies: Arc<Replies>) {
 
         match &replies.verify_keys {
             Some(keys) => {
-                for frame in verify_frames(frames, keys.clone(), &replies).await {
-                    record_frame(&replies, &frame[..frame.len() - REPLY_SIGNATURE_LEN]);
+                for frame in verify_entries(frames, keys.clone(), &replies).await {
+                    record_frame(&replies, &frame);
                 }
             }
             None => {
@@ -278,55 +281,87 @@ async fn read_replies(stream: TcpStream, replies: Arc<Replies>) {
     }
 }
 
-/// Keep the signed frames that verify against their replier's committee key,
-/// counting the rest in `bad_sig`. Verification runs on a blocking thread,
-/// one batch check per replier.
-async fn verify_frames(
+/// Keep the signed reply entries that verify against their replier's committee
+/// key, counting the rest in `bad_sig`. Returns one frame per input frame: its
+/// replier index followed by the tags that verified.
+///
+/// Each replier's entries are batch-checked VERIFY_ENTRIES at a time on
+/// parallel blocking threads. A trailing partial entry counts as one bad
+/// entry, and so does every entry from an unknown replier index.
+async fn verify_entries(
     frames: Vec<BytesMut>,
     keys: Arc<Vec<PublicKey>>,
     replies: &Replies,
-) -> Vec<BytesMut> {
-    let checked = tokio::task::spawn_blocking(move || {
-        let mut good = vec![false; frames.len()];
-        let mut by_replier: HashMap<u8, Vec<usize>> = HashMap::new();
-        for (i, frame) in frames.iter().enumerate() {
-            if frame.len() >= REPLY_HEADER_LEN + REPLY_SIGNATURE_LEN {
-                by_replier.entry(frame[0]).or_default().push(i);
-            }
+) -> Vec<Vec<u8>> {
+    let mut bad = 0u64;
+    let mut out: Vec<Vec<u8>> = Vec::with_capacity(frames.len());
+    // Per replier: the output frame of each entry, and the entries themselves.
+    let mut by_replier: HashMap<u8, (Vec<usize>, Vec<u8>)> = HashMap::new();
+    for (i, frame) in frames.iter().enumerate() {
+        if frame.len() < REPLY_HEADER_LEN {
+            out.push(Vec::new());
+            continue;
         }
-        for (replier, indices) in by_replier {
-            let key = match keys.get(replier as usize) {
-                Some(key) => key,
-                None => continue,
-            };
-            let group: Vec<&[u8]> = indices.iter().map(|&i| &frames[i][..]).collect();
-            for (&i, ok) in indices.iter().zip(verify_reply_frames(key, &group)) {
-                good[i] = ok;
-            }
+        let replier = frame[0];
+        out.push(vec![replier]);
+        let body = &frame[REPLY_HEADER_LEN..];
+        let whole = body.len() / SIGNED_REPLY_ENTRY_LEN;
+        if body.len() % SIGNED_REPLY_ENTRY_LEN != 0 {
+            bad += 1;
         }
-        (frames, good)
-    })
-    .await;
+        if keys.get(replier as usize).is_none() {
+            bad += whole as u64;
+            continue;
+        }
+        let (owners, entries) = by_replier.entry(replier).or_default();
+        owners.extend(std::iter::repeat(i).take(whole));
+        entries.extend_from_slice(&body[..whole * SIGNED_REPLY_ENTRY_LEN]);
+    }
 
-    let (frames, good) = match checked {
-        Ok(checked) => checked,
-        Err(e) => {
-            warn!("Reply verification task failed: {}", e);
-            return Vec::new();
+    let mut tasks = Vec::new();
+    for (replier, (owners, entries)) in by_replier {
+        let key = keys[replier as usize];
+        let groups = owners
+            .chunks(VERIFY_ENTRIES)
+            .zip(entries.chunks(VERIFY_ENTRIES * SIGNED_REPLY_ENTRY_LEN));
+        for (owners, entries) in groups {
+            let owners = owners.to_vec();
+            let entries = entries.to_vec();
+            tasks.push(tokio::task::spawn_blocking(move || {
+                let group: Vec<&[u8]> = entries.chunks_exact(SIGNED_REPLY_ENTRY_LEN).collect();
+                let good = verify_reply_entries(&key, replier, &group);
+                (owners, entries, good)
+            }));
         }
-    };
-    let bad = good.iter().filter(|ok| !**ok).count() as u64;
+    }
+
+    for result in join_all(tasks).await {
+        let (owners, entries, good) = match result {
+            Ok(checked) => checked,
+            Err(e) => {
+                warn!("Reply verification task failed: {}", e);
+                continue;
+            }
+        };
+        let checked = owners
+            .iter()
+            .zip(entries.chunks_exact(SIGNED_REPLY_ENTRY_LEN))
+            .zip(good);
+        for ((&owner, entry), ok) in checked {
+            if ok {
+                out[owner].extend_from_slice(&entry[..TAG_LEN]);
+            } else {
+                bad += 1;
+            }
+        }
+    }
     replies.bad_sig.fetch_add(bad, Ordering::Relaxed);
-    frames
-        .into_iter()
-        .zip(good)
-        .filter_map(|(frame, ok)| if ok { Some(frame) } else { None })
-        .collect()
+    out
 }
 
 /// Count one frame's entries toward their transactions' quorums.
 ///
-/// `frame` is the replier index followed by tags, with any signature already
+/// `frame` is the replier index followed by tags, with any signatures already
 /// stripped. A transaction completes on its `quorum`-th distinct replier. A
 /// replica answering twice (a redelivered commit) does not count again.
 fn record_frame(replies: &Replies, frame: &[u8]) {
@@ -625,8 +660,8 @@ impl Client {
             // `replied` counts transactions that reached `reply_quorum`
             // distinct replicas. `reply_entries` counts every reply received,
             // and `reply_abandoned` the transactions given up on short of the
-            // quorum. `reply_bad_sig` counts signed frames that failed
-            // verification; their entries are in none of the other counts.
+            // quorum. `reply_bad_sig` counts signed reply entries that failed
+            // verification; they are in none of the other counts.
             if counter % PRECISION == 0 {
                 info!(
                     "client_stats produced={} dispatched={} dropped={} replied={} reply_entries={} reply_abandoned={} reply_bad_sig={}",

@@ -133,9 +133,9 @@ pub struct Parameters {
     #[serde(default = "default_client_reply_count")]
     pub client_reply_count: usize,
 
-    /// When true, each client reply frame carries an Ed25519 signature by
-    /// the replying replica over the frame's digest, appended after its
-    /// tags. Off, frames are unsigned (see `worker::client_reply`).
+    /// When true, each reply in a client reply frame carries an Ed25519
+    /// signature by the replying replica over its committee index and the
+    /// request's tag. Off, frames are unsigned (see `worker::client_reply`).
     #[serde(default)]
     pub client_reply_signed: bool,
 

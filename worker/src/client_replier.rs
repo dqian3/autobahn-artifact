@@ -1,8 +1,8 @@
 //! Answers the clients whose requests just committed.
 //!
 //! See `client_reply` for the wire format, why the client's address rides
-//! inside the transaction, and why the reply is a bare ack by default and a
-//! signed frame with `client_reply_signed`. This is the replica half.
+//! inside the transaction, and why the reply is a bare ack by default and
+//! signed per request with `client_reply_signed`. This is the replica half.
 //!
 //! A committed header names its batches by digest only, and the primary runs
 //! in a separate process from the worker, so the primary forwards the
@@ -12,12 +12,14 @@
 
 use crate::batch_maker::Transaction;
 use crate::client_reply::{
-    decode_reply_addr, sign_reply_frame, MAX_REPLIERS, REPLY_HEADER_LEN, TAG_LEN,
+    decode_reply_addr, sign_reply_entries, MAX_REPLIERS, REPLY_HEADER_LEN,
+    SIGNED_REPLY_ENTRY_LEN, TAG_LEN,
 };
 use crate::worker::WorkerMessage;
 use bytes::Bytes;
 use config::Committee;
 use crypto::{Digest, PublicKey, Signer};
+use futures::future::join_all;
 use log::{debug, error, info, warn};
 use network::SimpleSender;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -34,6 +36,9 @@ const RECENT_BATCHES: usize = 100_000;
 /// How often the reply count is logged.
 const LOG_EVERY: u64 = 100_000;
 
+/// Tags signed per blocking task when replies are signed.
+const SIGN_CHUNK: usize = 128;
+
 /// Replies to clients whose committed transactions this replica is on the
 /// hook for.
 pub struct ClientReplier {
@@ -43,7 +48,7 @@ pub struct ClientReplier {
     order: Vec<PublicKey>,
     /// How many replicas reply per batch.
     reply_count: usize,
-    /// Signs each reply frame with our key; `None` sends frames unsigned.
+    /// Signs each reply with our key; `None` sends replies unsigned.
     signer: Option<Arc<Signer>>,
     /// The persistent storage, holding batches keyed by digest.
     store: Store,
@@ -187,29 +192,21 @@ impl ClientReplier {
                 .extend_from_slice(&transaction[..TAG_LEN]);
         }
 
-        let mut frames: Vec<(SocketAddr, Vec<u8>)> = by_client.into_iter().collect();
+        let frames: Vec<(SocketAddr, Vec<u8>)> = by_client.into_iter().collect();
         for (_, bytes) in &frames {
             self.sent += ((bytes.len() - REPLY_HEADER_LEN) / TAG_LEN) as u64;
         }
 
-        // One blocking task signs all of this batch's frames, off the runtime.
-        if let Some(signer) = &self.signer {
-            let signer = signer.clone();
-            frames = match tokio::task::spawn_blocking(move || {
-                for (_, bytes) in frames.iter_mut() {
-                    sign_reply_frame(&signer, bytes);
-                }
-                frames
-            })
-            .await
-            {
+        let frames = match &self.signer {
+            Some(signer) => match sign_replies(signer.clone(), replier, frames).await {
                 Ok(frames) => frames,
                 Err(e) => {
                     error!("Cannot sign replies for batch {:?}: {}", digest, e);
                     return;
                 }
-            };
-        }
+            },
+            None => frames,
+        };
 
         for (address, bytes) in frames {
             self.network.send(address, Bytes::from(bytes)).await;
@@ -221,4 +218,43 @@ impl ClientReplier {
             self.next_log = self.sent + LOG_EVERY;
         }
     }
+}
+
+/// Turn unsigned frames (`[replier][tag]...`) into signed ones
+/// (`[replier]([tag][signature])...`), keeping their order. Tags are signed
+/// SIGN_CHUNK at a time on parallel blocking tasks.
+async fn sign_replies(
+    signer: Arc<Signer>,
+    replier: u8,
+    frames: Vec<(SocketAddr, Vec<u8>)>,
+) -> Result<Vec<(SocketAddr, Vec<u8>)>, tokio::task::JoinError> {
+    let mut tags = Vec::new();
+    for (_, bytes) in &frames {
+        tags.extend_from_slice(&bytes[REPLY_HEADER_LEN..]);
+    }
+    let tasks: Vec<_> = tags
+        .chunks(SIGN_CHUNK * TAG_LEN)
+        .map(|chunk| {
+            let signer = signer.clone();
+            let chunk = chunk.to_vec();
+            tokio::task::spawn_blocking(move || sign_reply_entries(&signer, replier, &chunk))
+        })
+        .collect();
+    let mut signed = Vec::with_capacity(tags.len() / TAG_LEN * SIGNED_REPLY_ENTRY_LEN);
+    for result in join_all(tasks).await {
+        signed.extend_from_slice(&result?);
+    }
+
+    let mut offset = 0;
+    Ok(frames
+        .into_iter()
+        .map(|(address, bytes)| {
+            let len = (bytes.len() - REPLY_HEADER_LEN) / TAG_LEN * SIGNED_REPLY_ENTRY_LEN;
+            let mut frame = Vec::with_capacity(REPLY_HEADER_LEN + len);
+            frame.push(replier);
+            frame.extend_from_slice(&signed[offset..offset + len]);
+            offset += len;
+            (address, frame)
+        })
+        .collect())
 }

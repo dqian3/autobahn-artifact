@@ -45,13 +45,14 @@
 //!
 //! ```text
 //! unsigned:  [replier index][tag]...
-//! signed:    [replier index][tag]...[64-byte Ed25519 signature]
+//! signed:    [replier index]([tag][64-byte Ed25519 signature])...
 //! ```
 //!
-//! With `client_reply_signed` on, the replier signs the digest of every byte
-//! before the signature with its own key, one signature per frame, and a
-//! verifying client checks it against that replica's committee key before
-//! counting the frame's tags.
+//! With `client_reply_signed` on, each tag carries the replier's own
+//! signature over the digest of `replier index || tag`, binding the reply to
+//! both the replica and the request: one signature per request per replying
+//! replica. A verifying client checks each against that replica's committee
+//! key before counting the tag.
 //!
 //! That is a deliberate choice about what to charge autobahn for. A per-
 //! request signature is the shape *aspen's* fast path is obliged to use,
@@ -83,8 +84,11 @@ pub const REPLY_ENTRY_LEN: usize = TAG_LEN;
 /// Leading byte of every reply frame: the replier's index in committee order.
 pub const REPLY_HEADER_LEN: usize = 1;
 
-/// Trailing signature on a signed reply frame.
+/// Signature following each tag in a signed reply frame.
 pub const REPLY_SIGNATURE_LEN: usize = 64;
+
+/// One signed reply: a tag and its signature.
+pub const SIGNED_REPLY_ENTRY_LEN: usize = TAG_LEN + REPLY_SIGNATURE_LEN;
 
 /// Largest committee whose repliers a client can tell apart.
 pub const MAX_REPLIERS: usize = 64;
@@ -142,24 +146,58 @@ pub fn decode_reply_addr(tx: &[u8]) -> Option<SocketAddr> {
     ))
 }
 
-/// Append `signer`'s signature over the digest of `frame` as it stands.
-pub fn sign_reply_frame(signer: &Signer, frame: &mut Vec<u8>) {
-    let signature = signer.sign(&frame.as_slice().digest()).flatten();
-    frame.extend_from_slice(&signature);
+/// Bytes a reply signature covers: the replier index then the tag.
+fn reply_entry_message(replier: u8, tag: &[u8]) -> [u8; REPLY_HEADER_LEN + TAG_LEN] {
+    let mut message = [0u8; REPLY_HEADER_LEN + TAG_LEN];
+    message[0] = replier;
+    message[REPLY_HEADER_LEN..].copy_from_slice(tag);
+    message
 }
 
-/// Check signed frames that all claim to come from the replica owning `key`.
-///
-/// One flag per frame: true when its trailing signature is `key`'s over the
-/// digest of the bytes before it. Frames are laid out exactly like client
-/// transactions (`payload || signature`), so this is the same batch check
-/// with per-frame fallback. Always true when crypto is disabled, since
-/// replicas then sign with zeros.
-pub fn verify_reply_frames<T: AsRef<[u8]>>(key: &PublicKey, frames: &[T]) -> Vec<bool> {
-    if is_crypto_disabled() {
-        return vec![true; frames.len()];
+/// Sign each tag in `tags` (concatenated, TAG_LEN apiece) as replier
+/// `replier`, returning the signed entries (`tag || signature`).
+pub fn sign_reply_entries(signer: &Signer, replier: u8, tags: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(tags.len() / TAG_LEN * SIGNED_REPLY_ENTRY_LEN);
+    for tag in tags.chunks_exact(TAG_LEN) {
+        let message = reply_entry_message(replier, tag);
+        let signature = signer.sign(&(&message[..]).digest()).flatten();
+        out.extend_from_slice(tag);
+        out.extend_from_slice(&signature);
     }
-    verify_transactions(key, frames)
+    out
+}
+
+/// Check signed entries (`tag || signature`) that claim to come from
+/// replier `replier`, owning `key`.
+///
+/// One flag per entry. The entries are checked as one batch, then one by one
+/// if the batch fails. Entries of the wrong length fail. Always true when
+/// crypto is disabled, since replicas then sign with zeros.
+pub fn verify_reply_entries<T: AsRef<[u8]>>(key: &PublicKey, replier: u8, entries: &[T]) -> Vec<bool> {
+    if is_crypto_disabled() {
+        return vec![true; entries.len()];
+    }
+    // Laid out as `message || signature`, the shape `verify_transactions` takes.
+    let mut signed: Vec<[u8; REPLY_HEADER_LEN + SIGNED_REPLY_ENTRY_LEN]> =
+        Vec::with_capacity(entries.len());
+    let mut well_formed = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let entry = entry.as_ref();
+        if entry.len() != SIGNED_REPLY_ENTRY_LEN {
+            well_formed.push(false);
+            continue;
+        }
+        let mut buf = [0u8; REPLY_HEADER_LEN + SIGNED_REPLY_ENTRY_LEN];
+        buf[..REPLY_HEADER_LEN + TAG_LEN].copy_from_slice(&reply_entry_message(replier, &entry[..TAG_LEN]));
+        buf[REPLY_HEADER_LEN + TAG_LEN..].copy_from_slice(&entry[TAG_LEN..]);
+        signed.push(buf);
+        well_formed.push(true);
+    }
+    let mut checked = verify_transactions(key, &signed).into_iter();
+    well_formed
+        .into_iter()
+        .map(|ok| ok && checked.next().unwrap_or(false))
+        .collect()
 }
 
 #[cfg(test)]
